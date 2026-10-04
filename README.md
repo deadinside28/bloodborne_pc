@@ -36,6 +36,10 @@ Mesa/RADV) has been tested thoroughly.
   - **FSR 4.1.1 (INT8)**: AMD's 4.1.1 DLL is recorded once under vkd3d-proton and its passes
     are replayed natively on Vulkan; the output is **bit-exact** with the DLL. The assets are
     built on your machine from your own DLLs (`tools/fsr4cap`).
+  - **FSR 4.1.1 (FP8) on RDNA4**: AMD's DLL offers no INT8 4.1.1 on RX 9000 cards; with AMD's
+    driver-side `amdxcffx64.dll` it offers the FP8 model, recorded and replayed the same way with
+    fp8 cooperative matrices (`VK_KHR_cooperative_matrix`, `VK_EXT_shader_float8`). Bit-exact with
+    the DLL; on an RX 9070 XT 0.71 ms at 1707x960 → 2560x1440 (FSR 4 v07 INT8: 1.33 ms).
   - Faster than AMD's own shaders on RDNA3: the final passes of FSR 4 and 4.1.1 were rewritten
     to store through workgroup memory (3.5× and 2.3× faster, bit-exact); FSR 4 costs ~4 ms at
     4K on an RX 7800 XT instead of ~6 ms.
@@ -64,10 +68,13 @@ the graphics side.
 
 ## Requirements
 
-- Linux x86-64, a Vulkan 1.3 GPU. Tested: AMD RX 7800 XT with Mesa 26 (RADV).
+- Linux x86-64, a Vulkan 1.3 GPU. Tested: AMD RX 7800 XT with Mesa 26 (RADV); FSR 4.1.1 FP8:
+  AMD RX 9070 XT with Mesa 26.2.3 (RADV).
   FSR 4 / 4.1.1 require shader Float16, Int8/Int16, integer dot products, linear compute
   derivatives and extended storage image formats; FSR 4.1.1 additionally requires
-  `VK_VALVE_shader_mixed_float_dot_product`. Unsupported choices fall back to FSR 3.1
+  `VK_VALVE_shader_mixed_float_dot_product`; FP8 4.1.1 sets (RDNA4) also need
+  `VK_KHR_cooperative_matrix`, `VK_EXT_shader_float8` (with fp8 cooperative matrices), the Vulkan
+  memory model and full wave32 subgroups (RADV on an RX 9070 XT, Mesa 26.2). Unsupported choices fall back to FSR 3.1
   before the first frame and are disabled in the in-game menu.
 - Your decrypted game dump: the `CUSA03173` folder (eboot.bin, sce_module, ...), version 1.09.
 - To build: GCC, CMake, Ninja, Python 3, glslang, SDL3, Vulkan headers and the libraries in
@@ -140,6 +147,8 @@ not implement GPU occlusion culling.
 bash tools/fetch_fsr4_assets.sh      # FSR 4 v07 (MIT, built from AMD's source by Q2RTX)
 # FSR 4.1.1, from your own AMD DLLs (e.g. OptiScaler's FSR4_LATEST), needs Proton (GE-Proton):
 bash tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll> <amd_fidelityfx_loader_dx12.dll>
+# RDNA4 (RX 9000): FP8 4.1.1, also with AMD's amdxcffx64.dll (Proton Experimental: contrib/):
+bash tools/fsr4cap/build_assets.sh <upscaler dll> <loader dll> <amdxcffx64.dll>
 ```
 
 **AppImage** (Steam Deck): `bash build.sh && bash packaging/appimage.sh` →

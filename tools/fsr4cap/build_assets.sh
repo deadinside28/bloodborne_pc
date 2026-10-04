@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll 4.1.x> <amd_fidelityfx_loader_dx12.dll 2.3.x>
+# tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll 4.1.x> <amd_fidelityfx_loader_dx12.dll 2.3.x> [amdxcffx64.dll]
 #
 # Builds the FSR 4.1.1 asset set (fsr4_411/: SPIR-V of every pass, model weights) from AMD's
 # upscaler DLL, for upscaler=fsr411 (gpu/.../fsr411). Nothing of AMD's is downloaded or
@@ -9,6 +9,10 @@
 #      ratio, recording the D3D12 frames (capture_all.sh);
 #   3. extract.py translates them, checks the replay rules and writes fsr4_411/;
 #   4. with VERIFY=1, verify.sh compares the replay with the DLL byte by byte.
+# RDNA4: the upscaler DLL offers no INT8 4.1.1 there. With AMD's driver-side amdxcffx64.dll as the
+# third argument (Proton Experimental ships it in contrib/), it offers the FP8 4.1.1 provider and
+# the set is built from it (extract.py --fp8; the replay needs VK_KHR_cooperative_matrix and
+# VK_EXT_shader_float8). Without it, a copy left in the capture prefix is removed.
 # Needs nix-shell (or the tools on PATH: x86_64-w64-mingw32-gcc, cmake, ninja, python3,
 # spirv-dis/spirv-as, umu-run), network for the two git repositories, and a Proton build
 # (PROTONPATH, default: newest GE-Proton in Steam's compatibilitytools.d).
@@ -16,12 +20,13 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 upscaler=$(realpath "${1:?upscaler DLL}")
 loader=$(realpath "${2:?loader DLL}")
+amdxc=${3:+$(realpath "$3")}
 work=$PWD/out/fsr4cap
 mkdir -p "$work"
 
 if [[ -z ${BB_FSR4CAP_SHELL:-} ]] && command -v nix-shell >/dev/null; then
     exec env BB_FSR4CAP_SHELL=1 nix-shell -p pkgsCross.mingwW64.buildPackages.gcc cmake ninja gcc \
-        python3 spirv-tools umu-launcher git --run "bash $(printf %q "$0") $(printf %q "$upscaler") $(printf %q "$loader")"
+        python3 spirv-tools umu-launcher git --run "bash $(printf %q "$0") $(printf %q "$upscaler") $(printf %q "$loader") ${amdxc:+$(printf %q "$amdxc")}"
 fi
 
 # dxil-spirv: DXIL -> SPIR-V as vkd3d-proton translates it.
@@ -50,9 +55,22 @@ x86_64-w64-mingw32-gcc -std=c11 -O1 -Wall -I"$k/api/include" -I"$k/upscalers/inc
     -o "$work/fsr4cap.exe" -ld3d12 -ldxguid -static
 cp "$upscaler" "$work/amd_fidelityfx_upscaler_dx12.dll"
 cp "$loader" "$work/amd_fidelityfx_loader_dx12.dll"
+fp8=()
+sys32=$work/pfx/drive_c/windows/system32
+if [[ -n $amdxc ]]; then
+    if [[ ! -d $sys32 ]]; then
+        WINEPREFIX=$work/pfx GAMEID=umu-fsr4cap WINEDEBUG=-all \
+            PROTONPATH=${PROTONPATH:-$(ls -d "$HOME"/.local/share/Steam/compatibilitytools.d/GE-Proton* | tail -1)} \
+            umu-run wineboot -u > "$work/umu.log" 2>&1
+    fi
+    cp "$amdxc" "$sys32/amdxcffx64.dll"
+    fp8=(--fp8)
+else
+    rm -f "$sys32/amdxcffx64.dll"
+fi
 
 bash tools/fsr4cap/capture_all.sh "$work"
-python3 tools/fsr4cap/extract.py "$dx/build/dxil-spirv" "$work" fsr4_411
+python3 tools/fsr4cap/extract.py "${fp8[@]}" "$dx/build/dxil-spirv" "$work" fsr4_411
 if [[ ${VERIFY:-0} == 1 ]]; then
     bash build.sh
     ninja -C out/gpu fsr4-bench >/dev/null
