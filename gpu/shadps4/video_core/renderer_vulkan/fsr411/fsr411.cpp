@@ -14,6 +14,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <sstream>
 #include <vector>
 
 namespace Fsr411 {
@@ -78,6 +79,7 @@ struct Binding {
 struct Reflection {
     std::string entry = "main";
     uint32_t local_size[3] = {1, 1, 1};
+    bool coop_matrix = false; ///< declares OpCapability CooperativeMatrixKHR (FP8 model passes)
     std::vector<Binding> bindings;
 };
 
@@ -118,6 +120,11 @@ bool Reflect(const std::vector<uint32_t>& words, Reflection& out, std::string& e
         }
         const uint32_t* w = &words[i];
         switch (op) {
+        case 17: // OpCapability
+            if (w[1] == 6022) {
+                out.coop_matrix = true;
+            }
+            break;
         case 5: // OpName
             names[w[1]] = string_at(i + 2, i + count);
             break;
@@ -236,6 +243,10 @@ struct Upscaler::Impl {
     };
     Buf scratch, initializer, staging, ubo, tensor_ubo;
     std::vector<uint8_t> initializer_data;
+    // dispatch.txt of an FP8 set (empty/false for INT8 sets): group sizes of the model passes.
+    bool fp8 = false;
+    VkDeviceSize scratch_override = 0;
+    std::map<std::string, std::array<uint32_t, 2>> pass_dispatch;
     uint64_t frame_index = 0;
     float previous_pre_exposure = 0.0f;
     // BB_FSR4_PROFILE=1: GPU time per pass, read when a ring slot is reused, printed every 300 frames.
@@ -414,7 +425,72 @@ struct Upscaler::Impl {
         }
         ready = false;
         uploaded = false;
+        fp8 = false;
+        scratch_override = 0;
+        pass_dispatch.clear();
         set.clear();
+    }
+
+    /// FP8 sets (dispatch.txt: "fp8 1", "scratch <bytes>", "<pass> <dx> <dy>"). INT8 sets have no
+    /// file and keep the built-in rules.
+    bool LoadDispatch() {
+        std::vector<uint8_t> bytes;
+        if (!ReadFile(dir + "/" + set + "/dispatch.txt", bytes)) {
+            return true;
+        }
+        std::istringstream in(std::string(bytes.begin(), bytes.end()));
+        std::string line;
+        while (std::getline(in, line)) {
+            std::istringstream ls(line);
+            std::string key;
+            if (!(ls >> key) || key[0] == '#') {
+                continue;
+            }
+            if (key == "fp8") {
+                int v = 0;
+                ls >> v;
+                fp8 = v != 0;
+            } else if (key == "scratch") {
+                unsigned long long v = 0;
+                ls >> v;
+                scratch_override = v;
+            } else if (uint32_t dx, dy; ls >> dx >> dy && dx && dy) {
+                pass_dispatch[key] = {dx, dy};
+            } else {
+                error = dir + "/" + set + "/dispatch.txt: bad line '" + line + "'";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// The FP8 passes need cooperative matrices with fp8 and a fixed wave32. vk_instance enables
+    /// them on the device when the physical device reports them.
+    bool Fp8DeviceSupported() const {
+        uint32_t count = 0;
+        vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, nullptr);
+        std::vector<VkExtensionProperties> exts(count);
+        vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, exts.data());
+        const auto has = [&](const char* name) {
+            return std::any_of(exts.begin(), exts.end(),
+                               [&](const VkExtensionProperties& e) { return !std::strcmp(e.extensionName, name); });
+        };
+        if (!has(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) || !has(VK_EXT_SHADER_FLOAT8_EXTENSION_NAME)) {
+            return false;
+        }
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+        VkPhysicalDeviceShaderFloat8FeaturesEXT f8{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT};
+        VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+        VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        f2.pNext = &f12;
+        f12.pNext = &f13;
+        f13.pNext = &coop;
+        coop.pNext = &f8;
+        vkGetPhysicalDeviceFeatures2(physical, &f2);
+        return coop.cooperativeMatrix && f8.shaderFloat8 && f8.shaderFloat8CooperativeMatrix &&
+               f12.vulkanMemoryModel && f13.subgroupSizeControl && f13.computeFullSubgroups;
     }
 
     bool LoadPass(uint32_t index) {
@@ -466,6 +542,16 @@ struct Upscaler::Impl {
         pci.stage.module = module;
         pci.stage.pName = p.refl.entry.c_str();
         pci.layout = p.layout;
+        // Cooperative matrix passes are written for one wave32 (LocalSize 32): pin the subgroup.
+        VkPipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup{
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
+        if (p.refl.coop_matrix) {
+            subgroup.requiredSubgroupSize = 32;
+            pci.stage.pNext = &subgroup;
+            if (p.refl.local_size[0] % 32 == 0) {
+                pci.stage.flags = VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT;
+            }
+        }
         const VkResult r = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pci, nullptr, &p.pipeline);
         vkDestroyShaderModule(device, module, nullptr);
         if (r != VK_SUCCESS) {
@@ -493,6 +579,13 @@ struct Upscaler::Impl {
             error = "sampler creation failed";
             return false;
         }
+        if (!LoadDispatch()) {
+            return false;
+        }
+        if (fp8 && !Fp8DeviceSupported()) {
+            error = "FSR 4.1.1 FP8 assets need VK_KHR_cooperative_matrix and VK_EXT_shader_float8 (RDNA4)";
+            return false;
+        }
         for (uint32_t i = 0; i < kPassCount; ++i) {
             if (!LoadPass(i)) {
                 return false;
@@ -503,7 +596,8 @@ struct Upscaler::Impl {
             error = "missing or wrong " + dir + "/" + set + "/initializer.bin";
             return false;
         }
-        const VkDeviceSize scratch_size = tier2160 ? 83232256u : 20880256u;
+        const VkDeviceSize scratch_size =
+            scratch_override ? scratch_override : tier2160 ? 83232256u : 20880256u;
         if (!MakeImage(recurrent, VK_FORMAT_R8G8B8A8_UNORM, ow, oh) ||
             !MakeImage(history, VK_FORMAT_R16G16B16A16_SFLOAT, ow, oh) ||
             !MakeImage(reprojected, VK_FORMAT_R16G16B16A16_SFLOAT, ow, oh) ||
@@ -714,6 +808,9 @@ struct Upscaler::Impl {
                 else if (n == "AutoExposureSPDConstants") buffer(ubo.buffer, slot + ubo_align, sizeof(Spd));
                 else if (n == "cbRCAS") buffer(ubo.buffer, slot + 2 * ubo_align, sizeof(Rcas));
                 else if (n == "CsTensorSizes") buffer(tensor_ubo.buffer, 0, 272);
+                // FP8 passes declare debug/result views the INT8 runtime does not bind: read-only
+                // stand-ins keep the descriptor valid.
+                else if (n == "r_debug_visualization" || n == "r_result_color") image(f.color.view);
                 else {
                     error = name + ": unknown resource " + n;
                     return false;
@@ -724,7 +821,10 @@ struct Upscaler::Impl {
             push_descriptors(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout, 0, uint32_t(writes.size()),
                              writes.data());
             uint32_t gx = 1, gy = 1;
-            if (name == "spd") {
+            if (const auto d = pass_dispatch.find(name); d != pass_dispatch.end()) {
+                gx = CeilDiv(aw, d->second[0]);
+                gy = CeilDiv(ah, d->second[1]);
+            } else if (name == "spd") {
                 gx = CeilDiv(rw, 64);
                 gy = CeilDiv(rh, 64);
             } else if (name == "prepass" || name == "rcas") {
@@ -741,8 +841,12 @@ struct Upscaler::Impl {
                 const uint32_t w = aw >> level, h = ah >> level;
                 const uint32_t tw = (tier2160 ? 3840u : 1920u) >> level;
                 const uint32_t th = (tier2160 ? 2160u : 1080u) >> level;
-                const uint32_t kx = std::min(tw + 1 - w, 5u), ky = std::min(th + 1 - h, 1u);
-                const uint32_t threads = (w + 1 + kx) + h + h * kx + (w + 1 + kx) * ky;
+                uint32_t kx = std::min(tw + 1 - w, 5u), ky = std::min(th + 1 - h, 1u);
+                // FP8 sets: AMD dispatches more than this rule below the tier size (captures fit a
+                // border of 33). The shader stops the extra threads, so cover the whole tier.
+                const uint32_t pw = fp8 ? tw : w, ph = fp8 ? th : h;
+                if (fp8) kx = 33, ky = 1;
+                const uint32_t threads = (pw + 1 + kx) + ph + ph * kx + (pw + 1 + kx) * ky;
                 gx = CeilDiv(threads, p.refl.local_size[0]);
             } else {
                 const uint32_t k = uint32_t(std::stoi(name.substr(4)));
@@ -779,7 +883,8 @@ const std::string& Upscaler::Error() const noexcept {
 }
 
 std::string Upscaler::Describe() const {
-    return impl->set + " output " + std::to_string(impl->out_w) + "x" + std::to_string(impl->out_h);
+    return impl->set + " output " + std::to_string(impl->out_w) + "x" + std::to_string(impl->out_h) +
+           (impl->fp8 ? " fp8" : "");
 }
 
 } // namespace Fsr411

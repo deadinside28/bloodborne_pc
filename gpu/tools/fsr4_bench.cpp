@@ -111,6 +111,9 @@ Gpu CreateGpu(bool stats) {
     // FSR 4.1.1 passes use mixed float dot products (dot2 of halves into float), as vkd3d-proton.
     VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE mixed_dot{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE};
+    // FSR 4.1.1 FP8 model passes (RDNA4): fp8 cooperative matrices.
+    VkPhysicalDeviceShaderFloat8FeaturesEXT float8{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT};
     VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     VkPhysicalDeviceVulkan11Features f11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
@@ -121,8 +124,9 @@ Gpu CreateGpu(bool stats) {
     f13.pNext = &derivatives;
     derivatives.pNext = &coopmat;
     coopmat.pNext = &mixed_dot;
+    mixed_dot.pNext = &float8;
     if (stats) {
-        mixed_dot.pNext = &executable;
+        float8.pNext = &executable;
     }
     vkGetPhysicalDeviceFeatures2(gpu.physical, &features);
     features.features.robustBufferAccess = VK_FALSE; // as the game: no robustness cost
@@ -134,6 +138,11 @@ Gpu CreateGpu(bool stats) {
     }
     if (coopmat.cooperativeMatrix) {
         extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+    }
+    if (float8.shaderFloat8 && float8.shaderFloat8CooperativeMatrix && coopmat.cooperativeMatrix) {
+        extensions.push_back(VK_EXT_SHADER_FLOAT8_EXTENSION_NAME);
+    } else {
+        float8.shaderFloat8 = float8.shaderFloat8CooperativeMatrix = VK_FALSE;
     }
     if (stats) {
         extensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);

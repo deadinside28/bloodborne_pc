@@ -289,6 +289,12 @@ public:
         return IsFsr4Int8Supported() && mixed_float_dot_product;
     }
 
+    /// bbport: FSR 4.1.1 FP8 model passes (fp8 cooperative matrices, wave32 required).
+    bool IsFsr411Fp8Supported() const {
+        return cooperative_matrix && shader_float8 && vk12_features.vulkanMemoryModel &&
+               vk13_features.subgroupSizeControl && vk13_features.computeFullSubgroups;
+    }
+
     /// VK_KHR_shader_clock is supported.
     bool IsShaderSubgroupClockSupported() const {
         return shader_clock && shader_clock_features.shaderSubgroupClock;
@@ -563,6 +569,8 @@ private:
     bool image_view_min_lod{};
     bool shader_clock{};
     bool compute_shader_derivatives{};
+    bool cooperative_matrix{};      // bbport: VK_KHR_cooperative_matrix (FSR 4.1.1 FP8)
+    bool shader_float8{};           // bbport: VK_EXT_shader_float8 + float8 cooperative matrix
     bool mixed_float_dot_product{}; // bbport: VK_VALVE_shader_mixed_float_dot_product (FSR 4.1.1)
     bool supports_memory_budget{};
     bool supports_block_texel_view{};
