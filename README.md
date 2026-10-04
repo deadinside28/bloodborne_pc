@@ -116,7 +116,7 @@ The original game is preserved; later mods override conflicting files.
 **Third-party patches:** shadPS4-format XML patch files in the data directory's `patches/`,
 switched on and off in the launcher. See [mods and patches](docs/MODS.md).
 
-**Launcher language:** Russian or English (follows the system language by default).
+**Launcher language:** Russian, English or Brazilian Portuguese (follows the system language by default).
 
 **Free camera and game debug menu** (v1.09): enable the corresponding switches in the
 launcher or in-game menu and restart. Free camera uses Lance McDonald's
