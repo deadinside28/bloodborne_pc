@@ -28,6 +28,10 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     ASSERT_MSG(window, "Failed to create window: {}", SDL_GetError());
+    // bbport: mouse look (runtime_pad.c). BB_MOUSE_LOOK=0 disables it.
+    if (const char* look = std::getenv("BB_MOUSE_LOOK"); look && look[0] == '0') {
+        mouse_look = false;
+    }
 
     const char* driver = SDL_GetCurrentVideoDriver();
     const SDL_PropertiesID wp = SDL_GetWindowProperties(window);
@@ -116,6 +120,35 @@ bool WindowSDL::PollEvents() {
             height = h;
             break;
         }
+        // bbport: mouse look and mouse buttons for the pad (runtime_pad.c).
+        case SDL_EVENT_MOUSE_MOTION:
+            if (mouse_relative.load(std::memory_order_relaxed)) {
+                mouse_dx.store(mouse_dx.load(std::memory_order_relaxed) + event.motion.xrel,
+                               std::memory_order_relaxed);
+                mouse_dy.store(mouse_dy.load(std::memory_order_relaxed) + event.motion.yrel,
+                               std::memory_order_relaxed);
+            }
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            if (event.button.button >= 1 && event.button.button <= 5) {
+                mouse_buttons.fetch_or(1u << (event.button.button - 1));
+            }
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+            if (event.button.button >= 1 && event.button.button <= 5) {
+                mouse_buttons.fetch_and(~(1u << (event.button.button - 1)));
+            }
+            break;
+        case SDL_EVENT_MOUSE_WHEEL:
+            mouse_wheel.store(mouse_wheel.load(std::memory_order_relaxed) + event.wheel.y,
+                              std::memory_order_relaxed);
+            break;
+        case SDL_EVENT_WINDOW_FOCUS_GAINED:
+            window_focused = true;
+            break;
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+            window_focused = false;
+            break;
         case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             is_open = false;
@@ -124,7 +157,35 @@ bool WindowSDL::PollEvents() {
             break;
         }
     }
+    UpdateMouseCapture();
     return is_open;
+}
+
+// bbport: relative mouse capture (unbounded camera motion, cursor hidden). The settings menu,
+// the IME dialog and a lost window focus need the absolute cursor, so they release it.
+void WindowSDL::UpdateMouseCapture() {
+    const bool want = mouse_look.load(std::memory_order_relaxed) && window_focused && !text_active &&
+                      !BbOverlay::CapturesInput();
+    const bool have = mouse_relative.load(std::memory_order_relaxed);
+    if (want == have || !window) {
+        return;
+    }
+    mouse_relative.store(want, std::memory_order_relaxed);
+    mouse_dx.store(0.0f, std::memory_order_relaxed);
+    mouse_dy.store(0.0f, std::memory_order_relaxed);
+    mouse_wheel.store(0.0f, std::memory_order_relaxed);
+    if (!SDL_SetWindowRelativeMouseMode(window, want)) {
+        LOG_WARNING(Frontend, "Relative mouse mode {} failed: {}", want ? "on" : "off",
+                    SDL_GetError());
+    }
+}
+
+int WindowSDL::ConsumeMouse(float& dx, float& dy, unsigned& buttons, float& wheel) {
+    dx = mouse_dx.exchange(0.0f, std::memory_order_relaxed);
+    dy = mouse_dy.exchange(0.0f, std::memory_order_relaxed);
+    wheel = mouse_wheel.exchange(0.0f, std::memory_order_relaxed);
+    buttons = mouse_buttons.load(std::memory_order_relaxed);
+    return mouse_relative.load(std::memory_order_relaxed) ? 1 : 0;
 }
 
 } // namespace Frontend
