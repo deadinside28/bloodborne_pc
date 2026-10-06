@@ -632,6 +632,23 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
     read_unlock();
     return ok;
 }
+/* Reads guest memory through the backing view, past GPU page protection: with precise
+ * readbacks pages the GPU wrote are protected against reads too. Gaps and reserved
+ * ranges read as zero. */
+void runtime_memory_read_backing(uintptr_t address, void *data, uint64_t size) {
+    unsigned char *out=data;
+    read_lock();
+    for (uintptr_t at=address, end=address+size; at<end;) {
+        size_t i=vma_index(at);
+        int mapped=i<vma_count && vmas[i].start<=at;
+        uintptr_t next=i==vma_count ? end : mapped ? vmas[i].end : vmas[i].start;
+        if (next>end) next=end;
+        if (mapped && vmas[i].kind!=KIND_RESERVED) memcpy(out+(at-address),backing_base+vmas[i].phys+(at-vmas[i].start),next-at);
+        else memset(out+(at-address),0,next-at);
+        at=next;
+    }
+    read_unlock();
+}
 /* Per-thread cache of recently found regions for the GPU's per-draw queries:
  * entries hold for as long as the table generation they were read at. */
 typedef struct { uint64_t generation; uintptr_t start, end; int kind; } CachedRegion;

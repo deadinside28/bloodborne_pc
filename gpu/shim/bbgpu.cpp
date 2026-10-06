@@ -21,6 +21,7 @@
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/rdtsc.h"
+#include "core/emulator_settings.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/libs.h"
 #include "core/memory.h"
@@ -32,6 +33,7 @@ extern "C" {
 // runtime_memory.c
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
 int runtime_memory_write_backing(uintptr_t address, const void* data, uint64_t size);
+void runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size);
 uint64_t runtime_memory_clamp(uintptr_t address, uint64_t size);
 int runtime_memory_region(uintptr_t address, uintptr_t* start, uintptr_t* end, int* mapped);
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write);
@@ -102,6 +104,14 @@ u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
     return runtime_memory_clamp(virtual_addr, size);
 }
 static void CopySparseSerial(VAddr source, u8* dest, u64 size) {
+    // bbport: precise readbacks protect GPU-written pages against reads too. These copies
+    // run on the copy and recording threads after the range may have been marked GPU written
+    // (deferred uploads); a fault there would wait for the GPU thread, which waits for them.
+    // The ranges copied hold CPU data (uploads, or copies of ranges the GPU did not write), so
+    // the backing view has the right bytes.
+    if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise) {
+        return runtime_memory_read_backing(source, dest, size);
+    }
     while (size) {
         uintptr_t start = 0, end = 0;
         int mapped = 0;
