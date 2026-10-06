@@ -119,7 +119,7 @@ neither has nor includes.
 ## Build and run
 
 ```bash
-git clone --recursive <this repository> bbport && cd bbport
+git clone --recursive https://github.com/deadinside28/bloodborne_pc.git bbport && cd bbport
 bash build.sh                        # builds out/bb-probe and out/gpu/libbbgpu.so
 BB_GAME_DIR=/path/to/CUSA03173 bash run.sh
 ```
