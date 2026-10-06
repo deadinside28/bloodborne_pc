@@ -574,7 +574,7 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
 void runtime_restart(void) {
     fflush(NULL);
 #ifdef _WIN32
-    /* scripts/run_windows.py sets its own command line here; the new process prepares the
+    /* scripts/run_game.py sets its own command line here; the new process prepares the
      * patches again. Our GPU device goes away with this process. */
     const char *command = getenv("BB_RESTART_COMMAND");
     puts("Runtime: restarting through the launcher");

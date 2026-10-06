@@ -726,7 +726,7 @@ class SetupForm : Form {
     static void CheckWindowsSources(string root) {
         string cmake = Path.Combine(root, @"gpu\CMakeLists.txt");
         if (!File.Exists(Path.Combine(root, "run.bat")) ||
-            !File.Exists(Path.Combine(root, @"scripts\run_windows.py")) || !File.Exists(cmake) ||
+            !File.Exists(Path.Combine(root, @"scripts\run_game.py")) || !File.Exists(cmake) ||
             !File.ReadAllText(cmake).Contains("if (WIN32)"))
             throw new Exception("these bbport sources have no Windows support. Until it is merged upstream it is " +
                                 "on the " + DefaultBranch + " branch of " + DefaultRepo +

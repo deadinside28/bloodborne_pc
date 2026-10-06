@@ -91,6 +91,13 @@ By default the game folder is expected next to the repository (`../CUSA03173`). 
 shader cache go to `user/` (the launcher lets you choose another folder); settings to
 `bbport.ini`. A gamepad is used through SDL3; there is a keyboard fallback.
 
+`run.sh` and `run.bat` (Windows) only find Python and call the same launcher,
+`scripts/run_game.py`: it prepares the game image and the patches, builds the port when needed
+(not with `BB_PREBUILT=1`) and starts it. Before the game's own options it takes
+`--game-dir DIR` (instead of `BB_GAME_DIR`) and, on Linux, `--software` (Lavapipe, Mesa's CPU
+Vulkan driver). `BB_DRY_RUN=1` does every step but the last: it prints the bb-probe command and
+its environment instead of starting the game.
+
 **Resolution and preset changes:** for outputs other than 1080p (720p on the Steam Deck,
 1440p, 4K) the whole game renders at the preset's resolution, set by a patch at start — the
 fastest path. Changing the output or the preset in the in-game menu then needs *Apply and
@@ -235,12 +242,13 @@ Windows: `setup.bat` compiles `tools\setup\BbportSetup.cs` with the C# compiler 
 
    The first start builds the port (a few minutes; `build.sh` in the CLANG64 environment) into
    `out\bb-probe.exe`. The game folder is remembered: afterwards `run.bat` alone starts the game.
-   `BB_PREBUILT=1` skips the build check. Settings, saves, mods and patches use the same files as
-   on Linux (`bbport.ini`, `user\`, `mods\`, `patches\`); the in-game menu (Insert or L3+R3)
-   changes the settings. `fullscreen=1` in `bbport.ini` (or F11 in the game) gives a
-   borderless window at the desktop size; with `output_res=3840x2160` and `preset=1` (FSR 3.1
-   Quality, scene 2560x1440) the RTX 4090 above stays at the 120 Hz display limit. The GTK
-   launcher and the AppImage are Linux-only.
+   `BB_PREBUILT=1` skips the build check. `run.bat` runs the same launcher as `run.sh`
+   (`scripts/run_game.py`, see "Build and run"; `BB_DRY_RUN=1` included). Settings, saves, mods
+   and patches use the same files as on Linux (`bbport.ini`, `user\`, `mods\`, `patches\`); the
+   in-game menu (Insert or L3+R3) changes the settings. `fullscreen=1` in `bbport.ini` (or F11
+   in the game) gives a borderless window at the desktop size; with `output_res=3840x2160` and
+   `preset=1` (FSR 3.1 Quality, scene 2560x1440) the RTX 4090 above stays at the 120 Hz display
+   limit. The GTK launcher and the AppImage are Linux-only.
 
 How it differs from Linux, all on the Win32 API directly (no POSIX layer): the guest address
 space is reserved at start as one placeholder and mapped with section views

@@ -139,7 +139,7 @@ class ModTests(unittest.TestCase):
         self.mod('A')
         python = self.root / 'python'
         python.write_text(f'#!{sys.executable}\nimport subprocess,sys\n'
-            'if sys.argv[1] == "scripts/mods.py" or sys.argv[1] == "-c":\n'
+            'if sys.argv[1] in ("scripts/run_game.py", "scripts/mods.py"):\n'
             '    sys.exit(subprocess.call([sys.executable,*sys.argv[1:]]))\n')
         python.chmod(0o755)
         probe = self.root / 'probe'
