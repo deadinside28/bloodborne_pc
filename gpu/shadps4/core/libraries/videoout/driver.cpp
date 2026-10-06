@@ -7,8 +7,8 @@
 #include <chrono>
 #include <cstdio>
 #include <time.h>
-#include <sys/resource.h>
 #include "common/assert.h"
+#include "bbport_platform.h"
 #include "bbport_toggles.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
@@ -331,8 +331,8 @@ void VideoOutDriver::Flip(const Request& req) {
         last_twf = twf;
         const u64 copy_ns = BbStats::t_copy.load(), copy_bytes = BbStats::copy_bytes.load();
         u64 proc_flt = 0;
-        if (rusage usage{}; getrusage(RUSAGE_SELF, &usage) == 0) {
-            proc_flt = usage.ru_minflt;
+        if (BbPlatform::Usage usage; BbPlatform::GetUsage(false, usage)) {
+            proc_flt = usage.minor_faults;
         }
         const u64 t_now[6] = {BbStats::t_resident.load(), BbStats::t_protect.load(),
                               BbStats::t_image_create.load(), BbStats::t_refresh.load(),
@@ -344,9 +344,7 @@ void VideoOutDriver::Flip(const Request& req) {
                   vol = BbStats::gpu_vol_switches.load();
         u64 gpu_ns = 0;
         if (const int clock = BbStats::gpu_thread_clock.load(); clock != -1) {
-            timespec ts{};
-            clock_gettime(static_cast<clockid_t>(clock), &ts);
-            gpu_ns = u64(ts.tv_sec) * 1000000000ull + u64(ts.tv_nsec);
+            gpu_ns = BbPlatform::ReadThreadCpuClockNs(clock);
         }
         const u64 images = BbStats::images_registered.load();
         const u64 image_bytes = BbStats::image_upload_bytes.load();

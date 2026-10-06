@@ -289,6 +289,11 @@ public:
         return IsFsr4Int8Supported() && mixed_float_dot_product;
     }
 
+    /// bbport: the device extensions NVIDIA NGX (DLSS) needs are enabled.
+    bool IsDlssCapable() const {
+        return dlss_extensions;
+    }
+
     /// VK_KHR_shader_clock is supported.
     bool IsShaderSubgroupClockSupported() const {
         return shader_clock && shader_clock_features.shaderSubgroupClock;
@@ -564,6 +569,7 @@ private:
     bool shader_clock{};
     bool compute_shader_derivatives{};
     bool mixed_float_dot_product{}; // bbport: VK_VALVE_shader_mixed_float_dot_product (FSR 4.1.1)
+    bool dlss_extensions{};         // bbport: VK_NVX_binary_import + VK_NVX_image_view_handle
     bool supports_memory_budget{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};

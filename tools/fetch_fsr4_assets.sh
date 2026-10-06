@@ -32,6 +32,9 @@ for file in "${files[@]}"; do
 done
 echo "FSR 4 assets: ${#files[@]} files in $PWD/$dest ($fetched downloaded)"
 # Faster, bit-exact post passes (fsr4_shaders/opt), when spirv-cross and glslang are available.
+# Optional: FSR 4 runs on the downloaded passes without it, so a failure here (MSYS2's
+# spirv-cross 1.4.350 cannot decompile them) must not fail the download.
 if command -v spirv-cross >/dev/null && command -v glslangValidator >/dev/null; then
-    bash tools/fsr4_optimize.sh
+    bash tools/fsr4_optimize.sh ||
+        echo "FSR 4 assets: optimised post passes not built (optional; FSR 4 uses the originals)"
 fi

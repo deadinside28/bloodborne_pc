@@ -8,6 +8,9 @@
 #pragma once
 
 #include <array>
+#include <memory>
+#include <utility>
+#include <vector>
 #include "video_core/renderer_vulkan/motion_history.h"
 
 #include "common/types.h"
@@ -54,15 +57,28 @@ public:
     vk::ImageView PrepareRead(vk::CommandBuffer cmdbuf, u32 width, u32 height, bool& valid);
     /// The image of the last PrepareRead (layout General), or null.
     [[nodiscard]] vk::ImageView View() const noexcept {
-        return view ? *view : vk::ImageView{};
+        return read_target ? *read_target->view : vk::ImageView{};
     }
     [[nodiscard]] vk::Image Image(u32 width, u32 height) const noexcept {
-        return written && width == image_width && height == image_height
-            ? vk::Image(image) : vk::Image{};
+        const Target* target = Find(width, height);
+        return target && target->written ? vk::Image(target->image) : vk::Image{};
     }
 
 private:
-    void EnsureImage(u32 width, u32 height);
+    /// One motion image per render-target size. Passes of different sizes in one frame (the
+    /// Yharnam sewer water) used to recreate a single image, draining the GPU every time
+    /// (issue #30) and dropping the vectors already written for the scene.
+    struct Target {
+        VideoCore::UniqueImage image;
+        vk::UniqueImageView view;
+        u32 width = 0, height = 0;
+        bool written = false; ///< this frame's vectors are in the image
+        vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+        u64 last_use = 0;
+    };
+    static constexpr size_t MaxTargets = 4;
+    [[nodiscard]] const Target* Find(u32 width, u32 height) const noexcept;
+    Target& EnsureTarget(u32 width, u32 height);
 
     const Instance& instance;
     Scheduler& scheduler;
@@ -85,11 +101,10 @@ private:
 
     u64 frame = 0;
     u32 params_used = 0;
-    VideoCore::UniqueImage image;
-    vk::UniqueImageView view;
-    u32 image_width = 0, image_height = 0;
-    bool written = false; ///< this frame's vectors are in the image
-    vk::ImageLayout image_layout = vk::ImageLayout::eUndefined;
+    std::vector<std::unique_ptr<Target>> targets;
+    /// Evicted targets, freed once the GPU is past the tick they were last used in.
+    std::vector<std::pair<u64, std::unique_ptr<Target>>> retired;
+    Target* read_target = nullptr; ///< of the last PrepareRead
 };
 
 } // namespace Vulkan

@@ -236,7 +236,7 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    boost::container::static_vector<const char*, 32> enabled_extensions;
+    boost::container::static_vector<const char*, 48> enabled_extensions;
     const auto add_extension = [&](std::string_view extension) -> bool {
         const auto result =
             std::find_if(available_extensions.begin(), available_extensions.end(),
@@ -363,6 +363,11 @@ bool Instance::CreateDevice() {
         compute_shader_derivatives_features =
             feature_chain.get<vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR>();
     }
+    // bbport: NVIDIA NGX (DLSS) needs these besides push descriptors and buffer device address
+    // (NVSDK_NGX_VULKAN_RequiredExtensions); only NVIDIA drivers expose them.
+    const bool nvx_binary_import = add_extension(VK_NVX_BINARY_IMPORT_EXTENSION_NAME);
+    dlss_extensions =
+        add_extension(VK_NVX_IMAGE_VIEW_HANDLE_EXTENSION_NAME) && nvx_binary_import;
     shader_clock = add_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
     if (shader_clock) {
         shader_clock_features = feature_chain.get<vk::PhysicalDeviceShaderClockFeaturesKHR>();

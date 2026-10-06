@@ -116,6 +116,10 @@ public:
     /// Schedules a copy of pending images for download back to CPU memory.
     void ProcessDownloadImages();
 
+    /// bbport debugging: writes mip 0 / layer 0 of every image registered at `address` to
+    /// <dir>/img_<address>_<n>_<w>x<h>_<format>.raw and prints what was found.
+    void DumpImagesAt(VAddr address, const char* dir);
+
     /// Retrieves the image handle of the image with the provided attributes.
     [[nodiscard]] ImageId FindImage(ImageDesc& desc, bool exact_fmt = false);
 
@@ -144,8 +148,13 @@ public:
     /// bbport: whether UpdateImage has nothing to do for this image (its fast path).
     [[nodiscard]] bool IsUpToDate(ImageId image_id) const {
         const Image& image = slot_images[image_id];
+#ifdef _LIBCPP_VERSION
+        // libc++ has no std::atomic_ref<const T> yet.
+        const u32 flags = __atomic_load_n(reinterpret_cast<const u32*>(&image.flags), __ATOMIC_ACQUIRE);
+#else
         const u32 flags = std::atomic_ref<const u32>(reinterpret_cast<const u32&>(image.flags))
                               .load(std::memory_order_acquire);
+#endif
         constexpr u32 Dirty = static_cast<u32>(ImageFlagBits::Dirty);
         constexpr u32 Registered = static_cast<u32>(ImageFlagBits::Registered);
         return (flags & (Dirty | Registered)) == Registered &&
@@ -161,8 +170,13 @@ public:
         // racing with this check races the same way with the locked path.
         if (!BbToggle::Disabled(BbToggle::UpdateImageFastPath)) {
             const Image& image = slot_images[image_id];
+#ifdef _LIBCPP_VERSION
+            const u32 flags =
+                __atomic_load_n(reinterpret_cast<const u32*>(&image.flags), __ATOMIC_ACQUIRE);
+#else
             const u32 flags = std::atomic_ref<const u32>(reinterpret_cast<const u32&>(image.flags))
                                   .load(std::memory_order_acquire);
+#endif
             constexpr u32 Dirty = static_cast<u32>(ImageFlagBits::Dirty);
             constexpr u32 Registered = static_cast<u32>(ImageFlagBits::Registered);
             if ((flags & (Dirty | Registered)) == Registered &&
@@ -369,6 +383,7 @@ private:
     void UntrackImageTail(ImageId image_id);
 
     void MarkAsMaybeDirty(ImageId image_id, Image& image);
+    static u64 MaybeDirtyHash(const Image& image);
 
     /// Removes the image and any views/surface metas that reference it.
     void DeleteImage(ImageId image_id);
@@ -400,6 +415,7 @@ private:
     std::unordered_set<ImageId> download_images;
     u64 total_used_memory = 0;
     u64 gc_evictions = 0, gc_downloads = 0; ///< bbport: pressure report
+    u64 gc_kept = 0, gc_kept_bytes = 0; ///< bbport: old images the latest pass could not evict
     std::chrono::steady_clock::time_point gc_report_time{};
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;

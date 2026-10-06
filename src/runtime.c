@@ -6,8 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
-#include <sched.h>
-#include <pthread.h>
 
 typedef struct {
     union { GuestCallback plain; void (ABI *with_arg)(void *); } callback;
@@ -89,17 +87,17 @@ static ABI void init_env(void) {
     ++calls_init;
     puts("Runtime: _init_env returned (verified libc implementation: RET)");
 }
-static pthread_mutex_t handler_lock = PTHREAD_MUTEX_INITIALIZER;
+static HostMutex handler_lock = HOST_MUTEX_INIT;
 static int register_handler(ExitHandler value) {
-    pthread_mutex_lock(&handler_lock);
+    host_lock(&handler_lock);
     if (handler_count == handler_capacity) {
         size_t capacity = handler_capacity ? handler_capacity * 2 : 64;
         ExitHandler *next = capacity > 1024 * 1024 ? NULL : realloc(handlers, capacity * sizeof(*handlers));
-        if (!next) { pthread_mutex_unlock(&handler_lock); return -1; }
+        if (!next) { host_unlock(&handler_lock); return -1; }
         handlers = next; handler_capacity = capacity;
     }
     value.active = 1; handlers[handler_count++] = value;
-    pthread_mutex_unlock(&handler_lock);
+    host_unlock(&handler_lock);
     return 0;
 }
 static ABI int guest_atexit(GuestCallback callback) {
@@ -116,12 +114,12 @@ void runtime_finalize(void *dso) {
     /* Mark before invoking: repeated or recursive finalization cannot run twice.
        Restart at the end to include handlers registered by a destructor. */
     for (;;) {
-        pthread_mutex_lock(&handler_lock);
+        host_lock(&handler_lock);
         size_t i = handler_count;
         while (i && (!handlers[i-1].active || (dso && handlers[i-1].dso != dso))) --i;
-        if (!i) { pthread_mutex_unlock(&handler_lock); return; }
+        if (!i) { host_unlock(&handler_lock); return; }
         ExitHandler handler = handlers[i-1]; handlers[i-1].active = 0;
-        pthread_mutex_unlock(&handler_lock);
+        host_unlock(&handler_lock);
         if (handler.with_arg) handler.callback.with_arg(handler.argument);
         else handler.callback.plain();
     }
@@ -144,7 +142,7 @@ static ABI int guard_acquire(uint64_t *guard) {
             fputs("STOP: recursive/concurrent static initialization is not supported yet\n", stderr);
             exit(21);
         }
-        sched_yield(); /* another thread is running the initializer */
+        host_yield(); /* another thread is running the initializer */
     }
     atomic_fetch_add(&guards_acquired, 1);
     return 1;

@@ -21,6 +21,20 @@ if ! { command -v pkg-config >/dev/null && pkg-config --exists vulkan sdl3 && co
 fi
 read -r -a includes <<< "$(pkg-config --cflags vulkan sdl3)"
 read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3)"
+# Windows: MSYS2 CLANG64 shell (README "Windows": clang, libc++ and lld, whose threads and locks
+# are the Win32 ones). The GPU library is static there (a DLL cannot leave the runtime_* symbols
+# to the executable), the runtime adds its Win32 files (src/win32_*.c), runs without pthreads,
+# and the executable keeps a console and bottom-up addresses (guest-visible host memory must
+# stay below 1 TiB).
+windows=
+case $(uname -s) in MINGW*|MSYS*|CYGWIN*) windows=1 ;; esac
+cstd=(-std=c11)
+threads=(-pthread)
+if [[ -n $windows ]]; then
+    threads=()
+    libraries=("${libraries[@]/-mwindows/-mconsole}")
+    cstd=(-std=gnu11 -D_FILE_OFFSET_BITS=64 -D_WIN32_WINNT=0x0A00)
+fi
 # GPU library (shadPS4 video core + drivers), built by CMake into out/gpu/libbbgpu.so.
 # BB_PGO: generate (instrumented build that writes pgo/ while the game runs), use, off.
 # Default: use the profile in pgo/ when there is one. BB_LTO=OFF disables link-time optimization.
@@ -50,6 +64,15 @@ fi
 # $ORIGIN/gpu: packaged copies keep the library next to the binary without patching it.
 gpu=(-Lout/gpu -lbbgpu -Wl,-rpath,'$ORIGIN/gpu' -Wl,-rpath,"$PWD/out/gpu" -rdynamic)
 runtime=(src/runtime*.c)
+link=(-no-pie)
+if [[ -n $windows ]]; then
+    # out/gpu/bbgpu_link.txt (gpu/CMakeLists.txt): libbbgpu.a and its dependencies, one per line.
+    mapfile -t gpu < out/gpu/bbgpu_link.txt
+    runtime+=(src/win32_*.c)
+    # The static library's link-time optimization (ThinLTO in lld) runs here; on Linux it runs in
+    # the .so link.
+    link=(-Wl,--disable-dynamicbase,--disable-high-entropy-va -lwinmm -lws2_32 -lpsapi -flto=thin)
+fi
 # Third-party decoders: compiled once, without this project's -Werror policy.
 atrac9=(third_party/LibAtrac9/C/src/*.c)
 if [[ ! -f out/libatrac9.a || -n $(find third_party/LibAtrac9/C/src -newer out/libatrac9.a -name '*.c') ]]; then
@@ -57,10 +80,18 @@ if [[ ! -f out/libatrac9.a || -n $(find third_party/LibAtrac9/C/src -newer out/l
     for source in "${atrac9[@]}"; do "$CC" -std=c99 -O2 -g -w -c "$source" -o "out/atrac9/$(basename "${source%.c}").o"; done
     ar rcs out/libatrac9.a out/atrac9/*.o
 fi
-"$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/vulkan_smoke.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/bb-probe
+# Windows: the link includes the GPU library's link-time optimization (a minute or more), and
+# run.bat builds before every start, so an up-to-date executable is kept.
+if [[ -n $windows && -f out/bb-probe.exe && -f out/bb-gpu-capabilities.exe &&
+      -z $(find src gpu/bbgpu.h out/gpu/libbbgpu.a out/gpu/bbgpu_link.txt out/libatrac9.a build.sh \
+               tools/gpu_capabilities.c -newer out/bb-probe.exe -print -quit) ]]; then
+    echo "Up to date: $PWD/out/bb-probe.exe"
+else
+"$CC" "${cstd[@]}" -O2 -g -Wall -Wextra -Werror "${threads[@]}" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/vulkan_smoke.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" "${link[@]}" -o out/bb-probe
 echo "Built $PWD/out/bb-probe"
 # GPU check for run.sh (live_resolution=auto): links only the Vulkan loader.
-"$CC" -std=c11 -O2 -Wall -Wextra -Werror tools/gpu_capabilities.c "${libraries[@]}" -o out/bb-gpu-capabilities
+"$CC" "${cstd[@]}" -O2 -Wall -Wextra -Werror tools/gpu_capabilities.c "${libraries[@]}" -o out/bb-gpu-capabilities
+fi
 if [[ ${1:-} == --test ]]; then
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${includes[@]}" -I. -Isrc tests/test_pad.c "${libraries[@]}" -o out/pad-test
     out/pad-test

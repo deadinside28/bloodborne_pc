@@ -740,8 +740,8 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
             std::memcpy(flat.data(), snapshot.user_data,
                         std::min(snapshot.user_data_size, snapshot.flat_size) * sizeof(u32));
             // Pointers in the tables may be stale by now: a fault only skips the check.
-            sigjmp_buf recover;
-            if (sigsetjmp(recover, 0)) {
+            BbRecoverBuf recover;
+            if (BB_RECOVER_SET(recover)) {
                 runtime_fault_recover = nullptr;
                 continue;
             }
@@ -896,6 +896,28 @@ bool Rasterizer::FilterDrawPasses() const {
 void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* prepared) {
     RENDERER_TRACE;
     BbStats::draws.fetch_add(1, std::memory_order_relaxed);
+    // bbport debugging: BB_IMAGE_DUMP_TRIGGER=<file> holding hex guest addresses, one per line;
+    // the images registered there are written to BB_CAPTURE_DIR (TextureCache::DumpImagesAt).
+    if (static const char* trigger = std::getenv("BB_IMAGE_DUMP_TRIGGER"); trigger) {
+        static u32 polls = 0;
+        if ((++polls & 1023) == 0 && std::filesystem::exists(trigger)) {
+            std::vector<VAddr> addresses;
+            if (FILE* f = std::fopen(trigger, "r")) {
+                unsigned long long address;
+                while (std::fscanf(f, "%llx", &address) == 1) {
+                    addresses.push_back(address);
+                }
+                std::fclose(f);
+            }
+            std::error_code ec;
+            std::filesystem::remove(trigger, ec);
+            DrainDrawPipe(DrawPipe::ReasonDraw);
+            const char* dir = std::getenv("BB_CAPTURE_DIR");
+            for (const VAddr address : addresses) {
+                texture_cache.DumpImagesAt(address, dir ? dir : ".");
+            }
+        }
+    }
 
     // bbport: with the draw pipeline this thread only selects the pipeline and hands the draw
     // to the recording thread (DrawRecord there); draws FilterDraw handles itself run here.

@@ -6,9 +6,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ucontext.h>
-#include <unistd.h>
 #include <x86intrin.h>
+#include "bbport_platform.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <ucontext.h>
+#endif
 
 namespace BbWriteLog {
 namespace {
@@ -56,7 +60,7 @@ void Note(std::uint64_t address, const void* data, std::uint64_t size, Source so
 }
 
 void Record(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
-    static thread_local const std::uint32_t tid = static_cast<std::uint32_t>(gettid());
+    static thread_local const std::uint32_t tid = BbPlatform::CurrentThreadId();
     Entry e{address, size, 0, __rdtsc(), source, tid};
     std::memcpy(&e.first, data, size < 8 ? size : 8);
     Push(ring, head, e);
@@ -79,20 +83,11 @@ void Record(std::uint64_t address, const void* data, std::uint64_t size, Source 
 }
 } // namespace BbWriteLog
 
+// Linux: a ucontext_t from the SIGSEGV handler; Windows: the vectored handler's EXCEPTION_POINTERS.
 extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     using namespace BbWriteLog;
     if (Mode() == 0) {
         return;
-    }
-    const auto* uc = static_cast<const ucontext_t*>(ucontext);
-    const auto* g = uc->uc_mcontext.gregs;
-    const std::uint64_t regs[] = {std::uint64_t(g[REG_RAX]), std::uint64_t(g[REG_RBX]),
-                                  std::uint64_t(g[REG_RCX]), std::uint64_t(g[REG_RDX]),
-                                  std::uint64_t(g[REG_RSI]), std::uint64_t(g[REG_RDI]),
-                                  std::uint64_t(g[REG_R14]), std::uint64_t(g[REG_R15])};
-    const char* names[] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r14", "r15"};
-    for (int i = 0; i < 8; ++i) {
-        std::fprintf(stderr, "Write log: %s=%#llx\n", names[i], (unsigned long long)regs[i]);
     }
     const char* sources[] = {"backing",      "WriteData",           "fence",
                              "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)"};
@@ -104,6 +99,37 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
                      (unsigned long long)e.size, (unsigned long long)e.first, e.tid,
                      double(now - e.tsc) / 3.0e9);
     };
+    if (!ucontext) {
+        // A GPU library assertion (common/assert.cpp), e.g. a corrupted command stream: no
+        // guest fault, so no registers or block; the pattern hits and the latest writes.
+        std::fputs("Write log: dumped at a GPU assertion (no fault context)\n", stderr);
+        const std::uint64_t nh = hits_head.load();
+        for (std::uint64_t i = nh > hits.size() ? nh - hits.size() : 0; i < nh; ++i) {
+            print(hits[i % hits.size()], "pattern");
+        }
+        const std::uint64_t n = head.load();
+        int shown = 0;
+        for (std::uint64_t i = n; i-- > (n > Size ? n - Size : 0) && shown < 64; ++shown) {
+            print(ring[i % Size], "recent");
+        }
+        std::fprintf(stderr, "Write log: %llu writes logged\n", (unsigned long long)n);
+        return;
+    }
+#ifdef _WIN32
+    const CONTEXT* c = static_cast<const EXCEPTION_POINTERS*>(ucontext)->ContextRecord;
+    const std::uint64_t regs[] = {c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->R14, c->R15};
+#else
+    const auto* uc = static_cast<const ucontext_t*>(ucontext);
+    const auto* g = uc->uc_mcontext.gregs;
+    const std::uint64_t regs[] = {std::uint64_t(g[REG_RAX]), std::uint64_t(g[REG_RBX]),
+                                  std::uint64_t(g[REG_RCX]), std::uint64_t(g[REG_RDX]),
+                                  std::uint64_t(g[REG_RSI]), std::uint64_t(g[REG_RDI]),
+                                  std::uint64_t(g[REG_R14]), std::uint64_t(g[REG_R15])};
+#endif
+    const char* names[] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r14", "r15"};
+    for (int i = 0; i < 8; ++i) {
+        std::fprintf(stderr, "Write log: %s=%#llx\n", names[i], (unsigned long long)regs[i]);
+    }
     const std::uint64_t nh = hits_head.load();
     for (std::uint64_t i = nh > hits.size() ? nh - hits.size() : 0; i < nh; ++i) {
         print(hits[i % hits.size()], "pattern");
@@ -140,11 +166,11 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     int shown = 0;
     for (std::uint64_t i = n; i-- > (n > Size ? n - Size : 0) && shown < 64;) {
         const Entry& e = ring[i % Size];
-        bool near = false;
+        bool nearby = false;
         for (const auto r : regs) {
-            near |= r + 0x1000 > e.address && r < e.address + e.size + 0x1000;
+            nearby |= r + 0x1000 > e.address && r < e.address + e.size + 0x1000;
         }
-        if (near) {
+        if (nearby) {
             print(e, "near");
             ++shown;
         }

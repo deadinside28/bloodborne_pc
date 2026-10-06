@@ -10,13 +10,15 @@
 #include <string.h>
 #include <inttypes.h>
 #include <limits.h>
-#include <pthread.h>
 #include <time.h>
-#ifndef _WIN32
 #include <errno.h>
+#ifdef _WIN32
+#include "win32_memory.h"
+#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#endif
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. BB_DMEM_MB raises it (the resolution
  * patches above 1080p need about 4 GiB more; run.sh sets it). */
 static uint64_t pool_size_bytes(void) {
@@ -55,20 +57,21 @@ _Static_assert(sizeof(BatchEntry)==32,"PS4 batch map entry layout");
 /* Region table lock. Lookups (GPU per-draw queries, VirtualQuery, GPU page
  * protection) share it; map/unmap/protect take it exclusively. Both nest: code
  * under the lock may write guest memory, and a GPU-tracked page then faults into
- * runtime_memory_gpu_protect on the same thread. Readers nest because glibc's
- * default rwlock prefers readers; a thread holding it exclusively skips relocking. */
-static pthread_rwlock_t lock=PTHREAD_RWLOCK_INITIALIZER;
-static __thread unsigned exclusive_depth;
+ * runtime_memory_gpu_protect on the same thread. Nested reads are counted per thread
+ * (a second shared acquisition could wait behind a queued writer: SRW locks and
+ * writer-preferring rwlocks do that); a thread holding it exclusively skips relocking. */
+static HostRwlock lock=HOST_RWLOCK_INIT;
+static __thread unsigned exclusive_depth, shared_depth;
 /* Odd while a writer holds the lock; readers' region caches are valid for one even value. */
 static uint64_t table_generation;
 static void write_lock(void) {
-    if (!exclusive_depth++) { pthread_rwlock_wrlock(&lock); __atomic_add_fetch(&table_generation,1,__ATOMIC_ACQ_REL); }
+    if (!exclusive_depth++) { host_write_lock(&lock); __atomic_add_fetch(&table_generation,1,__ATOMIC_ACQ_REL); }
 }
 static void write_unlock(void) {
-    if (!--exclusive_depth) { __atomic_add_fetch(&table_generation,1,__ATOMIC_RELEASE); pthread_rwlock_unlock(&lock); }
+    if (!--exclusive_depth) { __atomic_add_fetch(&table_generation,1,__ATOMIC_RELEASE); host_write_unlock(&lock); }
 }
-static void read_lock(void) { if (!exclusive_depth) pthread_rwlock_rdlock(&lock); }
-static void read_unlock(void) { if (!exclusive_depth) pthread_rwlock_unlock(&lock); }
+static void read_lock(void) { if (!exclusive_depth && !shared_depth++) host_read_lock(&lock); }
+static void read_unlock(void) { if (!exclusive_depth && !--shared_depth) host_read_unlock(&lock); }
 static Block blocks[LIMIT];
 static Vma *vmas; static size_t vma_count, vma_capacity;
 static int pool_fd=-1;
@@ -91,14 +94,34 @@ static int host_prot(int prot) {
     return ((prot & 0x11) ? PROT_READ : 0) | ((prot & 0x22) ? PROT_WRITE|PROT_READ : 0) | ((prot & 4) ? PROT_EXEC|PROT_READ : 0);
 }
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
+#ifdef _WIN32
+/* Host-owned guest-visible memory (image, stacks) starts at LOW_MIN; see runtime_low_map. */
+#define LOW_MIN UINT64_C(0x0800000000)
+static int space(void) { return win_mem_space(LOW_MIN,USER_MAX); }
+#endif
 static int pool(void) {
     if (pool_fd>=0) return 0;
+#ifdef _WIN32
+    void *view;
+    if (space() || win_mem_section(POOL_SIZE+FLEX_SPAN,&view)) return -1;
+    backing_base=view; pool_fd=0; /* the section exists */
+    return 0;
+#else
     pool_fd=memfd_create("bb-guest-memory", MFD_CLOEXEC);
     if (pool_fd<0 || ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) return -1;
     void *view=mmap(NULL,POOL_SIZE+FLEX_SPAN,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_NORESERVE,pool_fd,0);
     if (view==MAP_FAILED) return -1;
     backing_base=view;
     return 0;
+#endif
+}
+/* Released physical pages read as zero when they are reused. */
+static void punch(uint64_t phys, uint64_t size) {
+#ifdef _WIN32
+    memset(backing_base+phys,0,size);
+#else
+    fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
+#endif
 }
 static void queue_hook(int kind, uintptr_t address, uint64_t size) {
     GpuRange hook = kind==HOOK_MAP ? hook_map : kind==HOOK_UNMAP ? hook_unmap : hook_invalidate;
@@ -134,7 +157,7 @@ static uint64_t flex_alloc(uint64_t size) {
 }
 static void flex_free(uint64_t phys, uint64_t size) {
     flex_set((phys-POOL_SIZE)/PAGE,size/PAGE,0);
-    fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
+    punch(phys,size);
 }
 static size_t vma_index(uintptr_t a) { /* first VMA with end > a */
     size_t lo=0, hi=vma_count;
@@ -201,6 +224,19 @@ static void drop_range(uintptr_t start, uintptr_t end) {
     }
     vma_erase(i,n);
 }
+#ifdef _WIN32
+/* A view piece remapped around a removed range (win32_memory.c) gets its pages' guest
+ * protection back; the GPU forgets its page tracking state there. Runs before the table
+ * changes, so the regions still describe the piece. */
+static void restore_remnant(uintptr_t start, uintptr_t end) {
+    for (size_t i=vma_index(start); i<vma_count && vmas[i].start<end; ++i) {
+        if (vmas[i].kind==KIND_RESERVED) continue;
+        uintptr_t a=vmas[i].start>start ? vmas[i].start : start, b=vmas[i].end<end ? vmas[i].end : end;
+        win_mem_protect(a,b,host_prot(vmas[i].prot));
+    }
+    queue_hook(HOOK_INVALIDATE,start,end-start);
+}
+#endif
 /* Places a host mapping; with MAP_FIXED it replaces what the guest had there. */
 static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t alignment,
                      int kind, int type, uint64_t phys) {
@@ -212,10 +248,17 @@ static int32_t place(void **inout, uint64_t size, int prot, int flags, uint64_t 
         address=find_free(address,size,alignment);
         if (!address) return NO_MEMORY;
     }
+#ifdef _WIN32
+    if (space()) return NO_MEMORY;
+    if (kind!=KIND_RESERVED ? win_mem_map(address,address+size,phys,host_prot(prot),restore_remnant)
+                            : win_mem_release(address,address+size,restore_remnant)) return NO_MEMORY;
+    void *mapped=(void *)address;
+#else
     void *mapped = kind!=KIND_RESERVED
         ? mmap((void *)address,size,host_prot(prot),MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys)
         : mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
     if (mapped==MAP_FAILED) return NO_MEMORY;
+#endif
     drop_range(address,address+size);
     if (vma_insert(vma_index(address),(Vma){address,address+size,kind,prot,type,phys})) return NO_MEMORY;
     if (kind==KIND_FLEXIBLE) flexible_bytes+=size;
@@ -298,10 +341,15 @@ static int32_t unmap_locked(uintptr_t start, uint64_t size) {
             uintptr_t a=vmas[i].start>start ? vmas[i].start : start, b=vmas[i].end<end ? vmas[i].end : end;
             queue_hook(HOOK_UNMAP,a,b-a);
         }
+#ifdef _WIN32
+    if (vma_index(start)<vma_count && vmas[vma_index(start)].start<end && win_mem_release(start,end,restore_remnant))
+        return INVALID;
+#else
     for (size_t i=vma_index(start); i<vma_count && vmas[i].start<end; ++i) {
         uintptr_t a=vmas[i].start>start ? vmas[i].start : start, b=vmas[i].end<end ? vmas[i].end : end;
         if (munmap((void *)a,b-a)) return INVALID;
     }
+#endif
     drop_range(start,end);
     return 0;
 }
@@ -343,7 +391,7 @@ static ABI int32_t direct_release(uint64_t start, uint64_t size) {
         if (right.size) for (int j=0;j<LIMIT;++j) if (!blocks[j].used) { blocks[j]=right; break; }
         live_bytes-=e-a;
     }
-    fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)start,(off_t)size); /* zero on reuse */
+    punch(start,size); /* zero on reuse */
     write_unlock();
     flush_hooks();
     return 0;
@@ -387,7 +435,11 @@ static int32_t protect_locked(uintptr_t start, uint64_t size, int prot, int type
     uintptr_t end=start+align_up(size,PAGE);
     start&=~(uintptr_t)(PAGE-1);
     if ((prot & ~0x37) || !covered(start,end,0)) return INVALID;
+#ifdef _WIN32
+    if (win_mem_protect(start,end,host_prot(prot))) return INVALID;
+#else
     if (mprotect((void *)start,end-start,host_prot(prot))) return INVALID;
+#endif
     int error; size_t i=carve(start,end,&error);
     if (error) return NO_MEMORY;
     for (; i<vma_count && vmas[i].start<end; ++i) { vmas[i].prot=prot; if (type>=0) vmas[i].type=type; }
@@ -491,11 +543,25 @@ uintptr_t runtime_memory_resolve(const char *name) {
 }
 /* Host-owned memory the guest can see (image, stacks, trampolines) lives in
  * [LOW_MIN, USER_MIN): PS4 code packs pointers into 40-bit fields. */
+#ifndef LOW_MIN
 #define LOW_MIN UINT64_C(0x0800000000)
+#endif
 static uintptr_t low_next=LOW_MIN;
 void *runtime_low_map(size_t size, int prot) {
     size=align_up(size,PAGE);
     write_lock();
+#ifdef _WIN32
+    /* Read/write; the loader changes protection afterwards (VirtualProtect). */
+    (void)prot;
+    void *p=NULL;
+    if (!space())
+        while (!p && low_next+size<=USER_MIN) {
+            p=win_mem_private(low_next,low_next+size);
+            low_next+=size+PAGE; /* reserved gap catches overruns */
+        }
+    write_unlock();
+    return p;
+#else
     void *p=MAP_FAILED;
     while (low_next+size<=USER_MIN) {
         p=mmap((void *)low_next,size,prot,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
@@ -504,6 +570,7 @@ void *runtime_low_map(size_t size, int prot) {
     }
     write_unlock();
     return p==MAP_FAILED ? NULL : p;
+#endif
 }
 /* ---- GPU library interface (gpu/shim/bbgpu.cpp) ---- */
 /* Optimizations switched off at run time (diagnostics): the number in the file named by
@@ -525,7 +592,7 @@ void *runtime_low_map(size_t size, int prot) {
 uint64_t runtime_disabled_optimizations;
 /* Speculative readers of guest memory (GPU draw-preparation workers) register a recovery
  * point: a fault on that thread jumps back to it instead of terminating (probe.c). */
-__thread sigjmp_buf *runtime_fault_recover;
+__thread RuntimeRecoverBuf *runtime_fault_recover;
 static void *toggle_watcher(void *path) {
     for (unsigned long long last=ULLONG_MAX;;) {
         FILE *f=fopen(path,"r");
@@ -536,14 +603,15 @@ static void *toggle_watcher(void *path) {
             printf("Runtime: disabled optimizations mask=%llu\n",value);
             last=value;
         }
-        struct timespec t={0,250000000}; nanosleep(&t,NULL);
+        host_sleep_ns(250000000);
     }
     return NULL;
 }
 void runtime_memory_set_gpu_hooks(GpuRange map, GpuRange unmap, GpuRange invalidate) {
     const char *toggles=getenv("BB_TOGGLE_FILE");
-    static pthread_t watcher;
-    if (toggles && !watcher) pthread_create(&watcher,NULL,toggle_watcher,(void *)toggles);
+    static int watching;
+    static HostThread watcher;
+    if (toggles && !watching) watching=!host_thread_start(&watcher,0,toggle_watcher,(void *)toggles);
     write_lock();
     hook_map=map; hook_unmap=unmap; hook_invalidate=invalidate;
     for (size_t i=0;i<vma_count;++i) if (vmas[i].kind!=KIND_RESERVED) queue_hook(HOOK_MAP,vmas[i].start,vmas[i].end-vmas[i].start);
@@ -563,6 +631,23 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
     }
     read_unlock();
     return ok;
+}
+/* Reads guest memory through the backing view, past GPU page protection: with precise
+ * readbacks pages the GPU wrote are protected against reads too. Gaps and reserved
+ * ranges read as zero. */
+void runtime_memory_read_backing(uintptr_t address, void *data, uint64_t size) {
+    unsigned char *out=data;
+    read_lock();
+    for (uintptr_t at=address, end=address+size; at<end;) {
+        size_t i=vma_index(at);
+        int mapped=i<vma_count && vmas[i].start<=at;
+        uintptr_t next=i==vma_count ? end : mapped ? vmas[i].end : vmas[i].start;
+        if (next>end) next=end;
+        if (mapped && vmas[i].kind!=KIND_RESERVED) memcpy(out+(at-address),backing_base+vmas[i].phys+(at-vmas[i].start),next-at);
+        else memset(out+(at-address),0,next-at);
+        at=next;
+    }
+    read_unlock();
 }
 /* Per-thread cache of recently found regions for the GPU's per-draw queries:
  * entries hold for as long as the table generation they were read at. */
@@ -623,7 +708,11 @@ void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int 
         uintptr_t b=vmas[i].end<address+size ? vmas[i].end : address+size;
         int guest=host_prot(vmas[i].prot);
         int want=(read ? PROT_READ : 0)|(write ? PROT_WRITE|PROT_READ : 0)|(guest & PROT_EXEC);
+#ifdef _WIN32
+        win_mem_protect(a,b,guest & want);
+#else
         mprotect((void *)a,b-a,guest & want);
+#endif
     }
     read_unlock();
 }
@@ -642,9 +731,3 @@ void runtime_memory_report(void) {
     printf("Runtime: flexible maps=%zu, in use=%" PRIu64 ", protects=%zu, queries=%zu, regions=%zu\n",
            flexible_maps, flexible_bytes, protects, queries, vma_count);
 }
-#else
-void *runtime_low_map(size_t size, int prot) { (void)size; (void)prot; return NULL; }
-uintptr_t runtime_memory_resolve(const char *name) { (void)name; return 0; }
-int runtime_memory_is_mapped(uintptr_t address, uint64_t size) { (void)address; (void)size; return 0; }
-void runtime_memory_report(void) { puts("Runtime: Windows direct-memory backend not implemented"); }
-#endif

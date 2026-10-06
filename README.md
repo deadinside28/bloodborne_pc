@@ -94,6 +94,13 @@ By default the game folder is expected next to the repository (`../CUSA03173`). 
 shader cache go to `user/` (the launcher lets you choose another folder); settings to
 `bbport.ini`. A gamepad is used through SDL3; there is a keyboard fallback.
 
+`run.sh` and `run.bat` (Windows) only find Python and call the same launcher,
+`scripts/run_game.py`: it prepares the game image and the patches, builds the port when needed
+(not with `BB_PREBUILT=1`) and starts it. Before the game's own options it takes
+`--game-dir DIR` (instead of `BB_GAME_DIR`) and, on Linux, `--software` (Lavapipe, Mesa's CPU
+Vulkan driver). `BB_DRY_RUN=1` does every step but the last: it prints the bb-probe command and
+its environment instead of starting the game.
+
 **Resolution and preset changes:** for outputs other than 1080p (720p on the Steam Deck,
 1440p, 4K) the whole game renders at the preset's resolution, set by a patch at start — the
 fastest path. Changing the output or the preset in the in-game menu then needs *Apply and
@@ -197,6 +204,64 @@ pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4
 with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames).
 More in [docs/](docs); recent changes: [docs/CHANGES_2026-10-02.md](docs/CHANGES_2026-10-02.md),
 [docs/CHANGES_2026-10-03.md](docs/CHANGES_2026-10-03.md).
+
+## Windows (experimental)
+
+The same port also builds natively for 64-bit Windows 10 (1803 or newer) and 11 with
+[MSYS2](https://www.msys2.org)'s CLANG64 toolchain (clang, libc++, lld). Tested: RTX 4090
+(NVIDIA 616.86), i9-13900K, Windows 11 24H2; it boots, creates and loads saves and plays with
+sound (input was tested through `BB_PAD_FILE`; gamepads and the keyboard go through SDL as on
+Linux), 110–120 FPS at 1080p in Iosefka's Clinic (~3,200 draws per frame, GPU command thread
+2.5 µs per draw). v1.09 dumps of other regions work as well (tested: CUSA00900).
+
+**Setup program:** `setup.bat` opens a window to choose the game folder and the settings
+(output resolution, frame rate, upscaler and preset, effects, game language, optional DLSS and
+FSR 4 model downloads, shortcuts). Install / Update then installs MSYS2 to `C:\msys64` when it
+is missing (another folder: set `BB_MSYS2`), the packages below and the submodules, builds the
+port, and writes `bbport.ini`, `Bloodborne.cmd` (the launcher: frame rate, game language and
+present mode, then `run.bat`) and Desktop and Start menu shortcuts with the game's icon. Run it
+again to change the settings; Save settings writes them without building. It needs nothing but
+Windows: `setup.bat` compiles `tools\setup\BbportSetup.cs` with the C# compiler of .NET Framework
+4 into `out\bbport-setup.exe`. The steps below do the same by hand.
+
+1. Install MSYS2 to `C:\msys64` (another folder: set `BB_MSYS2`) and, in an MSYS2 shell, update it
+   (`pacman -Syu`, again until nothing is left to do) and install the packages:
+
+   ```
+   pacman -S --needed git mingw-w64-clang-x86_64-{clang,lld,libc++,cmake,ninja,pkgconf,python,sdl3,boost,fmt,glslang,spirv-cross,spirv-headers,vulkan-headers,vulkan-loader,vulkan-memory-allocator,xxhash,zydis,robin-map,ffmpeg}
+   ```
+
+   `vulkan-headers` must be 1.4.350 or newer: with an outdated package database `pacman -S` installs
+   an older one, and the GPU library fails with `no member named
+   'PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE'`.
+
+2. `git clone --recursive <this repository> bbport` (until the Windows port is merged upstream:
+   `git clone --recursive -b windows-port https://github.com/yumlevi/bloodborne_pc bbport`; the
+   upstream sources alone fail in CMake, e.g. on `magic_enum`), then from `cmd` or Explorer:
+
+   ```
+   run.bat --game-dir D:\Games\CUSA03173
+   ```
+
+   The first start builds the port (a few minutes; `build.sh` in the CLANG64 environment) into
+   `out\bb-probe.exe`. The game folder is remembered: afterwards `run.bat` alone starts the game.
+   `BB_PREBUILT=1` skips the build check. `run.bat` runs the same launcher as `run.sh`
+   (`scripts/run_game.py`, see "Build and run"; `BB_DRY_RUN=1` included). Settings, saves, mods
+   and patches use the same files as on Linux (`bbport.ini`, `user\`, `mods\`, `patches\`); the
+   in-game menu (Insert or L3+R3) changes the settings. `fullscreen=1` in `bbport.ini` (or F11
+   in the game) gives a borderless window at the desktop size; with `output_res=3840x2160` and
+   `preset=1` (FSR 3.1 Quality, scene 2560x1440) the RTX 4090 above stays at the 120 Hz display
+   limit. The GTK launcher and the AppImage are Linux-only.
+
+How it differs from Linux, all on the Win32 API directly (no POSIX layer): the guest address
+space is reserved at start as one placeholder and mapped with section views
+(`src/win32_memory.c`); the runtime's locks, condition variables, threads and clocks are SRW
+locks, Windows condition variables, CRT threads and QueryPerformanceCounter (`src/host_sync.h`,
+`src/runtime_host.c`), and libc++ maps the GPU library's `std::mutex`/`std::thread` to the same;
+GPU page tracking and crash reports run in a vectored exception handler; the guest's thread
+pointer lives in a TEB TLS slot (`patch_tls_reads` in `src/probe.c`); `src/win32_compat.c`
+covers file system and time zone details. With libc++ on Windows, `std::thread::get_id()` and
+`std::jthread::joinable()` ask the kernel (`GetThreadId`): hot paths keep their own flags.
 
 ## Repository layout
 

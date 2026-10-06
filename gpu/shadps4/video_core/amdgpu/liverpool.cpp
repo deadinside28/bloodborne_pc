@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
-#include <pthread.h>
-#include <sys/resource.h>
 #include <time.h>
 #include "bbport_copy.h"
+#include "bbport_platform.h"
 #include "bbport_toggles.h"
 #include <cstdio>
 #include <boost/preprocessor/stringize.hpp>
@@ -102,12 +101,14 @@ void Liverpool::ProcessCommands() {
 
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
-    if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
-        BbStats::gpu_thread_clock.store(static_cast<int>(clock));
+    if (const int clock = BbPlatform::ThreadCpuClock(); clock != -1) {
+        BbStats::gpu_thread_clock.store(clock);
     }
     gpu_id = std::this_thread::get_id();
 #ifdef __linux__
     gpu_tid = gettid();
+#elif defined(_WIN32)
+    gpu_tid = BbPlatform::CurrentThreadId();
 #endif
 
     while (!stoken.stop_requested()) {
@@ -1326,14 +1327,12 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     }
     if (seq != NoSeq && BbStats::enabled) {
         BbStats::submissions.fetch_add(1, std::memory_order_relaxed);
-        if (rusage usage{}; getrusage(RUSAGE_THREAD, &usage) == 0) {
-            BbStats::gpu_user_us.store(u64(usage.ru_utime.tv_sec) * 1000000 + usage.ru_utime.tv_usec,
-                                       std::memory_order_relaxed);
-            BbStats::gpu_sys_us.store(u64(usage.ru_stime.tv_sec) * 1000000 + usage.ru_stime.tv_usec,
-                                      std::memory_order_relaxed);
-            BbStats::gpu_invol_switches.store(usage.ru_nivcsw, std::memory_order_relaxed);
-            BbStats::gpu_vol_switches.store(usage.ru_nvcsw, std::memory_order_relaxed);
-            BbStats::gpu_minor_faults.store(usage.ru_minflt, std::memory_order_relaxed);
+        if (BbPlatform::Usage usage; BbPlatform::GetUsage(true, usage)) {
+            BbStats::gpu_user_us.store(usage.user_us, std::memory_order_relaxed);
+            BbStats::gpu_sys_us.store(usage.sys_us, std::memory_order_relaxed);
+            BbStats::gpu_invol_switches.store(usage.invol_switches, std::memory_order_relaxed);
+            BbStats::gpu_vol_switches.store(usage.vol_switches, std::memory_order_relaxed);
+            BbStats::gpu_minor_faults.store(usage.minor_faults, std::memory_order_relaxed);
         }
     }
 

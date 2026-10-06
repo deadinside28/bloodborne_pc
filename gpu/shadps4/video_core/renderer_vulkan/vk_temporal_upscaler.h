@@ -20,6 +20,7 @@
 
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_fsr4.h"
 #include "video_core/texture_cache/image.h"
 
@@ -168,9 +169,15 @@ private:
     bool RecordFsr4(vk::CommandBuffer cmdbuf, Fsr4Upscaler::Image color, Fsr4Upscaler::Image depth,
                     u32 w, u32 h, u32 ow, u32 oh, float frame_ms);
     void RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color, vk::ImageView depth);
-    /// Sharpness above 1 for FSR 3/4 (their RCAS stops at 1): one more RCAS pass over the target
-    /// (output_image, or the 8-bit UI image with ldr) in General layout after the upscaler.
+    /// Sharpness above 1 for FSR 3/4 (their RCAS stops at 1), all of it for DLSS (no sharpening
+    /// of its own): one more RCAS pass over the target (output_image, or the 8-bit UI image with
+    /// ldr) in General layout after the upscaler.
     void ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w, u32 h);
+    /// The 8-bit UI image as a storage image (its own format may be sRGB).
+    vk::ImageView UiStorageView(vk::Image target);
+    /// The menu's motion vector view over the UI image (General), for outputs other than
+    /// 1080p: the upscaler writes it directly there, without the merge pass's debug modes.
+    void DebugViewUi(vk::CommandBuffer cmdbuf, u32 w, u32 h);
 
     const Instance& instance;
     Scheduler& scheduler;
@@ -243,6 +250,7 @@ private:
     bool resources_fsr4 = false;  ///< made for FSR 4 (no FSR 3 context)
     bool resources_taa = false;
     std::unique_ptr<Fsr4Upscaler> fsr4;
+    std::unique_ptr<DlssUpscaler> dlss; ///< NVIDIA devices only; records the FSR 4 frame
     bool fsr4_failed = false;
     VideoCore::UniqueImage motion_image;
     VideoCore::UniqueImage output_image;
@@ -258,6 +266,9 @@ private:
     vk::UniqueDescriptorSetLayout merge_desc_layout;
     vk::UniquePipelineLayout merge_pipeline_layout;
     vk::UniquePipeline merge_pipeline;
+    vk::UniqueDescriptorSetLayout debug_desc_layout;
+    vk::UniquePipelineLayout debug_pipeline_layout;
+    vk::UniquePipeline debug_pipeline;
     std::array<VideoCore::UniqueImage, 2> taa_history;
     std::array<vk::UniqueImageView, 2> taa_history_views;
     u32 taa_next = 0;

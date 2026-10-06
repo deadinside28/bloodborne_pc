@@ -9,7 +9,22 @@
 
 extern "C" std::uint64_t runtime_disabled_optimizations;
 /// Recovery point for speculative guest memory reads on this thread (runtime_memory.c).
-extern "C" __thread sigjmp_buf* runtime_fault_recover;
+/// BB_RECOVER_SET(buf) returns nonzero when the loader's fault handler jumps back to it.
+#ifdef _WIN32
+// No unwinding on Windows: guest frames between the fault and the recovery point have no
+// unwind data. runtime_setjmp/runtime_longjmp (src/runtime_host.c) save and restore every
+// callee-saved register; layout as RuntimeRecoverBuf in src/runtime.h.
+struct alignas(16) BbRecoverBuf {
+    unsigned char registers[256];
+};
+extern "C" __thread BbRecoverBuf* runtime_fault_recover;
+extern "C" int runtime_setjmp(BbRecoverBuf* buf) __attribute__((returns_twice));
+#define BB_RECOVER_SET(buf) runtime_setjmp(&(buf))
+#else
+typedef sigjmp_buf BbRecoverBuf;
+extern "C" __thread BbRecoverBuf* runtime_fault_recover;
+#define BB_RECOVER_SET(buf) sigsetjmp(buf, 0)
+#endif
 
 namespace BbToggle {
 enum : std::uint64_t {

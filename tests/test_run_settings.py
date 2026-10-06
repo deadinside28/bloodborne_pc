@@ -12,7 +12,8 @@ import unittest
 
 
 class RestartResolutionTests(unittest.TestCase):
-    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False):
+    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
+                     dry_run=False):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
             # Preparation is unrelated to this test; allow the real patch compiler to
@@ -34,7 +35,7 @@ class RestartResolutionTests(unittest.TestCase):
             python = data / 'python'
             python.write_text(f'#!{sys.executable}\n' +
                 'import subprocess, sys\n'
-                'if sys.argv[1] in ("scripts/patches.py", "scripts/mods.py"):\n'
+                'if sys.argv[1] in ("scripts/run_game.py", "scripts/patches.py", "scripts/mods.py"):\n'
                 '    sys.exit(subprocess.call([sys.executable, *sys.argv[1:]]))\n')
             python.chmod(0o755)
             probe = data / 'probe'
@@ -67,8 +68,13 @@ class RestartResolutionTests(unittest.TestCase):
                 for name in ('bash', 'dirname', 'mkdir', 'realpath'):
                     (tools / name).symlink_to(shutil.which(name))
                 env['PATH'] = str(tools)
-            subprocess.run([shutil.which('bash'), 'run.sh'], cwd=ROOT, env=env,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=30)
+            if dry_run:
+                env['BB_DRY_RUN'] = '1'
+            result = subprocess.run([shutil.which('bash'), 'run.sh'], cwd=ROOT, env=env,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=30)
+            if dry_run:  # (output, whether the probe ran, whether the patches were compiled)
+                return (result.stdout.decode(), (data / 'environments').exists(),
+                        (out / 'patches.bin').exists())
             return [json.loads(line) for line in (data / 'environments').read_text().splitlines()]
 
     def test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it(self):
@@ -101,6 +107,14 @@ class RestartResolutionTests(unittest.TestCase):
                                            bare_path=True)[0]['BB_RENDER_RES'], '854x480')
         self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1,
                                             bare_path=True)[0]['BB_RENDER_RES'])
+
+    def test_dry_run_prepares_everything_but_does_not_start_the_game(self):
+        output, started, patched = self.run_restarts(dry_run=True)
+        self.assertFalse(started)
+        self.assertTrue(patched)
+        self.assertIn('Dry run (BB_DRY_RUN=1)', output)
+        self.assertIn('--app0', output)
+        self.assertIn('BB_RENDER_RES=854x480', output)
 
     def test_explicit_render_override_survives_restart(self):
         rows = self.run_restarts(explicit=True)

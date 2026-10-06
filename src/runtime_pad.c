@@ -12,7 +12,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 #include <time.h>
 #include <SDL3/SDL.h>
 #include <sys/stat.h>
@@ -55,13 +54,13 @@ _Static_assert(__builtin_offsetof(PadData,touches)==60,"OrbisPadData touch offse
 _Static_assert(__builtin_offsetof(PadData,timestamp)==80,"OrbisPadData timestamp offset");
 _Static_assert(sizeof(ControllerInfo)==28,"OrbisPadControllerInformation layout");
 
-static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
+static HostMutex lock=HOST_MUTEX_INIT;
 static int initialized, opened, sdl_ready;
 static SDL_Gamepad *gamepad;
 static size_t reads;
 static uint8_t connected_count;
 
-static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
+static uint64_t now_us(void) { return host_monotonic_ns()/1000u; }
 static uint8_t axis(int16_t v) { int x=(v+32768)>>8; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
 static uint8_t trigger(int16_t v) { int x=v>>7; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
 static uint16_t touch_axis(float v, int max) {
@@ -168,8 +167,14 @@ static void read_inject(void) {
     last_check=now;
     struct stat st;
     if (stat(path,&st)!=0) return;
+#ifdef _WIN32
+    /* Whole-second times: the size tells writes within the same second apart. */
+    if (st.st_mtime==mtime.tv_sec && st.st_size==mtime.tv_nsec) return;
+    mtime.tv_sec=st.st_mtime; mtime.tv_nsec=(long)st.st_size;
+#else
     if (st.st_mtim.tv_sec==mtime.tv_sec && st.st_mtim.tv_nsec==mtime.tv_nsec) return;
     mtime=st.st_mtim;
+#endif
     FILE *f=fopen(path,"r");
     if (!f) return;
     static const struct { const char *name; uint32_t ps; } names[]={
@@ -279,16 +284,16 @@ static void sample(PadData *d) {
     for (int i=0;i<4;++i) if (injected.stick[i]>=0) *axes[i]=(uint8_t)injected.stick[i];
 }
 
-static ABI int32_t pad_init(void) { pthread_mutex_lock(&lock); initialized=1; pthread_mutex_unlock(&lock); return 0; }
+static ABI int32_t pad_init(void) { host_lock(&lock); initialized=1; host_unlock(&lock); return 0; }
 static ABI int32_t pad_open(int32_t user, int32_t type, int32_t index, const void *param) {
     (void)param;
     if (!initialized) return ERR_NOT_INITIALIZED;
     if (user!=1) return ERR_INVALID_ARG;
     if (type!=0 && type!=2) return ERR_INVALID_ARG; /* standard / special port */
     if (index) return ERR_INVALID_ARG;
-    pthread_mutex_lock(&lock);
+    host_lock(&lock);
     int already=opened; opened=1;
-    pthread_mutex_unlock(&lock);
+    host_unlock(&lock);
     if (already) return ERR_ALREADY_OPENED;
     puts("Runtime: pad opened for user 1 (SDL gamepad or keyboard)");
     return PAD_HANDLE;
@@ -300,9 +305,9 @@ static ABI int32_t pad_close(int32_t handle) {
 static ABI int32_t pad_read_state(int32_t handle, PadData *data) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!data) return ERR_INVALID_ARG;
-    pthread_mutex_lock(&lock);
+    host_lock(&lock);
     sample(data); ++reads;
-    pthread_mutex_unlock(&lock);
+    host_unlock(&lock);
     return 0;
 }
 /* Buffered read: the port samples once per call, so one entry is returned. */
@@ -319,19 +324,19 @@ static ABI int32_t pad_info(int32_t handle, ControllerInfo *info) {
     info->pixel_density=44.86f; info->resolution_x=1920; info->resolution_y=943;
     info->dead_zone_left=info->dead_zone_right=2;
     info->connection_type=0; info->connected=1; info->device_class=0;
-    pthread_mutex_lock(&lock);
+    host_lock(&lock);
     current_gamepad();
     info->connected_count=connected_count ? connected_count : 1;
-    pthread_mutex_unlock(&lock);
+    host_unlock(&lock);
     return 0;
 }
 static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
-    pthread_mutex_lock(&lock);
+    host_lock(&lock);
     SDL_Gamepad *g=current_gamepad();
     if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
-    pthread_mutex_unlock(&lock);
+    host_unlock(&lock);
     return 0;
 }
 static ABI int32_t pad_ok_handle(int32_t handle) { return handle==PAD_HANDLE && opened ? 0 : ERR_INVALID_HANDLE; }

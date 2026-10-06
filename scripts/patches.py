@@ -13,7 +13,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 EBOOT_BASE=0x400000
-# BB_FPS presets: patch names from patches/Bloodborne.xml (app version 01.09).
+# BB_FPS presets: patch names from patches/Bloodborne.xml (app version 01.09). Their patch lists
+# follow shadps4-emu/ps4_cheats PATCHES/Bloodborne.xml of 2026-10-02 (older lists missed timesteps:
+# messengers and loading screen pictures replayed their animations).
 FPS_PRESETS={'30':[],'60':['60 FPS++'],'90':['90 FPS++'],'uncap':['Uncap FPS++']}
 # Upscaler presets (bbport.ini "preset", the in-game menu): output / render size ratio. The game
 # then renders at 1920x1080 / ratio and the port's temporal upscaler restores the output size.

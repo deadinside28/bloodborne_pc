@@ -122,7 +122,10 @@ void ObjectMotion::OnFrameStart() {
         params_ticks[slot] = 0;
     }
     params_used = 0;
-    written = false;
+    for (auto& target : targets) {
+        target->written = false;
+    }
+    std::erase_if(retired, [this](auto& entry) { return scheduler.IsFree(entry.first); });
     scheduler.EndRendering();
     // Last frame's stores must be visible to this frame's loads. Also finish old reads
     // before the ping-pong half they reference is reused for writes.
@@ -162,18 +165,40 @@ u32 ObjectMotion::PrepareDraw(const DrawInfo& draw) {
     return index;
 }
 
-void ObjectMotion::EnsureImage(u32 width, u32 height) {
-    if (image && width == image_width && height == image_height) {
-        return;
+const ObjectMotion::Target* ObjectMotion::Find(u32 width, u32 height) const noexcept {
+    for (const auto& target : targets) {
+        if (target->width == width && target->height == height) {
+            return target.get();
+        }
+    }
+    return nullptr;
+}
+
+ObjectMotion::Target& ObjectMotion::EnsureTarget(u32 width, u32 height) {
+    if (const Target* found = Find(width, height)) {
+        auto& target = const_cast<Target&>(*found);
+        target.last_use = frame;
+        return target;
+    }
+    if (targets.size() >= MaxTargets) {
+        // The least recently used size goes; queued work may still use it, so it is freed
+        // when the GPU is past this tick (OnFrameStart), not here.
+        auto oldest = targets.begin();
+        for (auto it = targets.begin(); it != targets.end(); ++it) {
+            if ((*it)->last_use < (*oldest)->last_use) {
+                oldest = it;
+            }
+        }
+        if (read_target == oldest->get()) {
+            read_target = nullptr;
+        }
+        retired.emplace_back(scheduler.CurrentTick(), std::move(*oldest));
+        targets.erase(oldest);
     }
     const auto device = instance.GetDevice();
-    if (image) {
-        scheduler.Finish();
-    }
-    view.reset();
-    image_layout = vk::ImageLayout::eUndefined;
-    image = VideoCore::UniqueImage(device, instance.GetAllocator());
-    image.Create(vk::ImageCreateInfo{
+    auto target = std::make_unique<Target>();
+    target->image = VideoCore::UniqueImage(device, instance.GetAllocator());
+    target->image.Create(vk::ImageCreateInfo{
         .imageType = vk::ImageType::e2D,
         .format = vk::Format::eR32G32B32A32Sfloat,
         .extent = {width, height, 1},
@@ -185,25 +210,27 @@ void ObjectMotion::EnsureImage(u32 width, u32 height) {
                  vk::ImageUsageFlagBits::eTransferSrc,
         .initialLayout = vk::ImageLayout::eUndefined,
     });
-    view = Check(device.createImageViewUnique({
-        .image = vk::Image(image),
+    target->view = Check(device.createImageViewUnique({
+        .image = vk::Image(target->image),
         .viewType = vk::ImageViewType::e2D,
         .format = vk::Format::eR32G32B32A32Sfloat,
         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
     }));
-    image_width = width;
-    image_height = height;
-    written = false;
+    target->width = width;
+    target->height = height;
+    target->last_use = frame;
+    targets.push_back(std::move(target));
+    return *targets.back();
 }
 
 void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
     constexpr u32 slot = Shader::MotionVectors::Output;
-    EnsureImage(width, height);
+    Target& target = EnsureTarget(width, height);
     auto& attachment = state.color_attachments[slot];
     attachment = {};
-    attachment.image_view = *view;
+    attachment.image_view = *target.view;
     attachment.image_layout = vk::ImageLayout::eColorAttachmentOptimal;
-    if (!written || image_layout != vk::ImageLayout::eColorAttachmentOptimal) {
+    if (!target.written || target.layout != vk::ImageLayout::eColorAttachmentOptimal) {
         // Clear once per frame; later reads must not erase the validity of this history.
         scheduler.EndRendering();
         const vk::ImageMemoryBarrier2 barrier{
@@ -212,9 +239,9 @@ void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
             .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite |
                              vk::AccessFlagBits2::eColorAttachmentRead,
-            .oldLayout = image_layout,
+            .oldLayout = target.layout,
             .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-            .image = vk::Image(image),
+            .image = vk::Image(target.image),
             .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
         };
         // Recorded in order on the recording thread: CommandBuffer() here switched the rest of
@@ -222,30 +249,35 @@ void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
         scheduler.Record([barrier](vk::CommandBuffer cmd) {
             cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
         });
-        image_layout = vk::ImageLayout::eColorAttachmentOptimal;
-        attachment.is_clear = !written;
-        written = true;
+        target.layout = vk::ImageLayout::eColorAttachmentOptimal;
+        attachment.is_clear = !target.written;
+        target.written = true;
     }
     state.num_color_attachments = std::max<u16>(state.num_color_attachments, slot + 1);
 }
 
 vk::ImageView ObjectMotion::PrepareRead(vk::CommandBuffer cmdbuf, u32 width, u32 height,
                                         bool& valid) {
-    EnsureImage(std::max(image_width, 1u), std::max(image_height, 1u));
-    valid = written && width == image_width && height == image_height;
+    // This size's vectors; without a pass of this size this frame, any image is bound (invalid).
+    const Target* found = Find(width, height);
+    Target& target = found ? const_cast<Target&>(*found)
+                     : !targets.empty() ? *targets.back()
+                                        : EnsureTarget(std::max(width, 1u), std::max(height, 1u));
+    valid = found && target.written;
     const vk::ImageMemoryBarrier2 barrier{
         .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
         .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
-        .oldLayout = image_layout,
+        .oldLayout = target.layout,
         .newLayout = vk::ImageLayout::eGeneral,
-        .image = vk::Image(image),
+        .image = vk::Image(target.image),
         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
     };
     cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
-    image_layout = vk::ImageLayout::eGeneral;
-    return *view;
+    target.layout = vk::ImageLayout::eGeneral;
+    read_target = &target;
+    return *target.view;
 }
 
 } // namespace Vulkan

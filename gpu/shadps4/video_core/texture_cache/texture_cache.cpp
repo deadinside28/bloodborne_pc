@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <mutex>
+#include <set>
+#include <utility>
 #include <xxhash.h>
 
 #include "bbport_toggles.h"
@@ -113,11 +116,65 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
     }
 }
 
+void TextureCache::DumpImagesAt(VAddr address, const char* dir) {
+    boost::container::small_vector<ImageId, 4> ids;
+    {
+        std::scoped_lock lock{mutex};
+        ForEachImageInRegion(address, 1, [&](ImageId image_id, Image& image) {
+            if (image.info.guest_address == address) {
+                ids.push_back(image_id);
+            }
+        });
+    }
+    std::printf("Image dump %#llx: %zu images\n", static_cast<unsigned long long>(address),
+                ids.size());
+    u32 n = 0;
+    for (const ImageId image_id : ids) {
+        Image& image = slot_images[image_id];
+        const auto format = vk::to_string(image.info.pixel_format);
+        const u32 width = image.info.size.width, height = image.info.size.height;
+        std::printf("  image %u: %s %ux%u tile %u, flags %#x, layers %u, mips %u, %s\n",
+                    image_id.index, format.c_str(), width, height,
+                    static_cast<u32>(image.info.tile_mode), static_cast<u32>(image.flags),
+                    image.info.resources.layers, image.info.resources.levels,
+                    image.info.props.is_depth ? "depth" : "color");
+        if (image.info.props.is_block) {
+            continue;
+        }
+        const u32 bytes_per_pixel = image.info.props.is_depth ? 4 : image.info.num_bits / 8;
+        const u64 size = u64(width) * height * bytes_per_pixel;
+        const auto download = runtime.GetStagingPool().Request(size, MemoryType::HostCached, 16);
+        const vk::BufferImageCopy copy = {
+            .bufferOffset = download.offset,
+            .imageSubresource = {image.info.props.is_depth ? vk::ImageAspectFlagBits::eDepth
+                                                           : vk::ImageAspectFlagBits::eColor,
+                                 0, 0, 1},
+            .imageExtent = {width, height, 1},
+        };
+        runtime.DownloadImage(&image, download.buffer, std::span{&copy, 1});
+        scheduler.Finish();
+        download.Invalidate();
+        const std::string path = std::format("{}/img_{:x}_{}_{}x{}_{}.raw", dir, address, n++, width,
+                                             height, format);
+        if (FILE* f = std::fopen(path.c_str(), "wb")) {
+            std::fwrite(download.mapped, 1, size, f);
+            std::fclose(f);
+        }
+    }
+}
+
+/// bbport: the guest memory a MaybeCpuDirty check compares, the same at marking and at
+/// refresh (they hashed different ranges, the whole image and its first 8x8 pixels, so the
+/// first check never matched). Such an image lies within the faulting page: cheap to hash
+/// whole, and a CPU write past its first pixels still counts.
+u64 TextureCache::MaybeDirtyHash(const Image& image) {
+    return XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address), image.info.guest_size);
+}
+
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
     if (image.hash == 0) {
         // Initialize hash
-        const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
-        image.hash = XXH3_64bits(addr, image.info.guest_size);
+        image.hash = MaybeDirtyHash(image);
     }
     image.flags |= ImageFlagBits::MaybeCpuDirty;
     UntrackImage(image_id);
@@ -658,9 +715,17 @@ ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure
                 return image_ids[i];
             }
         }
-        LOG_WARNING(Render_Vulkan,
-                    "Failed to find exact image match for copy addr={:#x}, size={:#x}", address,
-                    size);
+        // bbport: callers fall back to the buffer path. The same aliasing repeats every frame
+        // (42,000 times in one session): each address and size is reported once.
+        static std::mutex warned_mutex;
+        static std::set<std::pair<VAddr, size_t>> warned;
+        std::scoped_lock lock{warned_mutex};
+        if (warned.size() < 256 && warned.emplace(address, size).second) {
+            LOG_WARNING(Render_Vulkan,
+                        "Failed to find exact image match for copy addr={:#x}, size={:#x} "
+                        "(reported once; the copy uses the buffer path)",
+                        address, size);
+        }
     }
     return {};
 }
@@ -771,17 +836,7 @@ void TextureCache::RefreshImage(Image& image) {
 
     if (True(image.flags & ImageFlagBits::MaybeCpuDirty) &&
         False(image.flags & ImageFlagBits::CpuDirty)) {
-        // The image size should be less than page size to be considered MaybeCpuDirty
-        // So this calculation should be very uncommon and reasonably fast
-        // For now we'll just check up to 64 first pixels
-        const auto addr = std::bit_cast<u8*>(image.info.guest_address);
-        const u32 w = std::min(image.info.size.width, u32(8));
-        const u32 h = std::min(image.info.size.height, u32(8));
-
-        const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
-        const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
-        const u32 size = s_w * s_h * (image.info.num_bits / 8);
-        const u64 hash = XXH3_64bits(addr, size);
+        const u64 hash = MaybeDirtyHash(image);
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
             return;
@@ -804,14 +859,18 @@ void TextureCache::RefreshImage(Image& image) {
         const auto [mip_size, mip_pitch, mip_height, mip_offset] = image.info.mips_layout[m];
 
         // Protect GPU modified resources from accidental CPU reuploads.
-        if (is_gpu_modified && !is_gpu_dirty) {
-            const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
-            const u64 hash = XXH3_64bits(addr + mip_offset, mip_size);
-            if (image.mip_hashes[m] == hash) {
-                continue;
-            }
-            image.mip_hashes[m] = hash;
+        // bbport: every upload records the guest memory it saw, not only uploads of images
+        // the GPU had already written. An image the GPU writes after an upload from the buffer
+        // cache (GpuDirty: a storage image's first binding) or from a plain texture otherwise
+        // had no reference, and the first CPU write anywhere in its page replaced the GPU's
+        // contents with stale guest memory (a 1x1 exposure texture computed once: the
+        // character creation preview went black after one frame).
+        const u8* mip_addr = std::bit_cast<u8*>(image.info.guest_address) + mip_offset;
+        const u64 mip_hash = XXH3_64bits(mip_addr, mip_size);
+        if (is_gpu_modified && !is_gpu_dirty && image.mip_hashes[m] == mip_hash) {
+            continue;
         }
+        image.mip_hashes[m] = mip_hash;
 
         const u32 extent_width = mip_pitch ? std::min(mip_pitch, width) : width;
         const u32 extent_height = mip_height ? std::min(mip_height, height) : height;
@@ -1054,17 +1113,23 @@ void TextureCache::GarbageCollectImages() {
         if (num_deletions == 0) {
             return true;
         }
-        --num_deletions;
         auto& image = slot_images[image_id];
         const bool download = image.SafeToDownload();
         const bool tiled = image.info.IsTiled();
         if (tiled && download) {
             // This is a workaround for now. We can't handle non-linear image downloads.
+            ++gc_kept;
+            gc_kept_bytes += image.info.guest_size;
             return false;
         }
         if (download && !pressured) {
             return false;
         }
+        // bbport: only evictions count. The images kept above are not used any more, so they
+        // stay the oldest in the LRU; counted, they used up every run's deletions once there
+        // were 20 of them and nothing was evicted again (an 8 GB card stayed over its pressure
+        // limit all session with 0 evictions).
+        --num_deletions;
         if (download) {
             // bbport: synchronously, while the image still protects its pages. A deferred
             // write-back landed after FreeImage had unprotected them, over whatever the game
@@ -1090,11 +1155,13 @@ void TextureCache::GarbageCollectImages() {
 
     // Try to remove anything old enough and not high priority.
     configure(false);
+    gc_kept = gc_kept_bytes = 0;
     lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
 
     if (total_used_memory >= critical_gc_memory) {
         // If we are still over the critical limit, run an aggressive GC
         configure(true);
+        gc_kept = gc_kept_bytes = 0;
         lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
     }
     // bbport: evictions under memory pressure, at most every 5 s (BB_FRAME_STATS or not).
@@ -1102,11 +1169,13 @@ void TextureCache::GarbageCollectImages() {
         const auto now = std::chrono::steady_clock::now();
         if (now - gc_report_time >= std::chrono::seconds(5)) {
             std::printf("Texture cache: memory pressure, %llu of %llu MiB (critical %llu): "
-                        "%llu images evicted, %llu written back since the last report\n",
+                        "%llu images evicted, %llu written back since the last report; "
+                        "%llu old GPU-written tiled images kept (%llu MiB)\n",
                         (unsigned long long)(total_used_memory >> 20),
                         (unsigned long long)(pressure_gc_memory >> 20),
                         (unsigned long long)(critical_gc_memory >> 20),
-                        (unsigned long long)gc_evictions, (unsigned long long)gc_downloads);
+                        (unsigned long long)gc_evictions, (unsigned long long)gc_downloads,
+                        (unsigned long long)gc_kept, (unsigned long long)(gc_kept_bytes >> 20));
             gc_report_time = now;
             gc_evictions = gc_downloads = 0;
         }
