@@ -24,7 +24,11 @@ float Clamp(float v, float lo, float hi) {
 void Set(Values& v, const std::string& key, const std::string& value) {
     const float f = float(std::atof(value.c_str()));
     const int i = std::atoi(value.c_str());
-    if (key == "upscaler") {
+    if (key == "menu_language") {
+        if (value == "en") v.menu_language = MenuLanguage::English;
+        else if (value == "ru") v.menu_language = MenuLanguage::Russian;
+        else std::printf("Settings: unknown menu_language '%s' (expected en or ru)\n", value.c_str());
+    } else if (key == "upscaler") {
         for (int u = 0; u < UpscalerCount; ++u) {
             if (value == UpscalerName(u)) {
                 v.upscaler = u;
@@ -80,6 +84,10 @@ void Set(Values& v, const std::string& key, const std::string& value) {
 Values& Get() {
     static Values values;
     return values;
+}
+
+const char* MenuText(const char* english, const char* russian) {
+    return Get().menu_language == MenuLanguage::Russian ? russian : english;
 }
 
 void Load() {
@@ -173,9 +181,11 @@ void Save() {
     }
     std::fprintf(file,
                  "# bbport settings (in-game menu: Insert / L3+R3)\n"
+                 "menu_language=%s\n"
                  "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
                  "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\n",
+                 v.menu_language == MenuLanguage::Russian ? "ru" : "en",
                  UpscalerName(v.upscaler), v.preset.load(), int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
