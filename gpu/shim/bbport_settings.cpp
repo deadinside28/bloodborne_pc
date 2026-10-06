@@ -52,6 +52,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.debug_view = std::clamp(i, 0, DebugViewCount - 1);
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
+    } else if (key == "menu_language") {
+        v.menu_language = value == "ru" ? MenuRussian : MenuEnglish;
     } else if (key == "fsr4_auto_exposure") {
         v.fsr4_auto_exposure = i != 0;
     } else if (key == "fsr4_invert_jitter") {
@@ -86,9 +88,12 @@ Values& Get() {
 
 void Load() {
     auto& v = Get();
-    for (int e = 0; e < EffectCount; ++e) {
-        v.effects[e] = Effects[e].default_on;
-    }
+    // Defaults: scripts/bbport_settings_table.inc, the table the launchers read too.
+#define BB_SETTING(key, value) Set(v, key, value);
+#define BB_EFFECT(key, label, on) Set(v, key, (on) ? "1" : "0");
+#include "bbport_settings_table.inc"
+#undef BB_SETTING
+#undef BB_EFFECT
     if (FILE* file = std::fopen(Path(), "r")) {
         char line[256];
         while (std::fgets(line, sizeof(line), file)) {
@@ -115,6 +120,7 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
+        {"BB_MENU_LANGUAGE", "menu_language"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -182,12 +188,14 @@ void Save() {
                  "# bbport settings (in-game menu: Insert / L3+R3)\n"
                  "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
-                 "debug_view=%d\nshow_fps=%d\nfsr4_auto_exposure=%d\nfsr4_invert_jitter=%d\n",
+                 "debug_view=%d\nshow_fps=%d\nmenu_language=%s\nfsr4_auto_exposure=%d\n"
+                 "fsr4_invert_jitter=%d\n",
                  UpscalerName(v.upscaler), v.preset.load(), int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
                  v.debug_view.load(), int(v.show_fps.load()),
+                 v.menu_language == MenuRussian ? "ru" : "en",
                  int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {

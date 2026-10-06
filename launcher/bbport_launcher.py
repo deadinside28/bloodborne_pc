@@ -10,6 +10,7 @@ Russian and English (bbport_i18n: the Russian text is the key).
 
 import json
 import os
+import re
 import signal
 import sys
 from pathlib import Path
@@ -40,19 +41,35 @@ UPSCALERS = [("FSR 4", "fsr4"), ("FSR 4.1.1", "fsr411"), ("FSR 3", "fsr3"),
 PRESETS = [("Native AA", 0), ("Quality (x1.5)", 1), ("Balanced (x1.7)", 2),
            ("Performance (x2)", 3), ("Ultra Performance (x3)", 4)]
 OUTPUT_RES = [("1280×720 (Steam Deck)", "1280x720"), ("1920×1080", "1920x1080"), ("2560×1440", "2560x1440"), ("3840×2160", "3840x2160")]
+
+
+def settings_table():
+    """scripts/bbport_settings_table.inc, the bbport.ini table the game uses too:
+    ({key: default}, [(effect key, English label, default)])."""
+    text = (PORT_DIR / "scripts" / "bbport_settings_table.inc").read_text(encoding="utf-8")
+    settings = dict(re.findall(r'^BB_SETTING\("(\w+)", "([^"]*)"\)', text, re.M))
+    effects = [(key, label, on == "1") for key, label, on in
+               re.findall(r'^BB_EFFECT\("(\w+)", "((?:[^"\\]|\\.)*)", ([01])\)', text, re.M)]
+    return settings, effects
+
+
+SETTINGS, _TABLE_EFFECTS = settings_table()
+# The launcher's effect titles (Russian, the text key of bbport_i18n); a new effect in the table
+# without one shows its English label.
+EFFECT_TITLES = {
+    "effect_chromatic_aberration": "Хроматическая аберрация",
+    "effect_dof": "Глубина резкости (DoF)",
+    "effect_motion_blur": "Размытие в движении",
+    "effect_ssao": "Затенение SSAO",
+    "effect_game_aa": "Собственное сглаживание игры",
+    "effect_dynamic_shadows": "Тени от динамических источников",
+    "effect_ssr": "Отражения SSR (не было в игре)",
+    "skip_intro": "Пропуск заставок при запуске",
+    "debug_camera": "Свободная камера (Cross + L3 / Space + Z)",
+    "debug_menu": "Debug menu (левый touchpad / Tab; нужны шрифты)",
+}
 # Game effects (patches applied at start): bbport.ini key, title, default.
-EFFECTS = [
-    ("effect_chromatic_aberration", "Хроматическая аберрация", True),
-    ("effect_dof", "Глубина резкости (DoF)", True),
-    ("effect_motion_blur", "Размытие в движении", True),
-    ("effect_ssao", "Затенение SSAO", True),
-    ("effect_game_aa", "Собственное сглаживание игры", True),
-    ("effect_dynamic_shadows", "Тени от динамических источников", True),
-    ("effect_ssr", "Отражения SSR (не было в игре)", False),
-    ("skip_intro", "Пропуск заставок при запуске", False),
-    ("debug_camera", "Свободная камера (Cross + L3 / Space + Z)", False),
-    ("debug_menu", "Debug menu (левый touchpad / Tab; нужны шрифты)", False),
-]
+EFFECTS = [(key, EFFECT_TITLES.get(key, label), default) for key, label, default in _TABLE_EFFECTS]
 MODEL_LOD = [("Как в игре", "0"), ("Максимальная (-2)", "-2"), ("Ниже (1)", "1"),
              ("Минимальная (2)", "2")]
 FPS_MODES = [("Без ограничения (патч)", "uncap"), ("60", "60"), ("90", "90"),
@@ -87,17 +104,11 @@ DEFAULTS = {
     "extra_env": "",
 }
 
-# bbport.ini keys the launcher edits; the rest of the file is kept.
+# bbport.ini keys the launcher edits, with the table's defaults; the rest of the file is kept.
 INI_DEFAULTS = {
-    "upscaler": "fsr4",
-    "preset": "4",
-    "sharpen": "1",
-    "sharpness": "0.50",
-    "object_motion": "1",
-    "show_fps": "1",
-    "output_res": "1920x1080",
-    "model_lod": "0",
-    "live_resolution": "0",
+    **{key: SETTINGS[key] for key in ("upscaler", "preset", "sharpen", "sharpness", "object_motion",
+                                      "show_fps", "output_res", "model_lod", "live_resolution",
+                                      "menu_language")},
     **{key: "1" if default else "0" for key, _, default in EFFECTS},
 }
 
@@ -597,6 +608,8 @@ class LauncherWindow(Adw.ApplicationWindow):
             "output_res": combo_value(self.output_row),
             "model_lod": combo_value(self.lod_row),
             "live_resolution": combo_value(self.live_row),
+            # The in-game menu follows the launcher's language.
+            "menu_language": language(),
             **{key: "1" if row.get_active() else "0" for key, row in self.effect_rows.items()},
         })
         save_ini(self.ini, self.ini_lines)

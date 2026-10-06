@@ -19,6 +19,7 @@ using System.IO;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -93,16 +94,33 @@ class SetupForm : Form {
     static readonly Choice[] PresentModes = {
         new Choice("Mailbox (default)", ""), new Choice("FIFO (VSync)", "Fifo"),
         new Choice("FIFO Relaxed", "FifoRelaxed"), new Choice("Immediate (tearing)", "Immediate") };
-    // bbport_settings.h Effects: key, label, default.
-    static readonly string[][] Effects = {
-        new[] { "effect_chromatic_aberration", "Chromatic aberration", "1" },
-        new[] { "effect_dof", "Depth of field (DoF)", "1" },
-        new[] { "effect_motion_blur", "Motion blur", "1" },
-        new[] { "effect_ssao", "SSAO ambient occlusion", "1" },
-        new[] { "effect_game_aa", "The game's own anti-aliasing", "1" },
-        new[] { "effect_dynamic_shadows", "Shadows from dynamic lights", "1" },
-        new[] { "effect_ssr", "SSR reflections (not in the original game)", "0" },
-        new[] { "skip_intro", "Skip intro videos at startup", "0" } };
+    // scripts/bbport_settings_table.inc, embedded by setup.bat: the bbport.ini defaults and the
+    // game effects, the same table the game and the Linux launcher read.
+    static readonly Dictionary<string, string> TableDefaults = new Dictionary<string, string>();
+    // Effects: key, label, default; the developer switches (debug_*) stay out of setup.
+    static readonly string[][] Effects = LoadTable();
+
+    static string[][] LoadTable() {
+        string text = "";
+        using (Stream stream = typeof(SetupForm).Assembly.GetManifestResourceStream("bbport_settings_table.inc")) {
+            if (stream != null) using (var reader = new StreamReader(stream)) text = reader.ReadToEnd();
+        }
+        foreach (Match m in Regex.Matches(text, @"^BB_SETTING\(""(\w+)"", ""([^""]*)""\)", RegexOptions.Multiline))
+            TableDefaults[m.Groups[1].Value] = m.Groups[2].Value;
+        var effects = new List<string[]>();
+        foreach (Match m in Regex.Matches(text, @"^BB_EFFECT\(""(\w+)"", ""((?:[^""\\]|\\.)*)"", ([01])\)",
+                                          RegexOptions.Multiline)) {
+            if (m.Groups[1].Value.StartsWith("debug_")) continue;
+            effects.Add(new[] { m.Groups[1].Value, Regex.Unescape(m.Groups[2].Value), m.Groups[3].Value });
+        }
+        return effects.ToArray();
+    }
+
+    /// The table's default for a bbport.ini key.
+    static string Default(string key) {
+        string value;
+        return TableDefaults.TryGetValue(key, out value) ? value : "";
+    }
 
     readonly float scale;
     readonly bool nvidia;
@@ -438,17 +456,20 @@ class SetupForm : Form {
         Func<string, string, string> ini_or = (key, fallback) => ini.ContainsKey(key) ? ini[key] : fallback;
         Func<string, string, string> env_or = (key, fallback) => env.ContainsKey(key) ? env[key] : fallback;
 
+        // Defaults from the shared table, except two choices for a fresh install: the output
+        // resolution the screen fits, and fullscreen.
         SelectValue(resolution, ini_or("output_res", DefaultResolution()));
         SelectValue(frameRate, env_or("BB_FPS", "uncap"));
         SelectValue(presentMode, env_or("BB_PRESENT_MODE", ""));
         fullscreen.Checked = ini_or("fullscreen", "1") == "1";
-        showFps.Checked = ini_or("show_fps", "0") == "1";
-        SelectValue(upscaler, ini_or("upscaler", "fsr3"));
-        if (upscaler.SelectedIndex < 0) SelectValue(upscaler, "fsr3");
-        SelectValue(preset, ini_or("preset", "0"));
-        SelectValue(live, ini_or("live_resolution", "0"));
-        SelectValue(modelLod, ini_or("model_lod", "0"));
-        sharpen.Checked = ini_or("sharpen", "1") == "1";
+        showFps.Checked = ini_or("show_fps", Default("show_fps")) == "1";
+        SelectValue(upscaler, ini_or("upscaler", Default("upscaler")));
+        if (upscaler.SelectedIndex < 0) SelectValue(upscaler, Default("upscaler"));
+        if (upscaler.SelectedIndex < 0) upscaler.SelectedIndex = 0;
+        SelectValue(preset, ini_or("preset", Default("preset")));
+        SelectValue(live, ini_or("live_resolution", Default("live_resolution")));
+        SelectValue(modelLod, ini_or("model_lod", Default("model_lod")));
+        sharpen.Checked = ini_or("sharpen", Default("sharpen")) == "1";
         foreach (var effect in effects) {
             string fallback = "0";
             foreach (string[] e in Effects) if (e[0] == effect.Key) fallback = e[2];

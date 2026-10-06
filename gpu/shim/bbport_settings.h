@@ -22,25 +22,22 @@ inline bool IsFrameUpscaler(int upscaler) {
 }
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
+enum MenuLanguage : int { MenuEnglish = 0, MenuRussian = 1 };
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
-/// menu label, default (the game's own behaviour).
+/// menu label, default (the game's own behaviour). From scripts/bbport_settings_table.inc,
+/// which the launchers read too.
 struct Effect {
     const char* key;
     const char* label;
     bool default_on;
 };
 inline constexpr Effect Effects[] = {
-    {"effect_chromatic_aberration", "Chromatic aberration", true},
-    {"effect_dof", "Depth of field (DoF)", true},
-    {"effect_motion_blur", "Motion blur", true},
-    {"effect_ssao", "SSAO ambient occlusion", true},
-    {"effect_game_aa", "The game's own anti-aliasing", true},
-    {"effect_dynamic_shadows", "Shadows from dynamic lights", true},
-    {"effect_ssr", "SSR reflections (not in the original game)", false},
-    {"skip_intro", "Skip intro videos at startup", false},
-    {"debug_camera", "Free camera (Cross + L3)", false},
-    {"debug_menu", "Debug menu (needs font files)", false},
+#define BB_SETTING(key, value)
+#define BB_EFFECT(key, label, on) {key, label, (on) != 0},
+#include "bbport_settings_table.inc"
+#undef BB_SETTING
+#undef BB_EFFECT
 };
 inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
 /// Live output resolutions: the upscaler's output and the UI host targets.
@@ -49,6 +46,8 @@ inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
 inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
 
+/// The settings. Load() sets every one from scripts/bbport_settings_table.inc before reading
+/// bbport.ini; the initial values here only cover the time before that.
 struct Values {
     std::atomic<int> upscaler{UpscalerFsr3};
     std::atomic<int> preset{NativeAA};
@@ -62,6 +61,8 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    /// The in-game menu's language (bbport_i18n.h): en or ru in bbport.ini.
+    std::atomic<int> menu_language{MenuEnglish};
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};

@@ -12,8 +12,12 @@ if not exist "%CSC%" (
     exit /b 1
 )
 if not exist "%~dp0out" mkdir "%~dp0out"
+rem The bbport.ini table (defaults, game effects) is embedded: the game and the Linux launcher
+rem read the same file.
 "%CSC%" /nologo /target:winexe /optimize+ /out:"%~dp0out\bbport-setup.exe" ^
-    /r:System.Windows.Forms.dll /r:System.Drawing.dll "%~dp0tools\setup\BbportSetup.cs"
+    /r:System.Windows.Forms.dll /r:System.Drawing.dll ^
+    /resource:"%~dp0scripts\bbport_settings_table.inc",bbport_settings_table.inc ^
+    "%~dp0tools\setup\BbportSetup.cs"
 if errorlevel 1 (
     echo Compiling the setup program failed.
     pause
