@@ -5,7 +5,17 @@
  *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
- *   IJKL d-pad (I up, K down, J left, L right). */
+ *   IJKL d-pad (I up, K down, J left, L right).
+ *
+ * Stick neutral: SDL exposes no way to read a pad's calibration and some clones report a
+ * biased neutral (a Switch-style pad was seen returning both sticks at a constant ~ +/-16380).
+ * The neutral of each axis is taken from a quiet window after the pad opens (SDL returns zero
+ * until the first report arrives, so those samples are skipped) and subtracted; a genuine pad
+ * settles at 0, so the subtraction is a no-op. The travel is left as SDL reports it.
+ * BB_PAD_CENTER=lx,ly,rx,ry overrides the neutral, BB_PAD_CENTER_CAL=0 disables the
+ * measurement. The stick is then converted as shadPS4 does: SDL's -32768..32767 read as
+ * -128..127 and an inner/outer dead zone (BB_PAD_DEADZONE, default 5; BB_PAD_DEADZONE_OUTER,
+ * default 127) maps the axis' travel up to full deflection. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
@@ -61,9 +71,77 @@ static SDL_Gamepad *gamepad;
 static size_t reads;
 static uint8_t connected_count;
 
+/* Per-controller stick neutral (see the file header): the value each axis holds while the
+ * sticks are untouched, taken from a quiet window after the pad opens. Works for any pad; a
+ * genuine one settles at 0 and the subtraction is a no-op. */
+#define PAD_CAL_QUIET 512              /* an axis is quiet when it moved no more than this */
+#define PAD_CAL_QUIET_SAMPLES 8
+#define PAD_CAL_TIMEOUT_US 3000000u    /* after this, an all-zero reading is accepted as the neutral */
+static int cal_enabled=-1, pad_deadzone=-1, pad_deadzone_outer=-1, cal_manual;
+static int cal_have_center, cal_started, cal_quiet_count;
+static int cal_center[4], cal_prev[4], cal_manual_center[4];
+static uint64_t cal_since;
+
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
-static uint8_t axis(int16_t v) { int x=(v+32768)>>8; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
 static uint8_t trigger(int16_t v) { int x=v>>7; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
+static void cal_load(void) {
+    static int loaded;
+    if (loaded) return;
+    loaded=1;
+    const char *v=getenv("BB_PAD_CENTER_CAL"); cal_enabled=!(v && *v=='0');
+    /* Inner/outer dead zone, as shadPS4's analog_deadzone: [inner, outer] maps linearly to the
+     * full deflection, so an axis with a reduced travel (outer below 127) reaches full. */
+    v=getenv("BB_PAD_DEADZONE"); pad_deadzone=v && *v ? atoi(v) : 5;
+    if (pad_deadzone<0) pad_deadzone=0; else if (pad_deadzone>126) pad_deadzone=126;
+    v=getenv("BB_PAD_DEADZONE_OUTER"); pad_deadzone_outer=v && *v ? atoi(v) : 127;
+    if (pad_deadzone_outer<=pad_deadzone) pad_deadzone_outer=pad_deadzone<127 ? pad_deadzone+1 : 127;
+    v=getenv("BB_PAD_CENTER");
+    if (v && *v && sscanf(v,"%d,%d,%d,%d",&cal_manual_center[0],&cal_manual_center[1],
+                          &cal_manual_center[2],&cal_manual_center[3])==4) {
+        cal_manual=1;
+        printf("Runtime: pad center (BB_PAD_CENTER): lx=%d ly=%d rx=%d ry=%d\n",
+               cal_manual_center[0],cal_manual_center[1],cal_manual_center[2],cal_manual_center[3]);
+    }
+}
+static void cal_reset(void) {
+    cal_load();
+    cal_started=0; cal_quiet_count=0; cal_since=0; memset(cal_prev,0,sizeof cal_prev);
+    if (cal_manual) { memcpy(cal_center,cal_manual_center,sizeof cal_center); cal_have_center=1; }
+    else if (!cal_enabled) { memset(cal_center,0,sizeof cal_center); cal_have_center=1; }
+    else cal_have_center=0;
+}
+/* The value each axis holds while the sticks are untouched; SDL's pre-report zeros are skipped. */
+static void cal_update(const int16_t raw[4]) {
+    if (cal_have_center) return;
+    int allzero=1; for (int i=0;i<4;++i) if (raw[i]) allzero=0;
+    int quiet=1; for (int i=0;i<4;++i) if (cal_started && abs(raw[i]-cal_prev[i])>PAD_CAL_QUIET) quiet=0;
+    const uint64_t now=now_us();
+    if (!cal_started) { cal_started=1; cal_since=now; }
+    if (allzero && now-cal_since<PAD_CAL_TIMEOUT_US) quiet=0;
+    if (quiet) {
+        if (++cal_quiet_count>=PAD_CAL_QUIET_SAMPLES) {
+            for (int i=0;i<4;++i) cal_center[i]=raw[i];
+            cal_have_center=1;
+            printf("Runtime: pad neutral: lx=%d ly=%d rx=%d ry=%d\n",cal_center[0],cal_center[1],cal_center[2],cal_center[3]);
+        }
+    } else cal_quiet_count=0;
+    for (int i=0;i<4;++i) cal_prev[i]=raw[i];
+}
+/* One stick axis in the PS4 0..255 scale, as shadPS4 does it: subtract the pad's neutral, read
+ * SDL's -32768..32767 as -128..127, then map the inner/outer dead zone (BB_PAD_DEADZONE /
+ * BB_PAD_DEADZONE_OUTER) to the full deflection. */
+static uint8_t stick_axis(int16_t raw,int center) {
+    int v=(raw-center)/256; if (v>127) v=127; else if (v<-128) v=-128;
+    const int mag=abs(v);
+    if (mag<=pad_deadzone || pad_deadzone>=pad_deadzone_outer) v=0;
+    else {
+        int scaled=(int)(128.0*(mag-pad_deadzone)/(float)(pad_deadzone_outer-pad_deadzone));
+        if (scaled>128) scaled=128;
+        v = v>=0 ? scaled : -scaled;
+    }
+    int x=v+128;
+    return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x);
+}
 static uint16_t touch_axis(float v, int max) {
     return (uint16_t)(v<=0.0f ? 0 : v>=1.0f ? max : (int)(v*max+0.5f));
 }
@@ -104,6 +182,7 @@ static SDL_Gamepad *current_gamepad(void) {
         if (pick>=0 && (!gamepad || SDL_GetGamepadID(gamepad)!=ids[pick])) {
             if (gamepad) SDL_CloseGamepad(gamepad);
             gamepad=SDL_OpenGamepad(ids[pick]);
+            cal_reset(); /* a new pad has its own neutral */
             on_preferred=want && gamepad && is_preferred(ids[pick],want);
             if (gamepad) {
                 ++connected_count;
@@ -290,8 +369,15 @@ static void sample_host(PadData *d) {
             if (i==IN_TOUCHPAD_RIGHT) touch_right=v>30;
             else if (v>30) d->buttons|=input_buttons[i];
         }
-        d->left_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX)); d->left_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY));
-        d->right_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX)); d->right_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY));
+        static const SDL_GamepadAxis stick_axes[4]={SDL_GAMEPAD_AXIS_LEFTX,SDL_GAMEPAD_AXIS_LEFTY,
+                                                    SDL_GAMEPAD_AXIS_RIGHTX,SDL_GAMEPAD_AXIS_RIGHTY};
+        int16_t raw[4];
+        for (int i=0;i<4;++i) raw[i]=(int16_t)SDL_GetGamepadAxis(g,stick_axes[i]);
+        cal_load();
+        cal_update(raw);
+        uint8_t *axis_out[4]={&d->left_x,&d->left_y,&d->right_x,&d->right_y};
+        for (int i=0;i<4;++i)
+            *axis_out[i]=cal_have_center ? stick_axis(raw[i],cal_center[i]) : 128;
         if (SDL_GetNumGamepadTouchpads(g)>0) {
             const int fingers=SDL_GetNumGamepadTouchpadFingers(g,0);
             for (int finger=0;finger<fingers && d->touch_count<2;++finger) {
