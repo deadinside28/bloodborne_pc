@@ -12,6 +12,7 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "bbport_toggles.h"
+#include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
@@ -238,7 +239,7 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    boost::container::static_vector<const char*, 48> enabled_extensions;
+    boost::container::static_vector<const char*, 64> enabled_extensions;
     const auto add_extension = [&](std::string_view extension) -> bool {
         const auto result =
             std::find_if(available_extensions.begin(), available_extensions.end(),
@@ -439,6 +440,18 @@ bool Instance::CreateDevice() {
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
     vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
     vk13_features = feature_chain.get<vk::PhysicalDeviceVulkan13Features>();
+    // bbport: DLSS (optional bridge library) needs its own device extensions on NVIDIA GPUs.
+    std::vector<const char*> dlss_extensions;
+    if (Dlss* dlss = Dlss::Get()) {
+        dlss->AppendDeviceExtensions(*instance, physical_device, dlss_extensions);
+        for (const char* name : dlss_extensions) {
+            if (std::none_of(enabled_extensions.begin(), enabled_extensions.end(),
+                             [&](const char* e) { return std::string_view{e} == name; }) &&
+                enabled_extensions.size() < enabled_extensions.capacity()) {
+                enabled_extensions.push_back(name);
+            }
+        }
+    }
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = queue_info_count,
@@ -674,6 +687,9 @@ bool Instance::CreateDevice() {
     device = std::move(dev);
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+    if (Dlss* dlss = Dlss::Get()) {
+        dlss->Initialize(*instance, physical_device, *device);
+    }
 
     graphics_queue = device->getQueue(queue_family_index, 0);
     present_queue = device->getQueue(queue_family_index, 0);

@@ -222,6 +222,16 @@ Experimental от октября 2026; Proton 11.0 из Steam и GE-Proton 9 —
 там FSR 4.1, собери на ПК и скопируй папку `fsr4_411`. То же из командной строки:
 `--build-fsr411 <DLL>` у лаунчера (и у AppImage).
 
+**DLSS (NVIDIA GeForce RTX).** SDK DLSS от NVIDIA не входит в репозиторий: скачай
+[github.com/NVIDIA/DLSS](https://github.com/NVIDIA/DLSS) (достаточно `include/` и
+`lib/Linux_x86_64`) и собери с `DLSS_SDK_ROOT=/путь/к/DLSS bash build.sh`. Тогда собирается и мост
+`out/libbbport_dlss.so` (`gpu/dlss_bridge`, единственный код, использующий SDK), а
+`libnvidia-ngx-dlss.so.<версия>` от NVIDIA копируется рядом с `out/bb-probe`; остальное даёт
+драйвер. Затем выбери *DLSS* в лаунчере или во внутриигровом меню: пресет задаёт разрешение
+рендера, Native AA — это DLAA. DLSS получает те же входы, что и FSR 3.1 (цвет сцены, глубину,
+векторы движения, jitter). Без библиотек, на других видеокартах или с `BB_DLSS=0` он недоступен,
+а выбранный DLSS заменяется на FSR 3.1.
+
 Скрипт из исходников берёт инструменты из системы (MinGW GCC, CMake, Ninja, Python 3,
 SPIRV-Tools, Git) или из Nix; в AppImage они уже собраны.
 
@@ -323,7 +333,7 @@ VRAM, GTT, RSS, текстуры и блоки памяти игры в VRAM), `
   с масштабированием на все потоки — важнее всего для Steam Deck.
 - Async compute для апскейлера (в 4K кадр упирается в GPU).
 - XeSS (суперразрешение) и генерация кадров XeFG через помощник под Wine с общей памятью Vulkan
-  (прототип моста памяти — `tools/bridge_helper`); DLSS для владельцев NVIDIA; входы апскейлера
+  (прототип моста памяти — `tools/bridge_helper`); входы апскейлера
   в виде, совместимом с подходом OptiScaler.
 - Генерация кадров (сначала FSR 3.1 FG), маски реактивности и прозрачности для частиц и тумана.
 - Исправление гонок в шейдерах FSR 4.1.1 от AMD при ширине вывода, не кратной 64 (например,
@@ -341,4 +351,8 @@ bbport распространяется по **GNU GPL v2 или новее** ([
 (MIT), [Dear ImGui](https://github.com/ocornut/imgui) (MIT), шрифты DejaVu,
 [dxil-spirv](https://github.com/HansKristian-Work/dxil-spirv) (MIT, для сборки ассетов FSR 4.1.1).
 Патчи игры — Kyo, Lance McDonald, auser1337, illusion, emoose и другие участники сообщества
-(`patches/Bloodborne.xml`). DLL и данные модели FSR 4 от AMD здесь не распространяются.
+(`patches/Bloodborne.xml`). Мост DLSS (`gpu/dlss_bridge`, MIT) и загрузчик взяты из
+[Windows-порта Supermedo](https://github.com/Supermedo/bloodborne_pc), адаптированного из
+[IFreemz/shadPS4-Bloodborne-DLSS-FSR](https://github.com/IFreemz/shadPS4-Bloodborne-DLSS-FSR).
+DLL и данные модели FSR 4 от AMD, а также SDK и библиотеки DLSS от NVIDIA здесь не
+распространяются.
