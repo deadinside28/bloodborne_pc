@@ -89,9 +89,8 @@ static uint8_t connected_count;
 static int cal_enabled=-1, pad_deadzone=-1, pad_deadzone_outer=-1, cal_manual;
 static int cal_have_center, cal_started, cal_quiet_count;
 static int cal_center[4], cal_prev[4], cal_manual_center[4];
-static int cal_biased[4];              /* axis with a biased neutral: travel is scaled per direction */
-static int cal_span[4][2];             /* base full-scale travel, [axis][0=negative,1=positive] */
-static int cal_max[4][2];              /* largest travel seen, refines cal_span on a biased axis */
+static int cal_base[4];                /* 0: normal pad; else |neutral| of a biased axis */
+static int cal_max[4][2];              /* largest push seen per direction on a biased axis */
 static uint64_t cal_since;
 
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
@@ -115,26 +114,25 @@ static void cal_load(void) {
                cal_manual_center[0],cal_manual_center[1],cal_manual_center[2],cal_manual_center[3]);
     }
 }
-static void cal_set_spans(void) {
-    int scaled=0;
+static void cal_set_base(void) {
+    int biased=0;
     for (int i=0;i<4;++i) {
-        const int c=cal_center[i], a=abs(c);
-        cal_biased[i]=a>=PAD_CAL_BIAS;
-        const int base=cal_biased[i] ? a : 32768;   /* a biased axis spans one half of the int16 range */
-        cal_span[i][0]=base; cal_span[i][1]=base;
-        cal_max[i][0]=0; cal_max[i][1]=0;
-        if (cal_biased[i]) scaled=1;
+        const int a=abs(cal_center[i]);
+        cal_base[i]=a>=PAD_CAL_BIAS ? a : 0;   /* a biased axis spans one half of the int16 range */
+        cal_max[i][0]=cal_max[i][1]=0;
+        biased|=cal_base[i]!=0;
     }
-    if (scaled)
+    if (biased)
         printf("Runtime: pad travel (biased neutral, per-axis scaling): lx=%d ly=%d rx=%d ry=%d\n",
-               cal_span[0][1],cal_span[1][1],cal_span[2][1],cal_span[3][1]);
+               cal_base[0]?cal_base[0]:32768,cal_base[1]?cal_base[1]:32768,
+               cal_base[2]?cal_base[2]:32768,cal_base[3]?cal_base[3]:32768);
 }
 /* Full-scale travel of one direction. A biased axis starts from its neutral's magnitude and is
  * refined by the largest push seen (once that push is close to the base travel), so a direction
  * whose physical travel is a few percent shorter still reaches full deflection. */
 static int cal_travel(int axis,int dir) {
-    if (!cal_biased[axis]) return cal_span[axis][dir];
-    return cal_max[axis][dir]*100>=cal_span[axis][dir]*PAD_CAL_REFINE ? cal_max[axis][dir] : cal_span[axis][dir];
+    const int base=cal_base[axis] ? cal_base[axis] : 32768;
+    return cal_base[axis] && cal_max[axis][dir]*100>=base*PAD_CAL_REFINE ? cal_max[axis][dir] : base;
 }
 static void cal_reset(void) {
     cal_load();
@@ -142,11 +140,19 @@ static void cal_reset(void) {
     if (cal_manual) { memcpy(cal_center,cal_manual_center,sizeof cal_center); cal_have_center=1; }
     else if (!cal_enabled) { memset(cal_center,0,sizeof cal_center); cal_have_center=1; }
     else cal_have_center=0;
-    if (cal_have_center) cal_set_spans();
+    if (cal_have_center) cal_set_base();
 }
-/* The value each axis holds while the sticks are untouched; SDL's pre-report zeros are skipped. */
-static void cal_update(const int16_t raw[4]) {
-    if (cal_have_center) return;
+/* The value each axis holds while the sticks are untouched (SDL's pre-report zeros are skipped);
+ * once it is known, the largest push seen per direction on a biased axis (see cal_travel). */
+static void cal_sample(const int16_t raw[4]) {
+    if (cal_have_center) {
+        for (int i=0;i<4;++i) {
+            if (!cal_base[i]) continue;
+            const int d=raw[i]-cal_center[i], dir=d>=0, travel=dir ? d : -d;
+            if (travel>cal_max[i][dir]) cal_max[i][dir]=travel;
+        }
+        return;
+    }
     int allzero=1; for (int i=0;i<4;++i) if (raw[i]) allzero=0;
     int quiet=1; for (int i=0;i<4;++i) if (cal_started && abs(raw[i]-cal_prev[i])>PAD_CAL_QUIET) quiet=0;
     const uint64_t now=now_us();
@@ -157,21 +163,10 @@ static void cal_update(const int16_t raw[4]) {
             for (int i=0;i<4;++i) cal_center[i]=raw[i];
             cal_have_center=1;
             printf("Runtime: pad neutral: lx=%d ly=%d rx=%d ry=%d\n",cal_center[0],cal_center[1],cal_center[2],cal_center[3]);
-            cal_set_spans();
+            cal_set_base();
         }
     } else cal_quiet_count=0;
     for (int i=0;i<4;++i) cal_prev[i]=raw[i];
-}
-/* Largest push seen per direction on a biased axis (see cal_travel). */
-static void cal_observe(const int16_t raw[4]) {
-    if (!cal_have_center) return;
-    for (int i=0;i<4;++i) {
-        if (!cal_biased[i]) continue;
-        const int d=raw[i]-cal_center[i];
-        const int dir=d>=0 ? 1 : 0;
-        const int travel=d>=0 ? d : -d;
-        if (travel>cal_max[i][dir]) cal_max[i][dir]=travel;
-    }
 }
 /* One stick axis in the PS4 0..255 scale. The neutral is subtracted and the axis' own travel
  * (cal_travel) is read as -128..127, so a full push reaches full deflection in both directions
@@ -424,8 +419,7 @@ static void sample_host(PadData *d) {
         int16_t raw[4];
         for (int i=0;i<4;++i) raw[i]=(int16_t)SDL_GetGamepadAxis(g,stick_axes[i]);
         cal_load();
-        cal_update(raw);
-        cal_observe(raw);
+        cal_sample(raw);
         uint8_t *axis_out[4]={&d->left_x,&d->left_y,&d->right_x,&d->right_y};
         for (int i=0;i<4;++i)
             *axis_out[i]=cal_have_center ? stick_axis(i,raw[i]) : 128;
