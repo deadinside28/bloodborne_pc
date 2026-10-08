@@ -11,11 +11,18 @@
  * biased neutral (a Switch-style pad was seen returning both sticks at a constant ~ +/-16380).
  * The neutral of each axis is taken from a quiet window after the pad opens (SDL returns zero
  * until the first report arrives, so those samples are skipped) and subtracted; a genuine pad
- * settles at 0, so the subtraction is a no-op. The travel is left as SDL reports it.
- * BB_PAD_CENTER=lx,ly,rx,ry overrides the neutral, BB_PAD_CENTER_CAL=0 disables the
- * measurement. The stick is then converted as shadPS4 does: SDL's -32768..32767 read as
- * -128..127 and an inner/outer dead zone (BB_PAD_DEADZONE, default 5; BB_PAD_DEADZONE_OUTER,
- * default 127) maps the axis' travel up to full deflection. */
+ * settles at 0, so the subtraction is a no-op.
+ *
+ * Travel: such a clone also uses only part of SDL's -32768..32767 span (its neutral sits in the
+ * middle of one half), so reading the axis as -128..127 would reach only half deflection and a
+ * full push would never run. Each axis is instead scaled by its own travel: a biased axis starts
+ * from its neutral's magnitude and is refined by the largest push seen per direction, so both
+ * directions reach full deflection even when the two travels differ by a few percent (that
+ * difference is what makes one direction run and the other only walk). A genuine pad keeps the
+ * plain -32768..32767 -> -128..127 read. The stick is then converted as shadPS4 does, with an
+ * inner/outer dead zone (BB_PAD_DEADZONE, default 5; BB_PAD_DEADZONE_OUTER, default 127) mapping
+ * the axis' travel up to full deflection. BB_PAD_CENTER=lx,ly,rx,ry overrides the neutral,
+ * BB_PAD_CENTER_CAL=0 disables the measurement. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
@@ -77,9 +84,14 @@ static uint8_t connected_count;
 #define PAD_CAL_QUIET 512              /* an axis is quiet when it moved no more than this */
 #define PAD_CAL_QUIET_SAMPLES 8
 #define PAD_CAL_TIMEOUT_US 3000000u    /* after this, an all-zero reading is accepted as the neutral */
+#define PAD_CAL_BIAS 8192              /* |neutral| past this: a biased neutral and a reduced travel */
+#define PAD_CAL_REFINE 90              /* % of the base travel a push must reach to count as the full scale */
 static int cal_enabled=-1, pad_deadzone=-1, pad_deadzone_outer=-1, cal_manual;
 static int cal_have_center, cal_started, cal_quiet_count;
 static int cal_center[4], cal_prev[4], cal_manual_center[4];
+static int cal_biased[4];              /* axis with a biased neutral: travel is scaled per direction */
+static int cal_span[4][2];             /* base full-scale travel, [axis][0=negative,1=positive] */
+static int cal_max[4][2];              /* largest travel seen, refines cal_span on a biased axis */
 static uint64_t cal_since;
 
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
@@ -103,12 +115,34 @@ static void cal_load(void) {
                cal_manual_center[0],cal_manual_center[1],cal_manual_center[2],cal_manual_center[3]);
     }
 }
+static void cal_set_spans(void) {
+    int scaled=0;
+    for (int i=0;i<4;++i) {
+        const int c=cal_center[i], a=abs(c);
+        cal_biased[i]=a>=PAD_CAL_BIAS;
+        const int base=cal_biased[i] ? a : 32768;   /* a biased axis spans one half of the int16 range */
+        cal_span[i][0]=base; cal_span[i][1]=base;
+        cal_max[i][0]=0; cal_max[i][1]=0;
+        if (cal_biased[i]) scaled=1;
+    }
+    if (scaled)
+        printf("Runtime: pad travel (biased neutral, per-axis scaling): lx=%d ly=%d rx=%d ry=%d\n",
+               cal_span[0][1],cal_span[1][1],cal_span[2][1],cal_span[3][1]);
+}
+/* Full-scale travel of one direction. A biased axis starts from its neutral's magnitude and is
+ * refined by the largest push seen (once that push is close to the base travel), so a direction
+ * whose physical travel is a few percent shorter still reaches full deflection. */
+static int cal_travel(int axis,int dir) {
+    if (!cal_biased[axis]) return cal_span[axis][dir];
+    return cal_max[axis][dir]*100>=cal_span[axis][dir]*PAD_CAL_REFINE ? cal_max[axis][dir] : cal_span[axis][dir];
+}
 static void cal_reset(void) {
     cal_load();
     cal_started=0; cal_quiet_count=0; cal_since=0; memset(cal_prev,0,sizeof cal_prev);
     if (cal_manual) { memcpy(cal_center,cal_manual_center,sizeof cal_center); cal_have_center=1; }
     else if (!cal_enabled) { memset(cal_center,0,sizeof cal_center); cal_have_center=1; }
     else cal_have_center=0;
+    if (cal_have_center) cal_set_spans();
 }
 /* The value each axis holds while the sticks are untouched; SDL's pre-report zeros are skipped. */
 static void cal_update(const int16_t raw[4]) {
@@ -123,15 +157,31 @@ static void cal_update(const int16_t raw[4]) {
             for (int i=0;i<4;++i) cal_center[i]=raw[i];
             cal_have_center=1;
             printf("Runtime: pad neutral: lx=%d ly=%d rx=%d ry=%d\n",cal_center[0],cal_center[1],cal_center[2],cal_center[3]);
+            cal_set_spans();
         }
     } else cal_quiet_count=0;
     for (int i=0;i<4;++i) cal_prev[i]=raw[i];
 }
-/* One stick axis in the PS4 0..255 scale, as shadPS4 does it: subtract the pad's neutral, read
- * SDL's -32768..32767 as -128..127, then map the inner/outer dead zone (BB_PAD_DEADZONE /
- * BB_PAD_DEADZONE_OUTER) to the full deflection. */
-static uint8_t stick_axis(int16_t raw,int center) {
-    int v=(raw-center)/256; if (v>127) v=127; else if (v<-128) v=-128;
+/* Largest push seen per direction on a biased axis (see cal_travel). */
+static void cal_observe(const int16_t raw[4]) {
+    if (!cal_have_center) return;
+    for (int i=0;i<4;++i) {
+        if (!cal_biased[i]) continue;
+        const int d=raw[i]-cal_center[i];
+        const int dir=d>=0 ? 1 : 0;
+        const int travel=d>=0 ? d : -d;
+        if (travel>cal_max[i][dir]) cal_max[i][dir]=travel;
+    }
+}
+/* One stick axis in the PS4 0..255 scale. The neutral is subtracted and the axis' own travel
+ * (cal_travel) is read as -128..127, so a full push reaches full deflection in both directions
+ * whatever part of SDL's range the pad uses; the inner/outer dead zone (BB_PAD_DEADZONE /
+ * BB_PAD_DEADZONE_OUTER) then maps that travel to the full deflection, as shadPS4 does. */
+static uint8_t stick_axis(int axis,int16_t raw) {
+    const int d=raw-cal_center[axis];
+    const int travel=cal_travel(axis,d>=0 ? 1 : 0);
+    int v=travel>0 ? (int)((long long)d*128/travel) : 0;
+    if (v>127) v=127; else if (v<-128) v=-128;
     const int mag=abs(v);
     if (mag<=pad_deadzone || pad_deadzone>=pad_deadzone_outer) v=0;
     else {
@@ -375,9 +425,10 @@ static void sample_host(PadData *d) {
         for (int i=0;i<4;++i) raw[i]=(int16_t)SDL_GetGamepadAxis(g,stick_axes[i]);
         cal_load();
         cal_update(raw);
+        cal_observe(raw);
         uint8_t *axis_out[4]={&d->left_x,&d->left_y,&d->right_x,&d->right_y};
         for (int i=0;i<4;++i)
-            *axis_out[i]=cal_have_center ? stick_axis(raw[i],cal_center[i]) : 128;
+            *axis_out[i]=cal_have_center ? stick_axis(i,raw[i]) : 128;
         if (SDL_GetNumGamepadTouchpads(g)>0) {
             const int fingers=SDL_GetNumGamepadTouchpadFingers(g,0);
             for (int finger=0;finger<fingers && d->touch_count<2;++finger) {
