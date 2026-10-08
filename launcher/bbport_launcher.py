@@ -14,6 +14,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from bbport_assets import fsr411_problem
 from bbport_i18n import language, set_language, tr
@@ -420,8 +421,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         toolbar.set_content(self.toasts)
         self.set_content(toolbar)
 
-        log_text = self.log_view.get_buffer().get_text(
-            *self.log_view.get_buffer().get_bounds(), False) if hasattr(self, "log_view") else ""
+        log_text = self.log_text() if hasattr(self, "log_view") else ""
         self.stack.add_titled_with_icon(self.build_settings_page(), "settings", tr("Настройки"),
                                         "preferences-system-symbolic")
         self.stack.add_titled_with_icon(self.build_log_page(), "log", tr("Журнал"),
@@ -1039,7 +1039,52 @@ class LauncherWindow(Adw.ApplicationWindow):
         scroller = Gtk.ScrolledWindow(vexpand=True, child=self.log_view)
         self.log_scroller = scroller
         box.append(scroller)
+        bar = Gtk.ActionBar()
+        self.export_log_button = Gtk.Button(label=tr("Экспорт журнала…"))
+        self.export_log_button.connect("clicked", self.on_export_log)
+        bar.pack_end(self.export_log_button)
+        self.copy_log_button = Gtk.Button(label=tr("Копировать"))
+        self.copy_log_button.connect("clicked", self.on_copy_log)
+        bar.pack_end(self.copy_log_button)
+        box.append(bar)
+        buffer = self.log_view.get_buffer()
+        buffer.connect("changed", self.on_log_changed)
+        self.on_log_changed(buffer)
         return box
+
+    def on_log_changed(self, buffer):
+        has_text = buffer.get_char_count() > 0
+        self.copy_log_button.set_sensitive(has_text)
+        self.export_log_button.set_sensitive(has_text)
+
+    def log_text(self):
+        buffer = self.log_view.get_buffer()
+        return buffer.get_text(*buffer.get_bounds(), False)
+
+    def on_copy_log(self, _button):
+        self.get_clipboard().set(self.log_text())
+        self.toasts.add_toast(Adw.Toast(title=tr("Журнал скопирован")))
+
+    def on_export_log(self, _button):
+        text = self.log_text()
+        dialog = Gtk.FileDialog(title=tr("Экспорт журнала"))
+        dialog.set_initial_name(f"bbport-{time.strftime('%Y%m%d_%H%M%S')}.log")
+
+        def finish(dialog, result):
+            try:
+                chosen = dialog.save_finish(result)
+            except GLib.Error:
+                return
+            if not chosen or not chosen.get_path():
+                return
+            try:
+                Path(chosen.get_path()).write_text(text, encoding="utf-8")
+            except OSError as error:
+                self.toasts.add_toast(Adw.Toast(
+                    title=tr("Не удалось сохранить журнал: {}").format(error.strerror or error)))
+                return
+            self.toasts.add_toast(Adw.Toast(title=tr("Журнал сохранён: {}").format(chosen.get_path())))
+        dialog.save(self, None, finish)
 
     def append_log(self, text):
         buffer = self.log_view.get_buffer()
