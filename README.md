@@ -180,6 +180,9 @@ with enable switches and load order. A sibling `CUSA03173-mods/` overlay also wo
 The original game is preserved; later mods override conflicting files.
 **Third-party patches:** shadPS4-format XML patch files in the data directory's `patches/`,
 switched on and off in the launcher. See [mods and patches](docs/MODS.md).
+**DLC:** put your add-on dumps in `user/addcont/<title id>/<entitlement label>/` (shadPS4's
+layout, e.g. `user/addcont/CUSA03173/SPEXPANSIONDLC03` for The Old Hunters): each folder there is
+reported to the game as an installed add-on.
 
 **Launcher language:** Russian, English or Brazilian Portuguese (follows the system language by default).
 
