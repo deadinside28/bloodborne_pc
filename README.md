@@ -229,6 +229,16 @@ time, ~1.7 GB); the AppImage runs the recording on the system itself, through th
 enable FSR 4.1 there, build on a PC and copy the `fsr4_411` folder. The same from the command
 line: the launcher's (and the AppImage's) `--build-fsr411 <DLL>`.
 
+**DLSS (NVIDIA GeForce RTX).** NVIDIA's DLSS SDK is not included: check out
+[github.com/NVIDIA/DLSS](https://github.com/NVIDIA/DLSS) (`include/` and `lib/Linux_x86_64` are
+enough) and build with `DLSS_SDK_ROOT=/path/to/DLSS bash build.sh`. That also builds the bridge
+`out/libbbport_dlss.so` (`gpu/dlss_bridge`, the only code that uses the SDK) and copies NVIDIA's
+`libnvidia-ngx-dlss.so.<version>` next to `out/bb-probe`; the driver provides the rest. Then pick
+*DLSS* in the launcher or the in-game menu: the preset sets the render size, Native AA is DLAA.
+DLSS gets the inputs FSR 3.1 gets (scene color, depth, motion vectors, jitter). Without the
+libraries, on other GPUs or with `BB_DLSS=0` it is listed as unavailable, and a DLSS setting falls
+back to FSR 3.1.
+
 From source the script takes its tools from the system (MinGW GCC, CMake, Ninja, Python 3,
 SPIRV-Tools, Git) or from Nix; the AppImage has them prebuilt.
 
@@ -332,8 +342,7 @@ Tests: `bash build.sh --test`, `python3 -m unittest discover -s tests`, and
   scaling to all hardware threads — most important for the Steam Deck.
 - Async compute for the upscaler (the frame is GPU-bound at 4K).
 - XeSS (super resolution) and XeFG frame generation through a Wine helper sharing Vulkan
-  memory (a memory-bridge prototype is in `tools/bridge_helper`); DLSS for NVIDIA users;
-  inputs exposed so that OptiScaler-style mapping works.
+  memory (a memory-bridge prototype is in `tools/bridge_helper`); inputs exposed so that OptiScaler-style mapping works.
 - Frame generation (FSR 3.1 FG first), reactive and transparency masks for particles and fog.
 - Fix the races in AMD's FSR 4.1.1 shaders at output widths that are not multiples of 64
   (e.g. 1600×900), as already done for the left-edge race in FSR 4 v07 at 1080p.
@@ -350,5 +359,7 @@ FSR 4 v07 provider), AMD FidelityFX SDK (MIT), [LibAtrac9](https://github.com/Th
 (MIT), [Dear ImGui](https://github.com/ocornut/imgui) (MIT), DejaVu fonts,
 [dxil-spirv](https://github.com/HansKristian-Work/dxil-spirv) (MIT, used to build the
 FSR 4.1.1 assets). Game patches by Kyo, Lance McDonald, auser1337, illusion, emoose and other
-community members (`patches/Bloodborne.xml`). AMD's FSR 4 DLLs and model data are not
-distributed here.
+community members (`patches/Bloodborne.xml`). The DLSS bridge (`gpu/dlss_bridge`, MIT) and
+loader come from [Supermedo's Windows port](https://github.com/Supermedo/bloodborne_pc), adapted
+from [IFreemz/shadPS4-Bloodborne-DLSS-FSR](https://github.com/IFreemz/shadPS4-Bloodborne-DLSS-FSR).
+AMD's FSR 4 DLLs and model data and NVIDIA's DLSS SDK and libraries are not distributed here.
