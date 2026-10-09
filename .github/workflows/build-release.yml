@@ -7,33 +7,24 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --user root
 
     steps:
+      - name: Install git and base tools
+        run: |
+          pacman -Sy --noconfirm git base-devel cmake ninja python glslang sdl3 vulkan-headers vulkan-icd-loader zydis xbyak
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake ninja-build git python3 \
-            libsdl3-dev vulkan-headers libvulkan-dev \
-            glslang-tools pkg-config \
-            libgtk-4-dev libadwaita-1-dev \
-            libpipewire-0.3-dev libasound2-dev
-
       - name: Build
         run: |
           bash build.sh
-
-      - name: Create AppImage (if possible)
-        run: |
-          if [ -f packaging/appimage.sh ]; then
-            bash packaging/appimage.sh || echo "AppImage build failed, continuing with binaries"
-          fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -41,7 +32,6 @@ jobs:
           name: bbport-linux-build
           path: |
             out/
-            dist/
-            launcher/
             run.sh
             build.sh
+            launcher/
