@@ -13,9 +13,16 @@ jobs:
       options: --user root
 
     steps:
-      - name: Install git and base tools
+      - name: Install base dependencies
         run: |
-          pacman -Sy --noconfirm git base-devel cmake ninja python glslang sdl3 vulkan-headers vulkan-icd-loader zydis xbyak
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm git base-devel cmake ninja python glslang sdl3 vulkan-headers vulkan-icd-loader zydis
+
+      - name: Install xbyak from source
+        run: |
+          git clone --depth 1 https://github.com/herumi/xbyak.git /tmp/xbyak
+          cp -r /tmp/xbyak/xbyak /usr/include/
 
       - name: Checkout repository
         uses: actions/checkout@v4
