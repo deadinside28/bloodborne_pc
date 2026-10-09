@@ -1,11 +1,13 @@
-/* libScePad on SDL3 gamepads and the keyboard. SDL events are pumped by the window thread
- * (gpu/shim/window.cpp); here state is only sampled.
+/* libScePad on SDL3 gamepads, the keyboard and the mouse. SDL events are pumped by
+ * the window thread (gpu/shim/window.cpp); here state is only sampled.
  *
- * Keyboard layout (also with a gamepad connected: both drive the game):
- *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
- *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
- *   Enter Options, Tab left touchpad, Backspace right touchpad,
- *   IJKL d-pad (I up, K down, J left, L right). */
+ * Souls-like keyboard layout (also with a gamepad connected: everything adds up):
+ *   WASD left stick (move), mouse right stick (look, F1 captures/releases),
+ *   arrows right stick fallback, E Cross (interact), Space Circle (dodge/sprint),
+ *   Left Ctrl Square (item), R Triangle (blood vial), F L1 (transform), Left Mouse R1
+ *   (light), Shift+Left Mouse R2 (heavy), Right Mouse L2 (firearm), Q or C or Middle
+ *   Mouse R3 (lock-on), Enter or Esc Options, Tab / Backspace touchpads, IJKL d-pad,
+ *   Z L3. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
@@ -137,12 +139,16 @@ static void report_guest_heap(void) {
     }
 }
 /* Controls: what each PS4 input is bound to. Defaults below; bbport.ini (BB_CONFIG) lines
- * key.<input>=<SDL key names> and pad.<input>=<SDL gamepad button names>, comma-separated,
- * replace an input's binding (empty: unbound). Inputs: the buttons (cross ... right, touchpad =
+ * key.<input>=<SDL key names>, pad.<input>=<SDL gamepad button names> and
+ * mouse.<input>=<mouse button names>, comma-separated, replace an input's binding
+ * (empty: unbound). Inputs: the buttons (cross ... right, touchpad =
  * a left-side click, touchpad_right), and on the keyboard the sticks: move_* (left), look_*
  * (right). Gamepad names as SDL's: a b x y back start leftstick rightstick leftshoulder
  * rightshoulder dpup dpdown dpleft dpright touchpad misc1 paddle1-4, plus lefttrigger and
- * righttrigger. The keyboard works next to a gamepad (the Steam Deck always has one): its buttons
+ * righttrigger. Mouse names: left right middle x1 x2. Heavy attack is a chord, not a
+ * binding: Shift + Left Mouse = R2 while Left Mouse alone = R1. Look sensitivity:
+ * BB_MOUSE_SENS (0.1..20) overrides the bbport.ini mouse_sens line, else 2.0.
+ * The keyboard works next to a gamepad (the Steam Deck always has one): its buttons
  * add to the gamepad's, a held move/look key moves the stick all the way. */
 enum {
     IN_CROSS, IN_CIRCLE, IN_SQUARE, IN_TRIANGLE, IN_L1, IN_R1, IN_L2, IN_R2, IN_L3, IN_R3,
@@ -161,21 +167,32 @@ static const uint32_t input_buttons[IN_COUNT]={
 };
 #define MAX_BIND 4
 enum { PAD_LEFT_TRIGGER=SDL_GAMEPAD_BUTTON_COUNT, PAD_RIGHT_TRIGGER }; /* triggers as buttons */
-typedef struct { int key_count, pad_count; SDL_Scancode keys[MAX_BIND]; int pad[MAX_BIND]; } Binding;
+enum { MOUSE_NONE=0, MOUSE_LEFT=SDL_BUTTON_LEFT, MOUSE_MIDDLE=SDL_BUTTON_MIDDLE,
+       MOUSE_RIGHT=SDL_BUTTON_RIGHT, MOUSE_X1=SDL_BUTTON_X1, MOUSE_X2=SDL_BUTTON_X2 };
+typedef struct {
+    int key_count, pad_count, mouse_count;
+    SDL_Scancode keys[MAX_BIND]; int pad[MAX_BIND]; int mouse[MAX_BIND];
+} Binding;
 static Binding bindings[IN_COUNT];
 static int bindings_ready;
 
 static void bind_defaults(void) {
     static const struct { int input; SDL_Scancode key; } keys[]={
-        {IN_CROSS,SDL_SCANCODE_SPACE}, {IN_CIRCLE,SDL_SCANCODE_LSHIFT}, {IN_SQUARE,SDL_SCANCODE_E},
-        {IN_TRIANGLE,SDL_SCANCODE_Q}, {IN_L1,SDL_SCANCODE_1}, {IN_R1,SDL_SCANCODE_3},
-        {IN_L2,SDL_SCANCODE_R}, {IN_R2,SDL_SCANCODE_F}, {IN_L3,SDL_SCANCODE_Z}, {IN_R3,SDL_SCANCODE_C},
-        {IN_OPTIONS,SDL_SCANCODE_RETURN}, {IN_TOUCHPAD,SDL_SCANCODE_TAB},
+        {IN_CROSS,SDL_SCANCODE_E}, {IN_CIRCLE,SDL_SCANCODE_SPACE},
+        {IN_SQUARE,SDL_SCANCODE_LCTRL},
+        {IN_TRIANGLE,SDL_SCANCODE_R},
+        {IN_L1,SDL_SCANCODE_F},
+        {IN_L3,SDL_SCANCODE_Z}, {IN_R3,SDL_SCANCODE_Q}, {IN_R3,SDL_SCANCODE_C},
+        {IN_OPTIONS,SDL_SCANCODE_RETURN}, {IN_OPTIONS,SDL_SCANCODE_ESCAPE},
+        {IN_TOUCHPAD,SDL_SCANCODE_TAB},
         {IN_TOUCHPAD_RIGHT,SDL_SCANCODE_BACKSPACE},
         {IN_UP,SDL_SCANCODE_I}, {IN_DOWN,SDL_SCANCODE_K}, {IN_LEFT,SDL_SCANCODE_J}, {IN_RIGHT,SDL_SCANCODE_L},
         {IN_MOVE_UP,SDL_SCANCODE_W}, {IN_MOVE_DOWN,SDL_SCANCODE_S}, {IN_MOVE_LEFT,SDL_SCANCODE_A},
         {IN_MOVE_RIGHT,SDL_SCANCODE_D}, {IN_LOOK_UP,SDL_SCANCODE_UP}, {IN_LOOK_DOWN,SDL_SCANCODE_DOWN},
         {IN_LOOK_LEFT,SDL_SCANCODE_LEFT}, {IN_LOOK_RIGHT,SDL_SCANCODE_RIGHT},
+    };
+    static const struct { int input; int button; } mice[]={
+        {IN_R1,MOUSE_LEFT}, {IN_L2,MOUSE_RIGHT}, {IN_R3,MOUSE_MIDDLE},
     };
     static const struct { int input, button; } pads[]={
         {IN_CROSS,SDL_GAMEPAD_BUTTON_SOUTH}, {IN_CIRCLE,SDL_GAMEPAD_BUTTON_EAST},
@@ -195,6 +212,9 @@ static void bind_defaults(void) {
     for (size_t i=0;i<sizeof(pads)/sizeof(*pads);++i) {
         Binding *b=&bindings[pads[i].input]; b->pad[b->pad_count++]=pads[i].button;
     }
+    for (size_t i=0;i<sizeof(mice)/sizeof(*mice);++i) {
+        Binding *b=&bindings[mice[i].input]; b->mouse[b->mouse_count++]=mice[i].button;
+    }
 }
 static int pad_button_from_name(const char *name) {
     if (!SDL_strcasecmp(name,"lefttrigger")) return PAD_LEFT_TRIGGER;
@@ -202,39 +222,77 @@ static int pad_button_from_name(const char *name) {
     const SDL_GamepadButton b=SDL_GetGamepadButtonFromString(name);
     return b==SDL_GAMEPAD_BUTTON_INVALID ? -1 : (int)b;
 }
-/* key.<input>= / pad.<input>= lines of the settings file. */
+static int mouse_button_from_name(const char *name) {
+    if (!SDL_strcasecmp(name,"left")) return MOUSE_LEFT;
+    if (!SDL_strcasecmp(name,"right")) return MOUSE_RIGHT;
+    if (!SDL_strcasecmp(name,"middle")) return MOUSE_MIDDLE;
+    if (!SDL_strcasecmp(name,"x1") || !SDL_strcasecmp(name,"side1")) return MOUSE_X1;
+    if (!SDL_strcasecmp(name,"x2") || !SDL_strcasecmp(name,"side2")) return MOUSE_X2;
+    return -1;
+}
+/* Look sensitivity: BB_MOUSE_SENS overrides bbport.ini mouse_sens, else 2.0. */
+static float mouse_ini_sens;
+static float mouse_sens(void) {
+    const char *env=getenv("BB_MOUSE_SENS");
+    if (env && *env) {
+        float f=(float)atof(env);
+        if (f<0.1f) f=0.1f; else if (f>20.0f) f=20.0f;
+        return f;
+    }
+    if (mouse_ini_sens>=0.1f) return mouse_ini_sens;
+    return 2.0f;
+}
+/* key.<input>= / pad.<input>= / mouse.<input>= lines of the settings file, plus a
+ * global mouse_sens=<0.1..20> line. */
 static void load_bindings(void) {
     bind_defaults();
+    mouse_ini_sens=0;
     const char *path=getenv("BB_CONFIG");
     FILE *f=path ? fopen(path,"r") : NULL;
     if (!f) return;
     char line[512];
     while (fgets(line,sizeof line,f)) {
-        const int keyboard=!strncmp(line,"key.",4), pad=!strncmp(line,"pad.",4);
         char *eq=strchr(line,'=');
-        if ((!keyboard && !pad) || !eq) continue;
+        if (!eq) continue;
         *eq=0;
+        char *key=line;
+        while (*key==' ') ++key;
+        for (char *end=key+strlen(key); end>key && end[-1]==' ';) *--end=0;
+        if (!strcmp(key,"mouse_sens")) {
+            float v=(float)atof(eq+1);
+            if (v>=0.1f && v<=20.0f) mouse_ini_sens=v;
+            else printf("Runtime: controls: mouse_sens out of range (0.1..20)\n");
+            continue;
+        }
+        const int keyboard=!strncmp(key,"key.",4), pad=!strncmp(key,"pad.",4), mouse=!strncmp(key,"mouse.",6);
+        if ((!keyboard && !pad && !mouse)) continue;
+        const char *iname=keyboard ? key+4 : pad ? key+4 : key+6;
         int input=-1;
-        for (int i=0;i<IN_COUNT;++i) if (!strcmp(line+4,input_names[i])) input=i;
-        if (input<0 || (pad && input>=IN_MOVE_UP)) { printf("Runtime: controls: unknown input %s\n",line); continue; }
+        for (int i=0;i<IN_COUNT;++i) if (!strcmp(iname,input_names[i])) input=i;
+        if (input<0 || ((pad || mouse) && input>=IN_MOVE_UP)) { printf("Runtime: controls: unknown input %s\n",key); continue; }
         Binding *b=&bindings[input];
-        if (keyboard) b->key_count=0; else b->pad_count=0;
+        if (keyboard) b->key_count=0; else if (pad) b->pad_count=0; else b->mouse_count=0;
         for (char *name=strtok(eq+1,",\r\n"); name; name=strtok(NULL,",\r\n")) {
             while (*name==' ') ++name;
             for (char *end=name+strlen(name); end>name && end[-1]==' ';) *--end=0;
             if (!*name) continue;
             if (keyboard) {
                 const SDL_Scancode s=SDL_GetScancodeFromName(name);
-                if (s==SDL_SCANCODE_UNKNOWN) printf("Runtime: controls: unknown key \"%s\" for %s\n",name,line+4);
+                if (s==SDL_SCANCODE_UNKNOWN) printf("Runtime: controls: unknown key \"%s\" for %s\n",name,iname);
                 else if (b->key_count<MAX_BIND) b->keys[b->key_count++]=s;
-            } else {
+            } else if (pad) {
                 const int button=pad_button_from_name(name);
-                if (button<0) printf("Runtime: controls: unknown gamepad button \"%s\" for %s\n",name,line+4);
+                if (button<0) printf("Runtime: controls: unknown gamepad button \"%s\" for %s\n",name,iname);
                 else if (b->pad_count<MAX_BIND) b->pad[b->pad_count++]=button;
+            } else {
+                const int button=mouse_button_from_name(name);
+                if (button<0) printf("Runtime: controls: unknown mouse button \"%s\" for %s\n",name,iname);
+                else if (b->mouse_count<MAX_BIND) b->mouse[b->mouse_count++]=button;
             }
         }
     }
     fclose(f);
+    printf("Runtime: controls: mouse sens %.2f (BB_MOUSE_SENS or mouse_sens)\n",mouse_sens());
 }
 static int key_down(const bool *k, int input) {
     for (int i=0;i<bindings[input].key_count;++i) if (k[bindings[input].keys[i]]) return 1;
@@ -251,6 +309,34 @@ static int pad_value(SDL_Gamepad *g, int input) {
         if (v>value) value=v;
     }
     return value;
+}
+
+/* The bound mouse buttons' state (SDL_GetMouseState flags). */
+static int mouse_down(SDL_MouseButtonFlags flags, int input) {
+    for (int i=0;i<bindings[input].mouse_count;++i)
+        if (flags & SDL_BUTTON_MASK(bindings[input].mouse[i])) return 1;
+    return 0;
+}
+static int mouse_button_bound(int input, int button) {
+    for (int i=0;i<bindings[input].mouse_count;++i) if (bindings[input].mouse[i]==button) return 1;
+    return 0;
+}
+/* Souls-like mouse buttons. Shift + Left = R2 (heavy); plain Left = R1 (light) and
+ * never both, so a heavy never double-fires a light. Follows the R1 binding: if the
+ * user unbinds Left from R1 the chord goes away with it. */
+static void apply_mouse_buttons(PadData *d, SDL_MouseButtonFlags flags, const bool *k) {
+    const int shift=k && (k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT]);
+    const int left=(flags & SDL_BUTTON_LMASK)!=0;
+    const int heavy=shift && left && mouse_button_bound(IN_R1,MOUSE_LEFT);
+    for (int i=IN_CROSS;i<=IN_RIGHT;++i) {
+        if (i==IN_R1 && heavy) continue; /* suppressed while the chord fires R2 */
+        if (i!=IN_TOUCHPAD && i!=IN_TOUCHPAD_RIGHT && mouse_down(flags,i)) d->buttons|=input_buttons[i];
+    }
+    if (heavy) d->buttons|=BTN_R2;
+    if (mouse_down(flags,IN_TOUCHPAD)) touch_click(d,0);
+    if (mouse_down(flags,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
+    if (mouse_down(flags,IN_L2) || heavy) d->l2=255;
+    if (mouse_down(flags,IN_R2) || heavy) d->r2=255;
 }
 
 /* key held for the negative / positive direction: the stick all the way, else the gamepad's. */
@@ -270,6 +356,31 @@ static void apply_keyboard(PadData *d, const bool *k) {
     d->right_y=key_axis(d->right_y,key_down(k,IN_LOOK_UP),key_down(k,IN_LOOK_DOWN));
 }
 
+/* Mouse look: virtual right stick driven by mouse deltas while captured, decaying to
+ * center when the mouse is still. While captured it overrides the gamepad/arrow-key
+ * right stick; release (F1) to use those again. Sensitivity from mouse_sens(). */
+#define MOUSE_TAU_US 80000ull /* decay time: ~80 ms to ~37%, ~200 ms to center */
+static float mouse_rx=0, mouse_ry=0;
+static uint64_t mouse_last_us=0;
+static void apply_mouse(PadData *d, double dx, double dy, uint64_t now, int captured) {
+    if (!captured) { mouse_rx=0; mouse_ry=0; mouse_last_us=now; return; }
+    uint64_t dt=now>=mouse_last_us ? now-mouse_last_us : 0;
+    if (!mouse_last_us || dt>100000) dt=16000;
+    mouse_last_us=now;
+    const float sens=mouse_sens();
+    float factor=1.0f-(float)dt/(float)MOUSE_TAU_US;
+    if (factor<0.0f) factor=0.0f; else if (factor>1.0f) factor=1.0f;
+    mouse_rx=mouse_rx*factor+(float)(dx*sens);
+    mouse_ry=mouse_ry*factor+(float)(dy*sens);
+    if (mouse_rx<-128.0f) mouse_rx=-128.0f; else if (mouse_rx>127.0f) mouse_rx=127.0f;
+    if (mouse_ry<-128.0f) mouse_ry=-128.0f; else if (mouse_ry>127.0f) mouse_ry=127.0f;
+    int rx=128+(int)mouse_rx, ry=128+(int)mouse_ry;
+    if (rx<0) rx=0; else if (rx>255) rx=255;
+    if (ry<0) ry=0; else if (ry>255) ry=255;
+    d->right_x=(uint8_t)rx; d->right_y=(uint8_t)ry;
+    if (dx!=0 || dy!=0) printf("Runtime: mouse look dx=%.1f dy=%.1f rx=%d ry=%d\n",dx,dy,rx,ry);
+}
+
 static void sample_host(PadData *d) {
     report_guest_heap();
     memset(d,0,sizeof(*d));
@@ -279,8 +390,17 @@ static void sample_host(PadData *d) {
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
     if (!bindings_ready) { load_bindings(); bindings_ready=1; }
-    if (bbgpu_overlay_captures_input()) return; /* settings menu open: neutral input */
+    double mouse_dx=0, mouse_dy=0;
+    bbgpu_mouse_delta(&mouse_dx,&mouse_dy);
+    int mouse_on=bbgpu_mouse_is_captured();
+    if (bbgpu_overlay_captures_input()) {
+        /* Menu/IME open: neutral input, capture already released window-side;
+         * drop deltas and park the virtual stick at center. */
+        mouse_rx=0; mouse_ry=0; mouse_last_us=d->timestamp;
+        return;
+    }
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
+    const SDL_MouseButtonFlags mflags=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetMouseState(NULL,NULL) : 0;
     if (g) {
         int touch_right=0;
         for (int i=IN_CROSS;i<=IN_RIGHT;++i) {
@@ -308,6 +428,8 @@ static void sample_host(PadData *d) {
         if (touch_right) touch_click(d,1);
     }
     if (k) apply_keyboard(d,k);
+    if (mflags) apply_mouse_buttons(d,mflags,k);
+    apply_mouse(d,mouse_dx,mouse_dy,d->timestamp,mouse_on);
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated

@@ -37,6 +37,13 @@ EN = {
     "Управление": "Controls",
     "Клавиатура": "Keyboard",
     "Геймпад": "Gamepad",
+    "Мышь": "Mouse",
+    "Чувствительность мыши": "Mouse sensitivity",
+    "BB_MOUSE_SENS перекрывает; захват камеры — F1": "BB_MOUSE_SENS overrides; camera capture — F1",
+    "Shift+ЛКМ — тяжёлая атака (R2)": "Shift+LMB — heavy attack (R2)",
+    "Боковые кнопки X1/X2 назначаются в разделе «Мышь» выше":
+        "Side buttons X1/X2 are bound in the Mouse section above",
+    "R2 (Shift+ЛКМ)": "R2 (Shift+LMB)",
     "Назначение кнопок; применяется при запуске игры": "Button assignments; applied when the game starts",
     "Назначить": "Assign",
     "Сбросить": "Reset",

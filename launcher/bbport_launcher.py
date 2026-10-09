@@ -151,6 +151,7 @@ INI_DEFAULTS = {
     "output_res": "1920x1080",
     "model_lod": "0",
     "live_resolution": "0",
+    "mouse_sens": "2.00",
     **{key: "1" if default else "0" for key, _, default in EFFECTS},
 }
 
@@ -332,34 +333,36 @@ def combo_value(row):
     return row.values[row.get_selected()]
 
 
-# Controls (runtime_pad.c): input, label, default keyboard keys, default gamepad buttons (SDL names).
-# bbport.ini key.<input>= / pad.<input>= replace a default; no line keeps it.
+# Controls (runtime_pad.c): input, label, default keyboard keys, default gamepad buttons
+# (SDL names) and default mouse buttons (left/right/middle/x1/x2).
+# bbport.ini key.<input>= / pad.<input>= / mouse.<input>= replace a default; no line keeps it.
+# Heavy attack is Shift+Left Mouse (hardcoded chord while Left is bound to R1).
 CONTROLS = [
-    ("cross", "Крест", "Space", "a"),
-    ("circle", "Круг", "Left Shift", "b"),
-    ("square", "Квадрат", "E", "x"),
-    ("triangle", "Треугольник", "Q", "y"),
-    ("l1", "L1", "1", "leftshoulder"),
-    ("r1", "R1", "3", "rightshoulder"),
-    ("l2", "L2", "R", "lefttrigger"),
-    ("r2", "R2", "F", "righttrigger"),
-    ("l3", "L3", "Z", "leftstick"),
-    ("r3", "R3", "C", "rightstick"),
-    ("options", "Options", "Return", "start"),
-    ("touchpad", "Тачпад, левая половина (жесты)", "Tab", "back, touchpad"),
-    ("touchpad_right", "Тачпад, правая половина (личные вещи)", "Backspace", ""),
-    ("up", "Крестовина вверх", "I", "dpup"),
-    ("down", "Крестовина вниз", "K", "dpdown"),
-    ("left", "Крестовина влево", "J", "dpleft"),
-    ("right", "Крестовина вправо", "L", "dpright"),
-    ("move_up", "Движение вперёд", "W", None),
-    ("move_down", "Движение назад", "S", None),
-    ("move_left", "Движение влево", "A", None),
-    ("move_right", "Движение вправо", "D", None),
-    ("look_up", "Камера вверх", "Up", None),
-    ("look_down", "Камера вниз", "Down", None),
-    ("look_left", "Камера влево", "Left", None),
-    ("look_right", "Камера вправо", "Right", None),
+    ("cross", "Крест", "E", "a", None),
+    ("circle", "Круг", "Space", "b", None),
+    ("square", "Квадрат", "Left Ctrl", "x", None),
+    ("triangle", "Треугольник", "R", "y", None),
+    ("l1", "L1", "F", "leftshoulder", None),
+    ("r1", "R1", None, "rightshoulder", "left"),
+    ("l2", "L2", None, "lefttrigger", "right"),
+    ("r2", "R2 (Shift+ЛКМ)", None, "righttrigger", None),
+    ("l3", "L3", "Z", "leftstick", None),
+    ("r3", "R3", "Q, C", "rightstick", "middle"),
+    ("options", "Options", "Return, Escape", "start", None),
+    ("touchpad", "Тачпад, левая половина (жесты)", "Tab", "back, touchpad", None),
+    ("touchpad_right", "Тачпад, правая половина (личные вещи)", "Backspace", "", None),
+    ("up", "Крестовина вверх", "I", "dpup", None),
+    ("down", "Крестовина вниз", "K", "dpdown", None),
+    ("left", "Крестовина влево", "J", "dpleft", None),
+    ("right", "Крестовина вправо", "L", "dpright", None),
+    ("move_up", "Движение вперёд", "W", None, None),
+    ("move_down", "Движение назад", "S", None, None),
+    ("move_left", "Движение влево", "A", None, None),
+    ("move_right", "Движение вправо", "D", None, None),
+    ("look_up", "Камера вверх", "Up", None, None),
+    ("look_down", "Камера вниз", "Down", None, None),
+    ("look_left", "Камера влево", "Left", None, None),
+    ("look_right", "Камера вправо", "Right", None, None),
 ]
 
 
@@ -557,14 +560,16 @@ class LauncherWindow(Adw.ApplicationWindow):
                                                 lambda _button: self.fill_gamepads()))
         self.fill_gamepads()
         controls.add(self.gamepad_row)
-        # Bindings: "Assign" waits for a key or button (bb-gpu-capabilities --read-input).
+        # Bindings: "Assign" waits for a key, gamepad button or mouse button
+        # (bb-gpu-capabilities --read-input). Heavy attack is Shift+Left, not a row.
         self.control_rows = {}
         for kind, title, icon in (("key", tr("Клавиатура"), "input-keyboard-symbolic"),
-                                  ("pad", tr("Геймпад"), "input-gaming-symbolic")):
+                                  ("pad", tr("Геймпад"), "input-gaming-symbolic"),
+                                  ("mouse", tr("Мышь"), "input-mouse-symbolic")):
             expander = Adw.ExpanderRow(title=title,
                                        subtitle=tr("Назначение кнопок; применяется при запуске игры"))
-            for name, label, key_default, pad_default in CONTROLS:
-                default = key_default if kind == "key" else pad_default
+            for name, label, key_default, pad_default, mouse_default in CONTROLS:
+                default = key_default if kind == "key" else pad_default if kind == "pad" else mouse_default
                 if default is None:
                     continue
                 row = Adw.ActionRow(title=tr(label))
@@ -577,6 +582,23 @@ class LauncherWindow(Adw.ApplicationWindow):
                 self.show_control(kind, name)
             controls.add(expander)
         page.add(controls)
+
+        mouse = Adw.PreferencesGroup(title=tr("Мышь"))
+        self.sens_row = Adw.SpinRow.new_with_range(0.1, 20.0, 0.1)
+        self.sens_row.set_title(tr("Чувствительность мыши"))
+        self.sens_row.set_subtitle(tr("BB_MOUSE_SENS перекрывает; захват камеры — F1"))
+        self.sens_row.set_digits(2)
+        try:
+            sens_value = float(self.ini.get("mouse_sens", "2.0"))
+        except ValueError:
+            sens_value = 2.0
+        self.sens_row.set_value(min(max(sens_value, 0.1), 20.0))
+        mouse.add(self.sens_row)
+        mouse_hint = Adw.ActionRow(
+            title=tr("Shift+ЛКМ — тяжёлая атака (R2)"),
+            subtitle=tr("Боковые кнопки X1/X2 назначаются в разделе «Мышь» выше"))
+        mouse.add(mouse_hint)
+        page.add(mouse)
 
         upscaler = Adw.PreferencesGroup(
             title=tr("Апскейлер"),
@@ -910,6 +932,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             "output_res": combo_value(self.output_row),
             "model_lod": combo_value(self.lod_row),
             "live_resolution": combo_value(self.live_row),
+            "mouse_sens": f"{self.sens_row.get_value():.2f}",
             **{key: "1" if row.get_active() else "0" for key, row in self.effect_rows.items()},
         })
         save_ini(self.ini, self.ini_lines)

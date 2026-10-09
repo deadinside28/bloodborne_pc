@@ -1,0 +1,63 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --user root
+
+    steps:
+      - name: Install base dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm \
+            git base-devel cmake ninja python python-pip \
+            glslang sdl3 vulkan-headers vulkan-icd-loader vulkan-validation-layers \
+            zydis fmt boost boost-libs libarchive \
+            libx11 libxrandr libxinerama libxcursor libxi \
+            libpulse pipewire pipewire-alsa alsa-lib \
+            gtk4 libadwaita pkgconf
+
+      - name: Install header-only libraries from source
+        run: |
+          # xbyak
+          git clone --depth 1 https://github.com/herumi/xbyak.git /tmp/xbyak
+          cp -r /tmp/xbyak/xbyak /usr/include/
+
+          # magic_enum
+          git clone --depth 1 https://github.com/Neargye/magic_enum.git /tmp/magic_enum
+          cp -r /tmp/magic_enum/include/magic_enum /usr/include/
+          cp -r /tmp/magic_enum/include/magic_enum.hpp /usr/include/ 2>/dev/null || true
+          cp -r /tmp/magic_enum/include/magic_enum_all.hpp /usr/include/ 2>/dev/null || true
+
+          # half (float16)
+          git clone --depth 1 https://github.com/permutationlock/half.git /tmp/half || true
+          if [ -d /tmp/half/include/half ]; then
+            cp -r /tmp/half/include/half /usr/include/ || true
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build
+        run: |
+          bash build.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbport-linux-build
+          path: |
+            out/
+            run.sh
+            build.sh
+            launcher/
