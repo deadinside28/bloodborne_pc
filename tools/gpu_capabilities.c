@@ -90,20 +90,24 @@ static int list_gamepads(void) {
     return 0;
 }
 
-/* --read-input key|pad: a small window; prints "key <SDL key name>" or "pad <SDL button name>"
- * (lefttrigger/righttrigger for the triggers) for the first key or gamepad button pressed, the
- * names bbport.ini's key.* and pad.* lines take. Escape, closing it or 15 s: nothing. */
+/* --read-input key|pad|mouse: a small window; prints "key <SDL key name>",
+ * "pad <SDL button name>" (lefttrigger/righttrigger for the triggers) or
+ * "mouse <left|right|middle|x1|x2>" for the first input pressed, the names
+ * bbport.ini's key.*, pad.* and mouse.* lines take. Escape, closing it or 15 s: nothing. */
 static int read_input(const char *kind) {
-    const int want_key = strcmp(kind, "pad") != 0, want_pad = strcmp(kind, "key") != 0;
+    const int want_key = !strcmp(kind, "key") || !strcmp(kind, "any");
+    const int want_pad = !strcmp(kind, "pad") || !strcmp(kind, "any");
+    const int want_mouse = !strcmp(kind, "mouse") || !strcmp(kind, "any");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "read-input: %s\n", SDL_GetError());
         return 1;
     }
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
-    const char *prompt = want_key && want_pad ? "Press a key or a gamepad button"
-                         : want_key           ? "Press a key"
-                                              : "Press a gamepad button";
+    const char *prompt = want_mouse && (want_key || want_pad) ? "Press a key, gamepad button or mouse button"
+                         : want_key  ? "Press a key"
+                         : want_pad  ? "Press a gamepad button"
+                                     : "Click left/right/middle/x1/x2";
     if (!SDL_CreateWindowAndRenderer("bbport", 520, 90, 0, &window, &renderer)) {
         fprintf(stderr, "read-input: %s\n", SDL_GetError());
         SDL_Quit();
@@ -151,6 +155,17 @@ static int read_input(const char *kind) {
                     (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || e.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)) {
                     printf("pad %s\n", e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? "lefttrigger" : "righttrigger");
                     done = 1;
+                }
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (want_mouse) {
+                    const char *name = e.button.button == SDL_BUTTON_LEFT   ? "left"
+                                       : e.button.button == SDL_BUTTON_RIGHT ? "right"
+                                       : e.button.button == SDL_BUTTON_MIDDLE ? "middle"
+                                       : e.button.button == SDL_BUTTON_X1   ? "x1"
+                                       : e.button.button == SDL_BUTTON_X2   ? "x2"
+                                                                            : NULL;
+                    if (name) { printf("mouse %s\n", name); done = 1; }
                 }
                 break;
             default:

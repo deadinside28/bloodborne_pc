@@ -30,6 +30,13 @@ int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* Step 0 mouse telemetry: accumulated mouse motion (xrel/yrel pixels) since the last
+ * call, consumed and reset to zero. Always drains, even while the overlay is open. */
+void bbgpu_mouse_delta(double *dx, double *dy);
+/* Step 1 mouse look: relative-mode capture (F1 / middle-click toggle in window.cpp).
+ * set: window thread helper for tests; is: 1 while captured (pad thread reads it). */
+void bbgpu_mouse_set_captured(int enabled);
+int bbgpu_mouse_is_captured(void);
 /* Patches the loaded image before the game runs (image still writable): libGnm entry hooks. */
 void bbgpu_patch_image(unsigned char *image, uint64_t size);
 /* Number of symbols registered by the vendored libraries (diagnostics). */

@@ -390,6 +390,21 @@ extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
 
+extern "C" void bbgpu_mouse_delta(double* dx, double* dy) {
+    double x = 0.0, y = 0.0;
+    if (g_window) g_window->ConsumeMouseDelta(x, y);
+    if (dx) *dx = x;
+    if (dy) *dy = y;
+}
+
+extern "C" void bbgpu_mouse_set_captured(int enabled) {
+    if (g_window) g_window->SetMouseCaptured(enabled != 0);
+}
+
+extern "C" int bbgpu_mouse_is_captured(void) {
+    return (g_window && g_window->IsMouseCaptured()) ? 1 : 0;
+}
+
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt) {
     if (!g_window) return 0;
     g_window->BeginTextInput(initial ? initial : "", prompt ? prompt : "Text");

@@ -34,6 +34,13 @@ public:
     void BeginTextInput(const std::string& initial, const std::string& prompt);
     /// 0 while typing, 1 confirmed (Enter), 2 cancelled (Escape); text is UTF-8.
     int PollTextInput(std::string& text);
+    /// Step 0 telemetry: accumulated SDL mouse motion since the last call (xrel/yrel
+    /// pixels). Consumes and resets to zero; thread-safe for the pad thread.
+    void ConsumeMouseDelta(double& dx, double& dy);
+    /// Step 1 mouse look: relative-mode capture (F1 / middle-click toggle).
+    /// Thread-safe: set on the window thread, read on the pad thread.
+    void SetMouseCaptured(bool enabled);
+    bool IsMouseCaptured() const { return mouse_captured.load(std::memory_order_relaxed); }
 
 private:
     std::atomic<s32> width, height;
@@ -46,6 +53,9 @@ private:
     void UpdateCursor();
     u64 last_mouse_motion_ms{}; ///< SDL_GetTicks of the last mouse motion (UpdateCursor)
     bool cursor_hidden{};
+    std::mutex mouse_mutex;
+    double mouse_dx{}, mouse_dy{}; ///< accumulated xrel/yrel since ConsumeMouseDelta
+    std::atomic<bool> mouse_captured{false}; ///< relative mode for mouse look (F1 toggle)
     SDL_Window* window{};
     WindowSystemInfo window_info{};
 };

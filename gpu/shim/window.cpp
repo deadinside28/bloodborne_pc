@@ -67,6 +67,32 @@ int WindowSDL::PollTextInput(std::string& out) {
     return text_state;
 }
 
+void WindowSDL::ConsumeMouseDelta(double& dx, double& dy) {
+    std::scoped_lock lock{mouse_mutex};
+    dx = mouse_dx;
+    dy = mouse_dy;
+    mouse_dx = 0.0;
+    mouse_dy = 0.0;
+}
+
+void WindowSDL::SetMouseCaptured(bool enabled) {
+    if (mouse_captured.load(std::memory_order_relaxed) == enabled) {
+        return;
+    }
+    mouse_captured.store(enabled, std::memory_order_relaxed);
+    if (!SDL_SetWindowRelativeMouseMode(window, enabled)) {
+        LOG_INFO(Frontend, "Mouse capture {} failed: {}", enabled ? "on" : "off", SDL_GetError());
+        mouse_captured.store(false, std::memory_order_relaxed);
+        SDL_SetWindowRelativeMouseMode(window, false);
+        return;
+    }
+    // Drain stale motion so enabling does not kick the camera.
+    std::scoped_lock lock{mouse_mutex};
+    mouse_dx = 0.0;
+    mouse_dy = 0.0;
+    LOG_INFO(Frontend, "Mouse capture {}", enabled ? "on (F1 to release)" : "off");
+}
+
 void WindowSDL::UpdateTextTitle() {
     const std::string title = text_active ? base_title + " \u2014 " + text_prompt + ": " + text + "_  (Enter = OK, Esc = cancel)"
                                           : base_title;
@@ -91,6 +117,12 @@ bool WindowSDL::PollEvents() {
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_MOUSE_MOTION) {
             last_mouse_motion_ms = SDL_GetTicks();
+            // Step 0: accumulate raw deltas; the pad thread drains via bbgpu_mouse_delta.
+            // Menu navigation motion is accumulated too and discarded there while the
+            // overlay captures input, so nothing leaks into the game after the menu closes.
+            std::scoped_lock lock{mouse_mutex};
+            mouse_dx += (double)event.motion.xrel;
+            mouse_dy += (double)event.motion.yrel;
         }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
@@ -111,6 +143,14 @@ bool WindowSDL::PollEvents() {
         if (BbOverlay::HandleEvent(event)) {
             continue;
         }
+        // F1 toggles mouse-look capture. Reached only when the overlay did not consume
+        // the event (menu closed), so capture is impossible while the menu is open. IME
+        // text input returns earlier above for the same reason. Middle click stays a game
+        // button (R3 lock-on default), never a capture toggle.
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.key == SDLK_F1) {
+            SetMouseCaptured(!IsMouseCaptured());
+            continue;
+        }
         switch (event.type) {
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         case SDL_EVENT_WINDOW_RESIZED: {
@@ -128,16 +168,23 @@ bool WindowSDL::PollEvents() {
             break;
         }
     }
+    // Step 1: the menu or IME owns the mouse while open: force release so navigation
+    // deltas never leak into the game and the cursor is visible for clicking.
+    if (IsMouseCaptured() && (BbOverlay::MenuOpen() || text_active)) {
+        SetMouseCaptured(false);
+    }
     UpdateCursor();
     return is_open;
 }
 
 // Issue #3: the OS cursor over the game. Hidden in fullscreen, and in a window after 3 s without
-// moving the mouse; always shown while the settings menu is open.
+// moving the mouse; always shown while the settings menu is open. Step 1: always hidden
+// while mouse-look capture holds relative mode (which hides it already).
 void WindowSDL::UpdateCursor() {
     const bool fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
-    const bool hide = !BbOverlay::MenuOpen() &&
-                      (fullscreen || SDL_GetTicks() - last_mouse_motion_ms > 3000);
+    const bool hide = IsMouseCaptured() ||
+                      (!BbOverlay::MenuOpen() &&
+                       (fullscreen || SDL_GetTicks() - last_mouse_motion_ms > 3000));
     if (hide != cursor_hidden) {
         cursor_hidden = hide;
         hide ? SDL_HideCursor() : SDL_ShowCursor();

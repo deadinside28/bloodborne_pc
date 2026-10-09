@@ -56,6 +56,20 @@ float frame_ms_avg = 0.0f;
 
 float PixelDensity(SDL_WindowID id);
 
+// While the settings menu is open the game's D-pad keys (IJKL) must do nothing: not
+// navigate, not type. The pad side is already neutral (CapturesInput), but without this
+// their key events and SDL text echoes would reach ImGui (e.g. pollute a Ctrl+clicked
+// slider field). Scoped to the menu only: the IME name dialog still needs these letters.
+bool IsDpadKey(SDL_Keycode key) {
+    return key == SDLK_I || key == SDLK_J || key == SDLK_K || key == SDLK_L;
+}
+
+bool IsDpadText(const char* text) {
+    return text && !text[1] &&
+           (text[0] == 'i' || text[0] == 'I' || text[0] == 'j' || text[0] == 'J' ||
+            text[0] == 'k' || text[0] == 'K' || text[0] == 'l' || text[0] == 'L');
+}
+
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
         return;
@@ -685,6 +699,9 @@ bool HandleEvent(const SDL_Event& event) {
         if (!is_open) {
             return false;
         }
+        if (IsDpadKey(event.key.key)) {
+            return true; // swallowed: no nav, no text, game side already neutral
+        }
         io.AddKeyEvent(ImGuiMod_Ctrl, (event.key.mod & SDL_KMOD_CTRL) != 0);
         io.AddKeyEvent(ImGuiMod_Shift, (event.key.mod & SDL_KMOD_SHIFT) != 0);
         io.AddKeyEvent(ImGuiMod_Alt, (event.key.mod & SDL_KMOD_ALT) != 0);
@@ -719,6 +736,9 @@ bool HandleEvent(const SDL_Event& event) {
         // do not type. SDL sends them while text input is on (UpdateTextInput).
         if (!is_open) {
             return false;
+        }
+        if (IsDpadText(event.text.text)) {
+            return true; // echo of a swallowed IJKL key: drop, do not type
         }
         io.AddInputCharactersUTF8(event.text.text);
         return true;
