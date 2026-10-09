@@ -17,12 +17,26 @@ jobs:
         run: |
           pacman -Sy --noconfirm archlinux-keyring
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git base-devel cmake ninja python glslang sdl3 vulkan-headers vulkan-icd-loader zydis
+          pacman -S --noconfirm \
+            git base-devel cmake ninja python python-pip \
+            glslang sdl3 vulkan-headers vulkan-icd-loader vulkan-validation-layers \
+            zydis fmt boost boost-libs libarchive \
+            libx11 libxrandr libxinerama libxcursor libxi \
+            libpulse pipewire pipewire-alsa alsa-lib \
+            gtk4 libadwaita pkgconf
 
       - name: Install xbyak from source
         run: |
           git clone --depth 1 https://github.com/herumi/xbyak.git /tmp/xbyak
           cp -r /tmp/xbyak/xbyak /usr/include/
+
+      - name: Install additional AUR-like packages from source
+        run: |
+          # half (header-only float16 library)
+          git clone --depth 1 https://github.com/permutationlock/half.git /tmp/half || true
+          if [ -d /tmp/half/include/half ]; then
+            cp -r /tmp/half/include/half /usr/include/ || true
+          fi
 
       - name: Checkout repository
         uses: actions/checkout@v4
