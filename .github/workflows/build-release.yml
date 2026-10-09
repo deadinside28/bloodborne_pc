@@ -25,14 +25,19 @@ jobs:
             libpulse pipewire pipewire-alsa alsa-lib \
             gtk4 libadwaita pkgconf
 
-      - name: Install xbyak from source
+      - name: Install header-only libraries from source
         run: |
+          # xbyak
           git clone --depth 1 https://github.com/herumi/xbyak.git /tmp/xbyak
           cp -r /tmp/xbyak/xbyak /usr/include/
 
-      - name: Install additional AUR-like packages from source
-        run: |
-          # half (header-only float16 library)
+          # magic_enum
+          git clone --depth 1 https://github.com/Neargye/magic_enum.git /tmp/magic_enum
+          cp -r /tmp/magic_enum/include/magic_enum /usr/include/
+          cp -r /tmp/magic_enum/include/magic_enum.hpp /usr/include/ 2>/dev/null || true
+          cp -r /tmp/magic_enum/include/magic_enum_all.hpp /usr/include/ 2>/dev/null || true
+
+          # half (float16)
           git clone --depth 1 https://github.com/permutationlock/half.git /tmp/half || true
           if [ -d /tmp/half/include/half ]; then
             cp -r /tmp/half/include/half /usr/include/ || true
