@@ -82,8 +82,10 @@ EN = {
         "The 1.09 update is needed: copy the dumped 1.09 update into the game folder, replacing files (found version {})",
     "eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой":
         "eboot.bin is not from 1.09: copy eboot.bin from the dumped 1.09 update into the game folder, replacing it",
-    "Поддерживается только CUSA03173 с обновлением 1.09 (найдено {})":
-        "Only CUSA03173 with update 1.09 is supported (found {})",
+    "Поддерживаются только CUSA03173 (Европа), CUSA00900 (США) и CUSA03023 (Азия) с обновлением 1.09 (найдено {})":
+        "Only CUSA03173 (EU), CUSA00900 (US) and CUSA03023 (Asia) with update 1.09 are supported (found {})",
+    "eboot.bin с вшитым патчем 60 FPS от Lance McDonald: из-за него игра падает в меню жестов. Скопируйте чистый eboot.bin из дампа обновления 1.09 в папку игры с заменой":
+        "This eboot.bin has Lance McDonald's 60 fps patch baked in, which crashes the game in the gestures menu: copy a clean eboot.bin from the dumped 1.09 update into the game folder, replacing it",
     "eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново":
         "eboot.bin cannot be read as a decrypted PS4 executable: dump the game again",
     "Файлы игры повреждены при распаковке: шейдеры не распаковываются, игра зависнет на загрузке. Распакуйте игру и обновление 1.09 заново исправленным инструментом (issue #81)":
@@ -539,8 +541,10 @@ ZH_CN = {
         "需要 1.09 更新：请将转储出的 1.09 更新文件复制到游戏文件夹并覆盖（当前检测到版本 {}）",
     "eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой":
         "eboot.bin 不是 1.09 版本：请将 1.09 更新转储中的 eboot.bin 复制到游戏文件夹并覆盖",
-    "Поддерживается только CUSA03173 с обновлением 1.09 (найдено {})":
-        "仅支持已安装 1.09 更新的 CUSA03173（当前检测到 {}）",
+    "Поддерживаются только CUSA03173 (Европа), CUSA00900 (США) и CUSA03023 (Азия) с обновлением 1.09 (найдено {})":
+        "仅支持已安装 1.09 更新的 CUSA03173（欧版）、CUSA00900（美版）和 CUSA03023（亚洲版）（当前检测到 {}）",
+    "eboot.bin с вшитым патчем 60 FPS от Lance McDonald: из-за него игра падает в меню жестов. Скопируйте чистый eboot.bin из дампа обновления 1.09 в папку игры с заменой":
+        "此 eboot.bin 内置了 Lance McDonald 的 60 FPS 补丁，会导致游戏在打开手势菜单时崩溃：请将 1.09 更新转储中干净的 eboot.bin 复制到游戏文件夹并覆盖",
     "eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново":
         "无法将 eboot.bin 识别为已解密的 PS4 可执行文件：请重新转储游戏",
     "Файлы игры повреждены при распаковке: шейдеры не распаковываются, игра зависнет на загрузке. Распакуйте игру и обновление 1.09 заново исправленным инструментом (issue #81)":
