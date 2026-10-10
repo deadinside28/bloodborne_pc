@@ -8,7 +8,8 @@ namespace Game {
 namespace {
 constexpr std::uint64_t ImageBase = 0x800000000ull;
 
-constexpr const char* Serials[] = {"CUSA03173"};
+// CUSA00900 (US) runs the same 1.09 executable: game_check.py accepts it by its image hash.
+constexpr const char* Serials[] = {"CUSA03173", "CUSA00900"};
 
 /// Reverse engineering: 0x2ab7350 computes vertices on the CPU (cloth) into a ~128 MiB ring, each
 /// block written now and then; 0x20858a0 is the game's allocator, its bookkeeping in GPU-mapped
