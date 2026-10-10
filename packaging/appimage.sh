@@ -13,7 +13,7 @@ root=$PWD
     echo '['
     for elf in out/bb-probe out/gpu/libbbgpu.so; do
         readelf -d "$elf" | sed -n 's/.*\[\(.*\)\]/\1/p' | tr ':' '\n'
-    done | grep -o '^/nix/store/[^/]*' | sort -u | grep -v -- '-nix-shell$' | sed 's/.*/  "&"/'
+    done | grep -o '^/nix/store/[^/]*' | sort -u | grep -vE -- '-(nix-)?shell$' | sed 's/.*/  "&"/'
     echo ']'
 } > packaging/runtime-paths.nix
 work=$(mktemp -d)
