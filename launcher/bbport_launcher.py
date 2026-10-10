@@ -159,6 +159,10 @@ INI_DEFAULTS = {
     **{key: "1" if default else "0" for key, _, default in EFFECTS},
 }
 
+# Online co-op (bbport.ini): the private co-op server and the bbcoop plugin's basics; the
+# plugin's other settings are in the in-game menu. Not written until the player sets them.
+COOP_ROLES = [("Хост (вы принимаете гостя)", "host"), ("Гость (вы идёте в мир хоста)", "guest")]
+
 
 def load_settings():
     settings = dict(DEFAULTS)
@@ -690,6 +694,27 @@ class LauncherWindow(Adw.ApplicationWindow):
         perf.add(self.preupload_row)
         page.add(perf)
 
+        coop = Adw.PreferencesGroup(
+            title=tr("Совместная игра по сети"),
+            description=tr("Через ваш собственный сервер, без PSN; остальные настройки — в игре (Insert или L3+R3)"))
+        self.online_row = Adw.SwitchRow(title=tr("Онлайн"), active=self.ini.get("online", "0") == "1")
+        coop.add(self.online_row)
+        self.online_host_row = Adw.EntryRow(title=tr("Адрес сервера"), text=self.ini.get("online.host", ""))
+        coop.add(self.online_host_row)
+        self.online_name_row = Adw.EntryRow(title=tr("Ваше имя в сети"), text=self.ini.get("online.name", ""))
+        coop.add(self.online_name_row)
+        self.coop_row = Adw.SwitchRow(
+            title=tr("Бесшовная совместная игра (bbcoop)"),
+            subtitle=tr("Нужен файл bbcoop.so в папке plugins каталога данных"),
+            active=self.ini.get("plugins.bbcoop", "0") in ("1", "true"))
+        coop.add(self.coop_row)
+        self.coop_role_row = combo_row(tr("Эта машина"), None, COOP_ROLES, self.ini.get("bbcoop.role", "host"))
+        coop.add(self.coop_role_row)
+        self.coop_partner_row = Adw.EntryRow(title=tr("Адрес второй машины"),
+                                             text=self.ini.get("bbcoop.partner", ""))
+        coop.add(self.coop_partner_row)
+        page.add(coop)
+
         dev = Adw.PreferencesGroup(title=tr("Для разработчика"))
         self.mangohud_row = Adw.SwitchRow(title="MangoHud", active=self.settings["mangohud"])
         dev.add(self.mangohud_row)
@@ -958,6 +983,17 @@ class LauncherWindow(Adw.ApplicationWindow):
             "live_resolution": combo_value(self.live_row),
             **{key: "1" if row.get_active() else "0" for key, row in self.effect_rows.items()},
         })
+        # Online co-op: written once the player has set any of it (or the file has it already).
+        coop = {
+            "online": "1" if self.online_row.get_active() else "0",
+            "online.host": self.online_host_row.get_text().strip(),
+            "online.name": self.online_name_row.get_text().strip()[:16],
+            "plugins.bbcoop": "1" if self.coop_row.get_active() else "0",
+            "bbcoop.role": combo_value(self.coop_role_row),
+            "bbcoop.partner": self.coop_partner_row.get_text().strip(),
+        }
+        if any(key in self.ini for key in coop) or coop["online"] == "1" or coop["plugins.bbcoop"] == "1":
+            self.ini.update(coop)
         save_ini(self.ini, self.ini_lines)
         self.ini, self.ini_lines = load_ini()
 

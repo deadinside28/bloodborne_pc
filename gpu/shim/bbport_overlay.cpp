@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -14,6 +15,9 @@
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
+#include "online/common.h"
+#include "plugins/bbhost_plugin.h"
+#include "plugins/plugins.h"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -160,6 +164,144 @@ void Hint(const char* text) {
 
 // The settings menu as in 0.3 and 0.4: one window (moved with the mouse, its place kept in
 // bbport.ini), sections one under the other, ImGui's own widgets and keyboard/gamepad navigation.
+// Online co-op: the private server, and each plugin's settings as it declares them (bbhost's
+// in-game plugin menu). Text being typed is kept here until the box loses focus.
+std::map<std::string, std::string> plugin_edits;
+
+std::vector<std::string> Split(const std::string& text, char sep) {
+    std::vector<std::string> out;
+    std::size_t at = 0;
+    while (at <= text.size()) {
+        const std::size_t end = std::min(text.find(sep, at), text.size());
+        out.push_back(text.substr(at, end - at));
+        at = end + 1;
+    }
+    return out;
+}
+
+void PluginOptionRow(const PluginInfo& p, const PluginOption& o) {
+    const std::string id = p.name + "." + o.key;
+    ImGui::PushID(id.c_str());
+    const bool later = !o.live && o.type != BB_OPT_ACTION && o.type != BB_OPT_HEADING;
+    const std::string label = o.label + (later ? BbSettings::MenuText("  (next start)", "  (после перезапуска)") : "");
+    const std::string value = plugins_option_value(p.name, o);
+    const float width = 260.0f * base_scale;
+    switch (o.type) {
+    case BB_OPT_HEADING:
+        ImGui::Spacing();
+        ImGui::TextUnformatted(o.label.c_str());
+        break;
+    case BB_OPT_BOOL: {
+        bool on = value == "true" || value == "1";
+        if (ImGui::Checkbox(label.c_str(), &on)) plugins_set_option(p.name, o.key, on ? "true" : "false");
+        break;
+    }
+    case BB_OPT_INT: {
+        auto it = plugin_edits.find(id);
+        int v = std::atoi((it != plugin_edits.end() ? it->second : value).c_str());
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::SliderInt(label.c_str(), &v, int(o.min), int(o.max))) plugin_edits[id] = std::to_string(v);
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            plugins_set_option(p.name, o.key, std::to_string(v));
+            plugin_edits.erase(id);
+        }
+        break;
+    }
+    case BB_OPT_FLOAT: {
+        auto it = plugin_edits.find(id);
+        float v = float(std::atof((it != plugin_edits.end() ? it->second : value).c_str()));
+        char text[32];
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::SliderFloat(label.c_str(), &v, float(o.min), float(o.max), "%.2f")) {
+            std::snprintf(text, sizeof(text), "%.2f", double(v));
+            plugin_edits[id] = text;
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            std::snprintf(text, sizeof(text), "%.2f", double(v));
+            plugins_set_option(p.name, o.key, text);
+            plugin_edits.erase(id);
+        }
+        break;
+    }
+    case BB_OPT_CHOICE: {
+        const std::vector<std::string> choices = Split(o.choices, '|');
+        std::size_t cur = 0;
+        for (std::size_t i = 0; i < choices.size(); ++i) {
+            if (choices[i] == value) cur = i;
+        }
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::BeginCombo(label.c_str(), choices.empty() ? "" : choices[cur].c_str())) {
+            for (std::size_t i = 0; i < choices.size(); ++i) {
+                if (ImGui::Selectable(choices[i].c_str(), i == cur)) plugins_set_option(p.name, o.key, choices[i]);
+            }
+            ImGui::EndCombo();
+        }
+        break;
+    }
+    case BB_OPT_TEXT: {
+        auto it = plugin_edits.find(id);
+        if (it == plugin_edits.end()) it = plugin_edits.emplace(id, value).first;
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "%s", it->second.c_str());
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::InputText(label.c_str(), buf, sizeof(buf))) it->second = buf;
+        if (ImGui::IsItemDeactivatedAfterEdit()) plugins_set_option(p.name, o.key, it->second);
+        if (!ImGui::IsItemActive() && it->second == value) plugin_edits.erase(id);
+        break;
+    }
+    case BB_OPT_ACTION:
+        ImGui::BeginDisabled(!p.loaded);
+        if (ImGui::Button(o.label.c_str(), ImVec2(width, 0.0f))) plugins_run_action(p.name, o.key);
+        ImGui::EndDisabled();
+        break;
+    default:
+        break;
+    }
+    if (!o.help.empty()) {
+        ImGui::Indent(16.0f * base_scale);
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", o.help.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Unindent(16.0f * base_scale);
+    }
+    ImGui::PopID();
+}
+
+void CoopSection() {
+    const std::vector<PluginInfo> plugins = plugins_list();
+    const OnlineConfig& online = config();
+    if (plugins.empty() && !online.enabled) {
+        return;
+    }
+    ImGui::SeparatorText(BbSettings::MenuText("Online co-op", "Совместная игра по сети"));
+    if (online.enabled && !online.online_host.empty()) {
+        ImGui::Text(BbSettings::MenuText("Online: server %s, playing as %s", "Сеть: сервер %s, имя %s"),
+                    online.online_host.c_str(), online.online_id.empty() ? "Player" : online.online_id.c_str());
+    } else {
+        ImGui::TextDisabled("%s", BbSettings::MenuText("Online is off (the launcher's Online co-op settings)",
+                                                       "Сеть выключена (настройки в лаунчере)"));
+    }
+    for (const PluginInfo& p : plugins) {
+        ImGui::PushID(p.name.c_str());
+        bool on = p.enabled;
+        const std::string title = p.title + " " + p.version;
+        if (ImGui::Checkbox(title.c_str(), &on)) {
+            plugins_set_enabled(p.name, on);
+        }
+        if (on != p.loaded) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", BbSettings::MenuText("(next start)", "(после перезапуска)"));
+        }
+        if (p.loaded && ImGui::TreeNode(BbSettings::MenuText("Settings", "Настройки"))) {
+            for (const PluginOption& o : p.options) {
+                PluginOptionRow(p, o);
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+}
+
 void Menu() {
     auto& s = BbSettings::Get();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -540,6 +682,8 @@ void Menu() {
         }
     }
 
+    CoopSection();
+
     ImGui::SeparatorText(BbSettings::MenuText("Other", "Прочее"));
     Checkbox(BbSettings::MenuText("FPS counter in corner", "Счётчик FPS в углу"), s.show_fps);
 
@@ -577,6 +721,25 @@ void FpsCounter() {
                 : s.upscaler == BbSettings::UpscalerDlss   ? "DLSS"
                                                            : "");
     ImGui::End();
+}
+
+// A plugin's message (show_message), across the top of the screen, fading at its end.
+void Banner(const std::string& text, float left) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.12f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    const float alpha = std::clamp(left * 4.0f, 0.0f, 1.0f);
+    ImGui::SetNextWindowBgAlpha(0.6f * alpha);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+    ImGui::Begin("##plugin_banner", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::SetWindowFontScale(1.3f);
+    ImGui::TextUnformatted(text.c_str());
+    ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 void TextPrompt() {
@@ -833,7 +996,7 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || prompt_active || BbSettings::Get().show_fps);
+    return initialized && (menu_open || prompt_active || BbSettings::Get().show_fps || plugins_banner(nullptr, nullptr));
 }
 
 bool MenuOpen() {
@@ -884,6 +1047,11 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     if (prompt_active && !menu_open) {
         TextPrompt();
+    }
+    std::string banner;
+    float banner_left = 0.0f;
+    if (plugins_banner(&banner, &banner_left)) {
+        Banner(banner, banner_left);
     }
     ImGui::Render();
 

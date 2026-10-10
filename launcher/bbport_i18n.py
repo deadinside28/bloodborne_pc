@@ -227,6 +227,19 @@ EN = {
     "Ограничение FPS": "FPS limit",
     "0 — без ограничения; укажите число, чтобы ограничить FPS":
         "0: no limit; set a number to cap the frame rate",
+    # Online co-op
+    "Совместная игра по сети": "Online co-op",
+    "Через ваш собственный сервер, без PSN; остальные настройки — в игре (Insert или L3+R3)":
+        "Through your own server, no PSN; the other settings are in the game (Insert or L3+R3)",
+    "Онлайн": "Online",
+    "Адрес сервера": "Server address",
+    "Ваше имя в сети": "Your online name",
+    "Бесшовная совместная игра (bbcoop)": "Seamless co-op (bbcoop)",
+    "Нужен файл bbcoop.so в папке plugins каталога данных": "Needs bbcoop.so in the data folder's plugins folder",
+    "Эта машина": "This machine is the",
+    "Хост (вы принимаете гостя)": "Host (the guest comes to you)",
+    "Гость (вы идёте в мир хоста)": "Guest (you go to the host's world)",
+    "Адрес второй машины": "The other machine's address",
     # Performance
     "Производительность": "Performance",
     "Двухстадийный конвейер GPU": "Two-stage GPU pipeline",
@@ -453,6 +466,19 @@ PT_BR = {
     "Ограничение FPS": "Limite de FPS",
     "0 — по частоте экрана (не выше 120 Гц); укажите число, чтобы ограничить иначе":
         "0: taxa de atualização da tela (até 120 Hz); defina um número para usar outro limite",
+    # Online co-op
+    "Совместная игра по сети": "Cooperativo online",
+    "Через ваш собственный сервер, без PSN; остальные настройки — в игре (Insert или L3+R3)":
+        "Pelo seu próprio servidor, sem PSN; as outras opções ficam no jogo (Insert ou L3+R3)",
+    "Онлайн": "Online",
+    "Адрес сервера": "Endereço do servidor",
+    "Ваше имя в сети": "Seu nome online",
+    "Бесшовная совместная игра (bbcoop)": "Cooperativo contínuo (bbcoop)",
+    "Нужен файл bbcoop.so в папке plugins каталога данных": "Precisa de bbcoop.so na pasta plugins da pasta de dados",
+    "Эта машина": "Esta máquina é o",
+    "Хост (вы принимаете гостя)": "Anfitrião (o convidado vem até você)",
+    "Гость (вы идёте в мир хоста)": "Convidado (você vai ao mundo do anfitrião)",
+    "Адрес второй машины": "Endereço da outra máquina",
     # Performance
     "Производительность": "Desempenho",
     "Двухстадийный конвейер GPU": "Pipeline de GPU em dois estágios",

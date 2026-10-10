@@ -20,6 +20,9 @@ void bbgpu_register_kernel(void);
 int bbgpu_init(const BbGpuConfig *config);
 /* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
 uintptr_t bbgpu_resolve(const char *scoped_nid);
+/* Online play (online=1 with online.host in bbport.ini): the network, HTTP and NP imports
+ * that reach the private co-op server, or 0 to keep the offline console's. */
+uintptr_t bbgpu_online_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */
 int bbgpu_handle_fault(void *ucontext, void *address);
 /* BB_WRITE_LOG=1: prints the logged GPU-side writes to guest memory near the fault. */
