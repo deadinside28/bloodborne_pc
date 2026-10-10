@@ -160,6 +160,29 @@ BB_GAME_DIR=/путь/к/CUSA03173 bash run.sh
 bash launcher/bb-launcher.sh         # launcher/install-desktop.sh добавит его в меню приложений
 ```
 
+### Nix (flake)
+
+Репозиторий также является Nix-флейком. Готовый AppImage собирается одной командой:
+
+```bash
+nix build .#appimage                 # → Bloodborne-bbport-x86_64.AppImage
+```
+
+Команда `bbport` ставится через home-manager — добавьте флейк как вход:
+
+```nix
+bbport.url = "github:deadinside28/bloodborne_pc";              # вход флейка
+home.packages = [ bbport.packages.x86_64-linux.bbport ];       # в модуле
+nixpkgs.overlays = [ bbport.overlays.default ]; home.packages = [ pkgs.bbport ]; # через оверлей
+```
+
+Для среды разработки:
+```bash
+  nix develop      # или .#default — только среда сборки
+  nix develop .#launcher
+  nix develop .#full   # все сразу
+```
+
 По умолчанию папка игры ищется рядом с репозиторием (`../CUSA03173`). Сохранения и кэш шейдеров
 — в `user/` (в лаунчере можно выбрать другую папку), настройки — в `bbport.ini`. Геймпад через
 SDL3 (если их несколько, нужный выбирается в лаунчере: *Управление → Контроллер*;

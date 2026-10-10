@@ -2,22 +2,25 @@
 # launcher, with their whole Nix closure and Mesa's Vulkan drivers. `bash packaging/appimage.sh`
 # turns it into an AppImage (Steam Deck); `nix-build packaging` alone gives result/bin/bbport.
 { pkgs ? import <nixpkgs> { }
-  # Store paths the prebuilt binaries load libraries from (their RUNPATHs), written by
-  # appimage.sh. Nix only finds references to its inputs, and the binaries were built outside.
+# Binaries built as output of other derivations can be passed here
+# If null we'll check if the binaries were built outside of nix
+, binaries ? null
+# Unused if binaries are already there
+, source ? ./..
 , runtimePaths ? (if builtins.pathExists ./runtime-paths.nix then import ./runtime-paths.nix else [ ])
 }:
 let
   lib = pkgs.lib;
-  root = ./..;
+  root = source;
   # FSR 4.1.1 models are extracted from AMD's DLLs: never in a public package. BB_PACKAGE_FSR411=1
   # (appimage.sh runs nix with --impure) bundles the local fsr4_411 for one's own devices.
   fsr411 = builtins.getEnv "BB_PACKAGE_FSR411" == "1";
   assetDirs = [ "scripts" "patches" "fsr4_shaders" "launcher" "tools/fsr4cap" ]
     ++ lib.optional fsr411 "fsr4_411";
   # Only what the package needs (the tree also holds builds, profiles and captures).
-  wanted = [
-    "run.sh" "out" "out/bb-probe" "out/bb-gpu-capabilities" "out/gpu" "out/gpu/libbbgpu.so" "tools"
-  ] ++ assetDirs;
+  wanted =
+    [ "run.sh" "tools"] ++ assetDirs
+    ++ lib.optionals (binaries == null) [ "out" "out/bb-probe" "out/bb-gpu-capabilities" "out/gpu" "out/gpu/libbbgpu.so" ];
   src = builtins.path {
     name = "bbport-src";
     path = root;
@@ -26,6 +29,11 @@ let
       in builtins.elem rel wanted
         || lib.any (dir: lib.hasPrefix (dir + "/") rel) assetDirs;
   };
+  # Where the prebuilt binaries come from: the Nix-built `binaries` derivation, or the
+  # src tree (out/) in the legacy appimage.sh flow.
+  probeSrc = if binaries != null then "${binaries}/bb-probe" else "${src}/out/bb-probe";
+  capsSrc  = if binaries != null then "${binaries}/bb-gpu-capabilities" else "${src}/out/bb-gpu-capabilities";
+  gpuSrc   = if binaries != null then "${binaries}/gpu/libbbgpu.so" else "${src}/out/gpu/libbbgpu.so";
   python = pkgs.python3.withPackages (ps: [ ps.pygobject3 ]);
   # FSR 4.1.1 from the user's own AMD DLL (the launcher's button, tools/fsr4cap/build_assets.sh):
   # its two tools built here, so that the package needs no compiler and no network for it. Proton
@@ -89,6 +97,7 @@ pkgs.stdenv.mkDerivation {
   inherit src;
   nativeBuildInputs = [ pkgs.makeShellWrapper pkgs.wrapGAppsHook4 pkgs.gobject-introspection ];
   buildInputs = [ pkgs.gtk4 pkgs.libadwaita pkgs.adwaita-icon-theme pkgs.librsvg ]
+    ++ lib.optional (binaries != null) binaries
     ++ map builtins.storePath runtimePaths;
   dontBuild = true;
   dontConfigure = true;
@@ -104,7 +113,8 @@ pkgs.stdenv.mkDerivation {
     d=$out/share/bbport
     mkdir -p $d/bin $out/bin
     cp run.sh $d/
-    cp -r scripts patches fsr4_shaders launcher $d/
+    cp -r scripts patches launcher $d/
+    if [ -d fsr4_shaders ]; then cp -r fsr4_shaders $d/; fi
     mkdir -p $d/tools
     cp -r tools/fsr4cap $d/tools/
     rm -rf $d/tools/fsr4cap/__pycache__
@@ -127,9 +137,9 @@ pkgs.stdenv.mkDerivation {
     PY
       cp -r fsr4_411 $d/
     fi
-    install -m755 out/bb-probe $d/bin/bb-probe
-    install -m755 out/bb-gpu-capabilities $d/bin/bb-gpu-capabilities
-    install -Dm755 out/gpu/libbbgpu.so $d/bin/gpu/libbbgpu.so
+    install -m755 ${probeSrc} $d/bin/bb-probe
+    install -m755 ${capsSrc} $d/bin/bb-gpu-capabilities
+    install -Dm755 ${gpuSrc} $d/bin/gpu/libbbgpu.so
     runHook postInstall
   '';
   postFixup = ''

@@ -161,6 +161,29 @@ or the launcher (pick the game folder, settings, *Start*):
 bash launcher/bb-launcher.sh         # launcher/install-desktop.sh adds it to the app menu
 ```
 
+### Nix (flake)
+
+The repository is also a Nix flake. Build the portable AppImage in one step:
+
+```bash
+nix build .#appimage                 # → Bloodborne-bbport-x86_64.AppImage
+```
+
+Install the `bbport` command with home-manager by adding the flake as an input:
+
+```nix
+bbport.url = "github:deadinside28/bloodborne_pc";              # flake input
+home.packages = [ bbport.packages.x86_64-linux.bbport ];       # in a module
+nixpkgs.overlays = [ bbport.overlays.default ]; home.packages = [ pkgs.bbport ]; # using the overlay
+```
+
+For dev environment:
+```bash
+  nix develop      # or .#default — build env only
+  nix develop .#launcher
+  nix develop .#full   # everything at once
+```
+
 By default the game folder is expected next to the repository (`../CUSA03173`). Saves and the
 shader cache go to `user/` (the launcher lets you choose another folder); settings to
 `bbport.ini`. A gamepad is used through SDL3 (the launcher's *Controls → Controller* picks one
