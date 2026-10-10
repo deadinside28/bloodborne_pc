@@ -100,13 +100,22 @@ class GameCheckTests(unittest.TestCase):
         self.shaders(game, bytes(data[:0x50]))
         self.assertEqual(game_check.broken_files(game), [])
 
+    def test_eu_and_asian_base_games_without_the_update(self):
+        for title in ('CUSA00900', 'CUSA03023'):
+            self.assertEqual(game_check.problem(self.game(title, '01.00'))[0], 'missing_update')
+
+    def test_eboot_with_the_60fps_patch(self):
+        game = self.game('CUSA00900', '01.09')
+        with mock.patch.object(game_check, 'LANCE_60FPS_IMAGE', game_check.image_sha256(game)):
+            self.assertEqual(game_check.problem(game)[0], 'patched_eboot')
+
     def test_skip_switch(self):
         os.environ['BB_SKIP_GAME_CHECK'] = '1'
         self.assertIsNone(game_check.problem(self.game('CUSA03173', '01.00')))
 
     def test_every_problem_is_explained(self):
-        for kind in ('missing_update', 'wrong_eboot', 'other_title', 'unreadable',
-                     'damaged_files'):
+        for kind in ('missing_update', 'wrong_eboot', 'patched_eboot', 'other_title',
+                     'unreadable', 'damaged_files'):
             self.assertIn('CUSA', game_check.explain(kind, 'CUSA03173', '01.00'))
 
 
