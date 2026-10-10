@@ -1,0 +1,14 @@
+# A user service: copy to ~/.config/systemd/user/, set the path below to your checkout, then
+# systemctl --user enable --now bbcoop-server
+[Unit]
+Description=Bloodborne private co-op server (bbport online play, LAN only)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/bbport/coop/server/bbcoop_server.py --anywhere
+WorkingDirectory=%h/bbport/coop/server
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

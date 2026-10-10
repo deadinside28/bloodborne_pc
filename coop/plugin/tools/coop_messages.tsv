@@ -1,0 +1,88 @@
+# bbcoop's own game text: id <TAB> text [<TAB> line help]. "\n" is a line break.
+#
+# tools/coop_assets.cpp writes these into every language's msg/<lang>/menu.msgbnd.dcx of the
+# "Co-op - menu and text" mod; bbcoop.cpp asks the game for them by id.
+#
+# Menu text (group 200) and its line help (group 201). Bloodborne's option screens own a
+# thousand-id block each (110000 System .. 115000 Language; N a row, N+20 the screen title).
+# 110006.. are the System list's co-op rows; 125000.. the co-op screens. All are unused in
+# the shipped bundles (every language checked).
+110006	Co-op: Joining	Bells, joining and re-joining your partner.
+110007	Co-op: Deaths	Going down, reviving and enemy health.
+110008	Co-op: Together	Lamps, bosses and people while together.
+110009	Co-op: Items	Pickups and boss drops.
+110010	Co-op: Leave Session	End the co-op session now. Re-joining waits a while.
+110011	Co-op: Give Up	While down: die now instead of waiting to be revived.
+
+125020	Co-op: Joining
+125000	Ring for Me	Rings the right bell by itself whenever the two of you are apart.
+125001	Re-join After Drops	After a death, a boss or travel, the guest comes back by herself.
+125002	Guest Travels to Host	Before ringing, the guest is taken to the host's area.
+125003	Guest Arrives by Host	As she joins, the guest is put at the host's side.
+125004	Free Bells	The bells cost no Insight, and the Small Resonant Bell is free in the shop.
+125005	Bells from the Start	A new character has both bells as soon as it wakes up.
+
+126020	Co-op: Deaths
+126000	Down, Not Dead	Together, nobody dies: you kneel until revived or the boss dies. The host's choice counts.
+126001	Revive by Hand	Next to a downed partner, Revive gets them up for 1 Blood Vial. The host's choice counts.
+126002	Lamps Revive	Using or lighting a lamp while your partner is down revives them. The host's choice counts.
+126003	Watch Partner When Down	While you are down, the camera follows your partner.
+126004	Co-op Messages	Show co-op messages on screen.
+126005	Enemy Health Together	Enemy health while the two of you are together. The host's choice counts.
+126100	100%
+126101	110%
+126102	120%
+126103	130%
+126104	150%
+126105	200%
+126106	250%
+126107	300%
+
+127020	Co-op: Together
+127000	Stay After a Boss	A boss kill no longer sends the guest home.
+127001	Lamps While Together	Both of you can use lamps while together. The host's choice counts.
+127002	Guest Can Talk	In the host's world the guest can talk to people and use lamps.
+127003	Bosses Count for Guest	Bosses killed together are dead in the guest's world too.
+
+128020	Co-op: Items
+128000	Guest Picks Up Too	In the host's world the guest has her own copy of every item.
+128001	Pickups Shared	Whatever one of you picks up, the other gets too. The host's choice counts.
+128002	Boss Drops for Guest	The guest gets the boss's drop too.
+
+# Dialog text (group 204, the option screens' own questions).
+920101	Leave the co-op session?
+920102	Give up and die now?
+
+# Event text (group 30): the prompt and the messages the game shows on screen. 9950000.. is
+# unused in every language.
+9950000	Revive
+9950010	Together with your partner
+9950011	Ringing for your partner
+9950012	Ringing to join your partner
+9950013	Going to your partner
+9950014	You received the boss's drop too
+9950015	Your partner's lamp is lit for you too
+9950016	Returning to your own Hunter's Dream
+9950017	You are down\nYour partner fights on
+9950018	You died\nReturning to your own world
+9950020	Back on your feet
+9950021	You are down\nYour partner can revive you, light a lamp or defeat the boss
+9950022	You are down\nYour partner can revive you or defeat the boss
+9950023	You are down\nYour partner can light a lamp or defeat the boss
+9950024	You are down\nWaiting for the boss to fall
+9950025	Your partner is down\nRevive them, use a lamp or defeat the boss
+9950026	Your partner is down\nRevive them or defeat the boss
+9950027	Your partner is down\nUse a lamp or defeat the boss
+9950028	Your partner is down\nDefeat the boss to bring them back
+9950029	You have both bells
+9950030	Your partner is up again\n1 Blood Vial used
+9950031	Your partner is up again
+9950033	You need a Blood Vial to revive your partner
+9950034	Bosses defeated in co-op now count in your world
+9950035	Lamps lit in co-op are now lit in your world
+9950036	Left the co-op session
+9950037	Joining your partner
+9950038	You gained Insight with your partner
+9950039	You got your partner's gesture too
+9950040	You got your partner's reward too
+9950041	Your world caught up with your partner's

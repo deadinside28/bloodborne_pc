@@ -339,6 +339,7 @@ VRAM считается не больше N МиБ: проверка повед�
 | `patches/` | Патчи сообщества для Bloodborne |
 | `tools/` | Утилиты разработчика: скриптовые запуски, A/B-переключатели, бенчмарк FSR, переписывание шейдеров FSR 4, `fsr4cap` (запись и извлечение FSR 4.1.1) |
 | `tests/` | Тесты загрузчика, рантайма, патчей и рендерера |
+| `coop/` | Совместная игра по сети (в работе): плагин bbcoop и собственный сервер ([docs/COOP.md](docs/COOP.md)) |
 | `docs/` | Заметки и замеры ([апскейлер](docs/upscaler.md), [многопоточный GPU](docs/parallel_gpu.md), [векторы движения](docs/motion_vectors.md), [план](docs/ROADMAP.md), [журнал разработки](docs/DEVELOPMENT_LOG.ru.md)) |
 
 Тесты: `bash build.sh --test`, `python3 -m unittest discover -s tests` и
