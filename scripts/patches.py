@@ -342,10 +342,12 @@ def main():
         if size: print(f'{size[0]}x{size[1]}')
         return
     names=FPS_PRESETS[a.fps]+[n.strip() for n in a.extra.split(';') if n.strip()]
-    names+=[n for n in effect_patches(read_settings(a.settings)) if n not in names]
+    ini=read_settings(a.settings)
+    names+=[n for n in effect_patches(ini) if n not in names]
     if intel_tonemap_fix() and INTEL_TONEMAP not in names:
         names.append(INTEL_TONEMAP)
-    if skip_network_choice() and SKIP_NETWORK_CHOICE not in names:
+    # Online co-op (bbport.ini online=1) needs the game's PLAY ONLINE: the choice stays.
+    if skip_network_choice() and ini.get('online')!='1' and SKIP_NETWORK_CHOICE not in names:
         names.append(SKIP_NETWORK_CHOICE)
     names=validate_patch_requirements(names,a.game_dir)
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
