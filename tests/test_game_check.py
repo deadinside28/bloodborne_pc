@@ -61,7 +61,8 @@ class GameCheckTests(unittest.TestCase):
         self.assertEqual(game_check.problem(self.game('CUSA03173', '01.09'))[0], 'wrong_eboot')
 
     def test_other_edition(self):
-        self.assertEqual(game_check.problem(self.game('CUSA00207', '01.09'))[0], 'other_title')
+        # The EU alpha test: not a retail release.
+        self.assertEqual(game_check.problem(self.game('CUSA01322', '01.09'))[0], 'other_title')
 
     def test_unreadable_executable(self):
         self.assertEqual(game_check.problem(self.game('CUSA03173', '01.09', b'junk'))[0], 'unreadable')
@@ -100,9 +101,10 @@ class GameCheckTests(unittest.TestCase):
         self.shaders(game, bytes(data[:0x50]))
         self.assertEqual(game_check.broken_files(game), [])
 
-    def test_eu_and_asian_base_games_without_the_update(self):
-        for title in ('CUSA00900', 'CUSA03023'):
-            self.assertEqual(game_check.problem(self.game(title, '01.00'))[0], 'missing_update')
+    def test_every_retail_base_game_without_the_update(self):
+        for title in game_check.SUPPORTED_TITLES:
+            with self.subTest(title=title):
+                self.assertEqual(game_check.problem(self.game(title, '01.00'))[0], 'missing_update')
 
     def test_eboot_with_the_60fps_patch(self):
         game = self.game('CUSA00900', '01.09')

@@ -82,8 +82,8 @@ EN = {
         "The 1.09 update is needed: copy the dumped 1.09 update into the game folder, replacing files (found version {})",
     "eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой":
         "eboot.bin is not from 1.09: copy eboot.bin from the dumped 1.09 update into the game folder, replacing it",
-    "Поддерживаются только CUSA03173 (Европа), CUSA00900 (США) и CUSA03023 (Азия) с обновлением 1.09 (найдено {})":
-        "Only CUSA03173 (EU), CUSA00900 (US) and CUSA03023 (Asia) with update 1.09 are supported (found {})",
+    "Это не магазинное издание Bloodborne (найдено {}): нужен Bloodborne любого региона с обновлением 1.09":
+        "Not a retail release of Bloodborne (found {}): Bloodborne from any region with update 1.09 is needed",
     "eboot.bin с вшитым патчем 60 FPS от Lance McDonald: из-за него игра падает в меню жестов. Скопируйте чистый eboot.bin из дампа обновления 1.09 в папку игры с заменой":
         "This eboot.bin has Lance McDonald's 60 fps patch baked in, which crashes the game in the gestures menu: copy a clean eboot.bin from the dumped 1.09 update into the game folder, replacing it",
     "eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново":
@@ -541,8 +541,8 @@ ZH_CN = {
         "需要 1.09 更新：请将转储出的 1.09 更新文件复制到游戏文件夹并覆盖（当前检测到版本 {}）",
     "eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой":
         "eboot.bin 不是 1.09 版本：请将 1.09 更新转储中的 eboot.bin 复制到游戏文件夹并覆盖",
-    "Поддерживаются только CUSA03173 (Европа), CUSA00900 (США) и CUSA03023 (Азия) с обновлением 1.09 (найдено {})":
-        "仅支持已安装 1.09 更新的 CUSA03173（欧版）、CUSA00900（美版）和 CUSA03023（亚洲版）（当前检测到 {}）",
+    "Это не магазинное издание Bloodborne (найдено {}): нужен Bloodborne любого региона с обновлением 1.09":
+        "这不是 Bloodborne 的正式发行版（当前检测到 {}）：需要任意地区已安装 1.09 更新的 Bloodborne",
     "eboot.bin с вшитым патчем 60 FPS от Lance McDonald: из-за него игра падает в меню жестов. Скопируйте чистый eboot.bin из дампа обновления 1.09 в папку игры с заменой":
         "此 eboot.bin 内置了 Lance McDonald 的 60 FPS 补丁，会导致游戏在打开手势菜单时崩溃：请将 1.09 更新转储中干净的 eboot.bin 复制到游戏文件夹并覆盖",
     "eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново":
