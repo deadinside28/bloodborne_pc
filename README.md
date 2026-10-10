@@ -21,7 +21,9 @@ directly on the PC:
 One step remains to the full Wine + DXVK model: make the new mode the default and remove the old
 memory model (see below).
 
-> **No game files are included.** You need your own dump of Bloodborne (CUSA03173, v1.09).
+> **No game files are included.** You need your own dump of Bloodborne with update 1.09: any retail
+> release (CUSA00900 in the US, CUSA03173 for the European Game of the Year edition, ...), as they
+> share the same executable.
 > This project is not affiliated with Sony Interactive Entertainment, FromSoftware or AMD.
 
 **Status: experimental, playable.** The game boots, loads saves and plays (the Hunter's Dream
@@ -147,7 +149,10 @@ neither has nor includes.
 - Your decrypted game dump: the `CUSA03173` folder (eboot.bin, sce_module, ...), version 1.09.
   A dumped update is a separate folder: copy it over the base game, replacing files. The base
   game alone (1.00) crashes at start (guest offset 0x20348b8); the launcher and `run.sh` check
-  the executable and say what is missing (`BB_SKIP_GAME_CHECK=1` skips the check).
+  the executable and say what is missing (`BB_SKIP_GAME_CHECK=1` skips the check). The other
+  retail releases (the US `CUSA00900`, the Asian `CUSA03023`, ...) run the same 1.09 executable. Some dumps ship it
+  with Lance McDonald's 60 fps patch baked in, which crashes when the gestures menu opens: the
+  check asks for a clean eboot.bin then (bbport has its own 60 fps).
 - To build: GCC, CMake, Ninja, Python 3, glslang, SDL3, Vulkan headers and the libraries in
   `shell.nix`. With [Nix](https://nixos.org) everything comes from `shell.nix` automatically.
 
