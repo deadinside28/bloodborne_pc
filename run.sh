@@ -34,6 +34,9 @@ mkdir -p "$BB_GPU_USER_DIR"
 if [[ -z ${BB_FSR411_DIR:-} && ! -d fsr4_411 && -d $data/fsr4_411 ]]; then
     export BB_FSR411_DIR=$data/fsr4_411
 fi
+# Suppress broken third-party Vulkan layers
+export DISABLE_LSFGVK=${DISABLE_LSFGVK:-1}
+export VK_LOADER_LAYERS_DISABLE=${VK_LOADER_LAYERS_DISABLE:-*lsfg*}
 if [[ -z ${BB_PREBUILT:-} && -z ${BB_IN_NIX_SHELL:-} ]] && ! { command -v pkg-config >/dev/null && pkg-config --exists vulkan sdl3; } && command -v nix-shell >/dev/null; then
     args=''; if (( $# )); then args=$(printf '%q ' "$@"); fi
     exec env BB_IN_NIX_SHELL=1 nix-shell shell.nix --run "bash run.sh $args"
@@ -83,6 +86,14 @@ fi
 # BB_RENDER_RES=WxH explicitly sets the game's render resolution (a patch at start).
 # Frame rate: BB_FPS=uncap (default; delta-time patch, vblank 480 Hz, frames shown at once),
 # 60/90 (fixed-timestep patches) or 30 (unpatched). BB_PATCHES adds patch names ("a;b").
+if [[ -z ${BB_FPS:-} && -f ~/.config/bbport-launcher/settings.json ]]; then
+    saved_fps=$(python3 -c "import json; print(json.load(open('$HOME/.config/bbport-launcher/settings.json')).get('fps_mode', ''))" 2>/dev/null || true)
+    [[ -n $saved_fps ]] && BB_FPS=$saved_fps
+fi
+if [[ -z ${BB_FPS_LIMIT:-} && -f ~/.config/bbport-launcher/settings.json ]]; then
+    saved_limit=$(python3 -c "import json; print(json.load(open('$HOME/.config/bbport-launcher/settings.json')).get('fps_limit', 0))" 2>/dev/null || true)
+    [[ -n $saved_limit && $saved_limit -gt 0 ]] && export BB_FPS_LIMIT=$saved_limit
+fi
 fps=${BB_FPS:-uncap}
 # bbport.ini output_res other than 1080p (720p for the Steam Deck, 1440p, 2160p): the whole game
 # renders at the preset's size of the output (a patch), the upscaler fills the output, the UI is
@@ -200,6 +211,9 @@ export BB_COPY_GPU_BUFFERS=${BB_COPY_GPU_BUFFERS:-1}
 # A guest write next to small GPU outputs the GPU is still writing (counters, compute results,
 # up to BB_GPU_WRITE_TWINS_MAX bytes per page) does not wait for the GPU (BufferCache twins).
 export BB_GPU_WRITE_TWINS=${BB_GPU_WRITE_TWINS:-1} BB_GPU_WRITE_TWINS_MAX=${BB_GPU_WRITE_TWINS_MAX:-65536}
+export BB_READBACK_LINEAR=${BB_READBACK_LINEAR:-0}
+# Persistent shader cache sizing
+export MESA_SHADER_CACHE_MAX_SIZE=${MESA_SHADER_CACHE_MAX_SIZE:-4G}
 if [[ -z ${BB_VBLANK_HZ:-} ]]; then
     case $fps in uncap) export BB_VBLANK_HZ=480 ;; 90) export BB_VBLANK_HZ=90 ;; *) export BB_VBLANK_HZ=60 ;; esac
 fi

@@ -340,7 +340,7 @@ int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
     check_cpu();
     int cpu_only = 0, strict_imports = 0;
-    unsigned timeout_seconds = 10;
+    unsigned timeout_seconds = 0;
     const char *content_profile=NULL, *app0=NULL, *user_dir=NULL, *patch_file=NULL;
     for (int i = 2; i < argc; ++i) {
         if (!strcmp(argv[i], "--cpu-only")) cpu_only = 1;
@@ -388,9 +388,11 @@ int main(int argc, char **argv) {
     if (dladdr((void *)main,&self_info)) exe_base=(uintptr_t)self_info.dli_fbase;
     struct sigaction dump = {0}; dump.sa_sigaction = thread_dump; dump.sa_flags = SA_SIGINFO|SA_RESTART;
     sigemptyset(&dump.sa_mask); sigaction(SIGUSR2, &dump, NULL);
-    struct sigaction alarm_action = {0}; alarm_action.sa_sigaction = watchdog; alarm_action.sa_flags = SA_SIGINFO;
-    sigemptyset(&alarm_action.sa_mask); sigaction(SIGALRM, &alarm_action, NULL);
-    alarm(timeout_seconds); /* 0 disables the watchdog */
+    if (timeout_seconds > 0) {
+        struct sigaction alarm_action = {0}; alarm_action.sa_sigaction = watchdog; alarm_action.sa_flags = SA_SIGINFO;
+        sigemptyset(&alarm_action.sa_mask); sigaction(SIGALRM, &alarm_action, NULL);
+        alarm(timeout_seconds);
+    }
 #endif
     FILE *f = fopen(argv[1], "rb");
     if (!f) fail("cannot open boot file; run prepare.py first");

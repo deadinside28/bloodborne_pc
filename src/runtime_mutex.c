@@ -8,8 +8,13 @@
 #include <pthread.h>
 #include <errno.h>
 #include <time.h>
+#include <stdatomic.h>
 typedef struct { int type; } GuestAttr;
-typedef struct { pthread_mutex_t native; } GuestMutex;
+typedef struct {
+    pthread_mutex_t native;
+    _Atomic(pthread_t) owner;
+    int type;
+} GuestMutex;
 static size_t created, locks, unlocks;
 static int32_t orbis_error(int e) {
     if (!e) return 0;
@@ -51,10 +56,26 @@ static ABI int32_t mutex_init(GuestMutex **out, GuestAttr **attr, const char *na
     if (type < 1 || type > 4) return orbis_error(EINVAL);
     GuestMutex *mutex = malloc(sizeof(*mutex));
     if (!mutex) return orbis_error(ENOMEM);
+    mutex->type = type;
+    atomic_init(&mutex->owner, 0);
     pthread_mutexattr_t native_attr;
     int e = pthread_mutexattr_init(&native_attr);
     if (e) { free(mutex); return orbis_error(e); }
-    int native_type = type == 2 ? PTHREAD_MUTEX_RECURSIVE : type == 3 ? PTHREAD_MUTEX_NORMAL : PTHREAD_MUTEX_ERRORCHECK;
+    int native_type;
+    if (type == 2) {
+        native_type = PTHREAD_MUTEX_RECURSIVE;
+    } else {
+#ifdef PTHREAD_MUTEX_ADAPTIVE_NP
+        static int adaptive_enabled = -1;
+        if (adaptive_enabled < 0) {
+            const char *env = getenv("BB_MUTEX_ADAPTIVE");
+            adaptive_enabled = (!env || env[0] != '0') ? 1 : 0;
+        }
+        native_type = adaptive_enabled ? PTHREAD_MUTEX_ADAPTIVE_NP : (type == 3 ? PTHREAD_MUTEX_NORMAL : PTHREAD_MUTEX_ERRORCHECK);
+#else
+        native_type = type == 3 ? PTHREAD_MUTEX_NORMAL : PTHREAD_MUTEX_ERRORCHECK;
+#endif
+    }
     e = pthread_mutexattr_settype(&native_attr, native_type);
     if (!e) e = pthread_mutex_init(&mutex->native, &native_attr);
     pthread_mutexattr_destroy(&native_attr);
@@ -81,12 +102,17 @@ static int32_t ensure_mutex(GuestMutex **mutex) {
 static ABI int32_t mutex_lock(GuestMutex **mutex) {
     int32_t e = ensure_mutex(mutex);
     if (e) return e;
-    int r = pthread_mutex_trylock(&(*mutex)->native);
+    GuestMutex *m = *mutex;
+    if (m->type != 2 && pthread_equal(atomic_load_explicit(&m->owner, memory_order_relaxed), pthread_self())) {
+        return orbis_error(EDEADLK);
+    }
+    int r = pthread_mutex_trylock(&m->native);
     if (r == EBUSY) { /* contended: timed for the wait profile */
         const uint64_t start = runtime_wait_clock();
-        r = pthread_mutex_lock(&(*mutex)->native);
+        r = pthread_mutex_lock(&m->native);
         runtime_wait_note(1, runtime_wait_clock() - start);
     }
+    if (!r) atomic_store_explicit(&m->owner, pthread_self(), memory_order_relaxed);
     e = orbis_error(r);
     if (!e) ++locks;
     return e;
@@ -94,14 +120,25 @@ static ABI int32_t mutex_lock(GuestMutex **mutex) {
 static ABI int32_t mutex_trylock(GuestMutex **mutex) {
     int32_t e = ensure_mutex(mutex);
     if (e) return e;
-    e = orbis_error(pthread_mutex_trylock(&(*mutex)->native));
+    GuestMutex *m = *mutex;
+    if (m->type != 2 && pthread_equal(atomic_load_explicit(&m->owner, memory_order_relaxed), pthread_self())) {
+        return orbis_error(EBUSY);
+    }
+    int r = pthread_mutex_trylock(&m->native);
+    if (!r) atomic_store_explicit(&m->owner, pthread_self(), memory_order_relaxed);
+    e = orbis_error(r);
     if (!e) ++locks;
     return e;
 }
 static ABI int32_t mutex_unlock(GuestMutex **mutex) {
     if (!mutex || (uintptr_t)*mutex == 2) return orbis_error(EINVAL);
     if ((uintptr_t)*mutex < 2) return orbis_error(EPERM);
-    int32_t e = orbis_error(pthread_mutex_unlock(&(*mutex)->native));
+    GuestMutex *m = *mutex;
+    if (m->type != 2 && !pthread_equal(atomic_load_explicit(&m->owner, memory_order_relaxed), pthread_self())) {
+        return orbis_error(EPERM);
+    }
+    if (m->type != 2) atomic_store_explicit(&m->owner, 0, memory_order_relaxed);
+    int32_t e = orbis_error(pthread_mutex_unlock(&m->native));
     if (!e) ++unlocks;
     return e;
 }
@@ -123,9 +160,15 @@ static int32_t timed_error(int e) { return e == ETIMEDOUT ? (int32_t)UINT32_C(0x
 static ABI int32_t mutex_timedlock(GuestMutex **mutex, uint32_t usec) {
     int32_t e = ensure_mutex(mutex);
     if (e) return e;
+    GuestMutex *m = *mutex;
+    if (m->type != 2 && pthread_equal(atomic_load_explicit(&m->owner, memory_order_relaxed), pthread_self())) {
+        return orbis_error(EDEADLK);
+    }
     struct timespec end;
     if (deadline_after(&end, usec)) return orbis_error(EINVAL);
-    e = timed_error(pthread_mutex_timedlock(&(*mutex)->native, &end));
+    int r = pthread_mutex_timedlock(&m->native, &end);
+    if (!r) atomic_store_explicit(&m->owner, pthread_self(), memory_order_relaxed);
+    e = timed_error(r);
     if (!e) ++locks;
     return e;
 }
@@ -166,9 +209,15 @@ static ABI int32_t cond_wait(GuestCond **cond, GuestMutex **mutex) {
     int32_t e = ensure_cond(cond);
     if (e) return e;
     if (!mutex || (uintptr_t)*mutex < 3) return orbis_error(EINVAL);
+    GuestMutex *m = *mutex;
+    if (m->type != 2 && !pthread_equal(atomic_load_explicit(&m->owner, memory_order_relaxed), pthread_self())) {
+        return orbis_error(EPERM);
+    }
     ++waits;
     const uint64_t start = runtime_wait_clock();
-    const int e2 = pthread_cond_wait(&(*cond)->native, &(*mutex)->native);
+    if (m->type != 2) atomic_store_explicit(&m->owner, 0, memory_order_relaxed);
+    const int e2 = pthread_cond_wait(&(*cond)->native, &m->native);
+    if (!e2 && m->type != 2) atomic_store_explicit(&m->owner, pthread_self(), memory_order_relaxed);
     runtime_wait_note(0, runtime_wait_clock() - start);
     return orbis_error(e2);
 }
@@ -176,9 +225,15 @@ static int32_t cond_wait_until(GuestCond **cond, GuestMutex **mutex, const struc
     int32_t e = ensure_cond(cond);
     if (e) return e;
     if (!mutex || (uintptr_t)*mutex < 3 || !end) return orbis_error(EINVAL);
+    GuestMutex *m = *mutex;
+    if (m->type != 2 && !pthread_equal(atomic_load_explicit(&m->owner, memory_order_relaxed), pthread_self())) {
+        return orbis_error(EPERM);
+    }
     ++waits;
     const uint64_t start = runtime_wait_clock();
-    const int e2 = pthread_cond_timedwait(&(*cond)->native, &(*mutex)->native, end);
+    if (m->type != 2) atomic_store_explicit(&m->owner, 0, memory_order_relaxed);
+    const int e2 = pthread_cond_timedwait(&(*cond)->native, &m->native, end);
+    if ((!e2 || e2 == ETIMEDOUT) && m->type != 2) atomic_store_explicit(&m->owner, pthread_self(), memory_order_relaxed);
     runtime_wait_note(0, runtime_wait_clock() - start);
     return timed_error(e2);
 }

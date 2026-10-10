@@ -242,8 +242,8 @@ void Swapchain::SetSurfaceProperties() {
                                  std::min(capabilities.maxImageExtent.height, height));
     }
 
-    // Select number of images in swap chain, we prefer one buffer in the background to work on
-    image_count = capabilities.minImageCount + 1;
+    // Select number of images in swap chain, we prefer buffers in the background to work on
+    image_count = std::max(capabilities.minImageCount + 1, 4u);
     if (capabilities.maxImageCount > 0) {
         image_count = std::min(image_count, capabilities.maxImageCount);
     }

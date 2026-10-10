@@ -17,7 +17,8 @@ inline bool IsFsr4(int upscaler) {
 }
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
-enum class MenuLanguage { English, Russian };
+enum Language : int { LangEnglish = 0, LangPortuguese = 1, LangRussian = 2, LangCount = 3 };
+enum class MenuLanguage : int { English = LangEnglish, Portuguese = LangPortuguese, Russian = LangRussian };
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
 /// menu label, default (the game's own behaviour).
@@ -30,12 +31,12 @@ struct Effect {
 inline constexpr Effect Effects[] = {
     {"effect_chromatic_aberration", "Chromatic aberration", "Хроматическая аберрация", true},
     {"effect_dof", "Depth of field (DoF)", "Глубина резкости (DoF)", true},
-    {"effect_motion_blur", "Motion blur", "Размытие в движении", true},
+    {"effect_motion_blur", "Motion blur", "Размытие в движении", false},
     {"effect_ssao", "Ambient occlusion (SSAO)", "Затенение SSAO", true},
     {"effect_game_aa", "Game's own anti-aliasing", "Собственное сглаживание игры", true},
     {"effect_dynamic_shadows", "Shadows from dynamic lights", "Тени от динамических источников", true},
     {"effect_ssr", "Screen-space reflections (not in original game)", "Отражения SSR (не было в игре)", false},
-    {"skip_intro", "Skip startup intros", "Пропуск заставок при запуске", false},
+    {"skip_intro", "Skip startup intros", "Пропуск заставок при запуске", true},
     {"debug_camera", "Free camera (Cross + L3)", "Свободная камера (Cross + L3)", false},
     {"debug_menu", "Debug menu (requires font files)", "Debug menu (нужны файлы шрифтов)", false},
 };
@@ -46,8 +47,10 @@ inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
 inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
 
+enum DrawPipeMode : int { DrawPipeOff = 0, DrawPipeOn = 1, DrawPipeHybrid = 2, DrawPipeCount = 3 };
+
 struct Values {
-    std::atomic<MenuLanguage> menu_language{MenuLanguage::Russian};
+    std::atomic<int> menu_language{LangPortuguese};
     std::atomic<int> upscaler{UpscalerFsr3};
     std::atomic<int> preset{NativeAA};
     std::atomic<bool> sharpen{true};
@@ -65,6 +68,8 @@ struct Values {
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};
+    std::atomic<bool> puddle_reflections{false};
+    std::atomic<int> draw_pipe{DrawPipeHybrid};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     /// Applied at start (patches.py); the menu shows when a restart is needed.
     std::atomic<bool> effects[EffectCount]{};
@@ -76,6 +81,17 @@ struct Values {
     /// Why FSR 4 cannot run (assets, device features), or null. Set by the renderer.
     std::atomic<const char*> fsr4_problem{nullptr};
     std::atomic<bool> fsr4_supported{false}, fsr411_supported{false};
+    std::atomic<bool> fsr411_fp8{false}, fsr411_fp8emu{false};
+    std::atomic<bool> frame_generation{false};
+    std::atomic<bool> frame_generation_supported{false};
+    std::atomic<const char*> frame_generation_problem{nullptr};
+
+    /// Mouse look and button controls.
+    std::atomic<float> mouse_sensitivity{1.0f};
+    std::atomic<bool> mouse_invert_y{false};
+    std::atomic<bool> mouse_invert_x{false};
+    std::atomic<bool> mouse_capture{true};
+
     /// DLSS (gpu/dlss_bridge, NVIDIA RTX) is ready, or why not (null before the device exists).
     std::atomic<bool> dlss_supported{false};
     std::atomic<const char*> dlss_problem{nullptr};
@@ -88,6 +104,8 @@ struct Values {
     int startup_model_lod = 0;
     int startup_output_res = OutputDefault;
     int startup_live_resolution = 0;
+    int startup_draw_pipe = DrawPipeHybrid;
+    bool startup_frame_generation = false;
 };
 
 Values& Get();
@@ -97,7 +115,7 @@ const char* MenuText(const char* english, const char* russian);
 /// Reads the file, then the environment overrides. Called once at start.
 void Load();
 /// Checks the loaded choice before the first frame; unsupported FSR 4 uses FSR 3.1.
-void ConfigureUpscalerSupport(bool fsr4, bool fsr411);
+void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool fsr411_fp8 = false, bool fsr411_fp8emu = false);
 /// After device creation: DLSS availability; a DLSS setting falls back to FSR 3.1 without it.
 void ConfigureDlssSupport(bool available, const char* problem);
 /// Startup-patched scene dimensions cannot change until run.sh prepares a new image.
@@ -111,5 +129,8 @@ void Save();
 float PresetScale(int preset);
 const char* PresetName(int preset);
 const char* UpscalerName(int upscaler);
+const char* LanguageCode(int lang);
+const char* LanguageName(int lang);
+const char* EffectLabel(int effect_index, int lang);
 
 } // namespace BbSettings

@@ -8,6 +8,7 @@
 #include <string>
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
+#include "bbport_keyboard.h"
 
 union SDL_Event;
 struct SDL_Window;
@@ -30,7 +31,7 @@ void UpdateTextInput(SDL_Window* window);
 bool Visible();
 
 /// Present thread: draws into `view` (layout ColorAttachmentOptimal).
-void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
+void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent, bool is_generated = false);
 
 /// The menu or the text dialog is open: the game's input is held neutral.
 bool CapturesInput();
@@ -38,7 +39,11 @@ bool CapturesInput();
 /// The settings menu is open: the window shows the system cursor over it.
 bool MenuOpen();
 
-/// Window thread: the game's text dialog (ImeDialog) state, drawn as a box over the frame.
-void SetTextPrompt(bool active, const std::string& prompt, const std::string& text);
+/// Window thread: the game's text dialog (ImeDialog) state, drawn as an interactive virtual keyboard over the frame.
+void SetTextPrompt(bool active, const std::string& prompt, const std::string& text,
+                   const BbVirtualKeyboard::Callbacks& callbacks = {});
+
+/// Renders the graphics settings panel inside the Settings tab.
+void RenderGraphicsSettings();
 
 } // namespace BbOverlay

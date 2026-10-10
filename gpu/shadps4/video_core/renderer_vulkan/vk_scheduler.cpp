@@ -102,7 +102,10 @@ u32 RecordingThreadCount() {
         return std::clamp(std::atoi(env), 1, 8);
     }
     const unsigned available = BbThreads::Available();
-    return available >= 12 ? 3 : available >= 8 ? 2 : 1;
+    return available >= 20 ? 5 :
+           available >= 16 ? 4 :
+           available >= 12 ? 3 :
+           available >= 8  ? 2 : 1;
 }
 
 vk::CommandBuffer BeginCommandBuffer(CommandPool& pool) {

@@ -334,9 +334,22 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
     return BbFreeCheck::OnStaleTrapFault(reinterpret_cast<std::uint64_t>(address)) ? 1 : 0;
 }
 
+static uintptr_t g_guest_image_base = 0;
+static uint64_t g_guest_image_size = 0;
+
 extern "C" void bbgpu_patch_image(unsigned char* image, uint64_t size) {
+    g_guest_image_base = reinterpret_cast<uintptr_t>(image);
+    g_guest_image_size = size;
     BbGnmHooks::PatchImage(image, size);
     BbGameMenu::PatchImage(image, size);
+}
+
+extern "C" uintptr_t bbgpu_get_guest_image_base(void) {
+    return g_guest_image_base;
+}
+
+extern "C" uint64_t bbgpu_get_guest_image_size(void) {
+    return g_guest_image_size;
 }
 
 extern "C" unsigned bbgpu_symbol_count(void) {
@@ -396,6 +409,28 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
+}
+
+extern "C" void bbgpu_get_mouse_motion(float *dx, float *dy, int *wheel) {
+    if (g_window) {
+        g_window->GetMouseMotion(dx, dy, wheel);
+    } else {
+        if (dx) *dx = 0.0f;
+        if (dy) *dy = 0.0f;
+        if (wheel) *wheel = 0;
+    }
+}
+
+extern "C" float bbgpu_get_mouse_sensitivity(void) {
+    return BbSettings::Get().mouse_sensitivity.load();
+}
+
+extern "C" int bbgpu_get_mouse_invert_y(void) {
+    return BbSettings::Get().mouse_invert_y.load() ? 1 : 0;
+}
+
+extern "C" int bbgpu_get_mouse_invert_x(void) {
+    return BbSettings::Get().mouse_invert_x.load() ? 1 : 0;
 }
 
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt) {

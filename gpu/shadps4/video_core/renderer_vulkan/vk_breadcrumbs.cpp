@@ -93,18 +93,7 @@ void Init(const Instance& instance) {
     enabled = true;
 }
 
-/// Guest memory that may be gone by now: read only where the runtime has it mapped (its direct
-/// memory is a GPU driver mapping, which process_vm_readv cannot read).
-size_t ReadGuest(u64 address, void* out, size_t size) {
-    int prot = 0, type = 0;
-    uintptr_t end = 0;
-    if (!address || !runtime_memory_vma_info(address, &prot, &type, &end) || end <= address) {
-        return 0;
-    }
-    size = std::min<size_t>(size, end - address);
-    std::memcpy(out, reinterpret_cast<const void*>(address), size);
-    return size;
-}
+
 
 const char* KindName(Kind kind) {
     switch (kind) {
@@ -231,6 +220,17 @@ u32 NewStream(const Instance& instance, const char* name) {
 
 bool Enabled() noexcept {
     return enabled;
+}
+
+size_t ReadGuest(u64 address, void* out, size_t size) {
+    int prot = 0, type = 0;
+    uintptr_t end = 0;
+    if (!address || !runtime_memory_vma_info(address, &prot, &type, &end) || end <= address) {
+        return 0;
+    }
+    size = std::min<size_t>(size, end - address);
+    std::memcpy(out, reinterpret_cast<const void*>(address), size);
+    return size;
 }
 
 u32 Note(u32 stream_index, const Crumb& crumb) {

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <vulkan/vulkan.h>
 #include <SDL3/SDL.h>
 
@@ -116,16 +117,19 @@ static int list_displays(void) {
  * (lefttrigger/righttrigger for the triggers) for the first key or gamepad button pressed, the
  * names bbport.ini's key.* and pad.* lines take. Escape, closing it or 15 s: nothing. */
 static int read_input(const char *kind) {
-    const int want_key = strcmp(kind, "pad") != 0, want_pad = strcmp(kind, "key") != 0;
+    const int want_mouse = strcmp(kind, "key") != 0 && strcmp(kind, "pad") != 0;
+    const int want_key = strcmp(kind, "pad") != 0 && strcmp(kind, "mouse") != 0;
+    const int want_pad = strcmp(kind, "key") != 0 && strcmp(kind, "mouse") != 0;
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "read-input: %s\n", SDL_GetError());
         return 1;
     }
     SDL_Window *window = NULL;
     SDL_Renderer *renderer = NULL;
-    const char *prompt = want_key && want_pad ? "Press a key or a gamepad button"
-                         : want_key           ? "Press a key"
-                                              : "Press a gamepad button";
+    const char *prompt = !strcmp(kind, "mouse") ? "Move mouse, click a button, or scroll wheel"
+                         : want_key && want_pad ? "Press a key or a gamepad button"
+                         : want_key             ? "Press a key"
+                         : "Press a gamepad button";
     if (!SDL_CreateWindowAndRenderer("bbport", 520, 90, 0, &window, &renderer)) {
         fprintf(stderr, "read-input: %s\n", SDL_GetError());
         SDL_Quit();
@@ -135,7 +139,9 @@ static int read_input(const char *kind) {
     SDL_JoystickID *ids = SDL_GetGamepads(&count);
     for (int i = 0; ids && i < count; ++i) SDL_OpenGamepad(ids[i]);
     SDL_free(ids);
-    const Uint64 end = SDL_GetTicks() + 15000;
+    const Uint64 start_time = SDL_GetTicks();
+    const Uint64 end = start_time + 15000;
+    float motion_acc_x = 0.0f, motion_acc_y = 0.0f;
     int done = 0;
     while (!done && SDL_GetTicks() < end) {
         SDL_SetRenderDrawColor(renderer, 24, 24, 28, 255);
@@ -173,6 +179,43 @@ static int read_input(const char *kind) {
                     (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || e.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)) {
                     printf("pad %s\n", e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? "lefttrigger" : "righttrigger");
                     done = 1;
+                }
+                break;
+            case SDL_EVENT_MOUSE_MOTION:
+                if (want_mouse && SDL_GetTicks() > start_time + 100) {
+                    motion_acc_x += e.motion.xrel;
+                    motion_acc_y += e.motion.yrel;
+                    if (fabsf(motion_acc_y) > 35.0f && fabsf(motion_acc_y) > fabsf(motion_acc_x) * 1.2f) {
+                        printf("mouse %s\n", motion_acc_y < 0.0f ? "motion_up" : "motion_down");
+                        done = 1;
+                    } else if (fabsf(motion_acc_x) > 35.0f && fabsf(motion_acc_x) > fabsf(motion_acc_y) * 1.2f) {
+                        printf("mouse %s\n", motion_acc_x < 0.0f ? "motion_left" : "motion_right");
+                        done = 1;
+                    }
+                }
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (want_mouse) {
+                    const char *btn = e.button.button == SDL_BUTTON_LEFT   ? "left" :
+                                      e.button.button == SDL_BUTTON_RIGHT  ? "right" :
+                                      e.button.button == SDL_BUTTON_MIDDLE ? "middle" :
+                                      e.button.button == SDL_BUTTON_X1     ? "x1" :
+                                      e.button.button == SDL_BUTTON_X2     ? "x2" : NULL;
+                    if (btn) {
+                        printf("mouse %s\n", btn);
+                        done = 1;
+                    }
+                }
+                break;
+            case SDL_EVENT_MOUSE_WHEEL:
+                if (want_mouse) {
+                    if (e.wheel.y > 0.0f) {
+                        printf("mouse wheelup\n");
+                        done = 1;
+                    } else if (e.wheel.y < 0.0f) {
+                        printf("mouse wheeldown\n");
+                        done = 1;
+                    }
                 }
                 break;
             default:

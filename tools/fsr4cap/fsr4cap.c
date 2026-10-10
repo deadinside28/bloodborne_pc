@@ -202,6 +202,9 @@ int main(int argc, char** argv) {
              argc > 5 && strcmp(argv[5], "noise") == 0 ? "noise_" : "", rw, rh, ow, oh);
     CaptureInstall(device, list, capture_dir);
 
+    // AMD's upscaler DLL expects amdxc64.dll to already be loaded into the process.
+    LoadLibraryA("amdxc64.dll");
+
     // AMD's upscaler DLL exports the FidelityFX API itself; the loader only for one that does not.
     HMODULE api = LoadLibraryA("amd_fidelityfx_upscaler_dx12.dll");
     if (!api || !GetProcAddress(api, "ffxCreateContext")) {

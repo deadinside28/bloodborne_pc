@@ -45,7 +45,7 @@ if [[ -e /etc/NIXOS && ${BB_FSR4CAP_RUNNER:-} != steam ]] && ! command -v umu-ru
         cp -- "$(dirname -- "$0")/capture_all.sh" "$(dirname -- "$0")/proton.sh" "$host/"
         unit=bbport-fsr4cap-$$
         settings=()
-        for name in PROTONPATH FSR4CAP_VERSION BB_FSR4CAP_FP8 VKD3D_DISABLE_EXTENSIONS WINEDEBUG; do
+        for name in PROTONPATH FSR4CAP_VERSION BB_FSR4CAP_FP8 VKD3D_DISABLE_EXTENSIONS WINEDEBUG FSR4_UPGRADE; do
             if [[ -n ${!name+set} ]]; then settings+=("--setenv=$name=${!name}"); fi
         done
         # A login shell: the user's PATH (nix-shell) and NIX_PATH.
@@ -102,6 +102,7 @@ first=(1920x1080 1920x1080)
 failures=()
 no_runtime=0
 chosen=
+only_fp8=0
 for candidate in "${candidates[@]}"; do
     export PROTONPATH=$candidate
     echo "Proton: $PROTONPATH"
@@ -115,6 +116,14 @@ for candidate in "${candidates[@]}"; do
         no_runtime=$((no_runtime + 1))
         failures+=("${candidate##*/}: its Steam runtime is not installed")
     else
+        # On RDNA4 the AMD DLL dispatches the FP8 matrix variant and fails if cooperative matrices are hidden:
+        variant=fp8
+        if capture "${first[@]}"; then
+            chosen=$candidate
+            only_fp8=1
+            break
+        fi
+        variant=int8
         # "no version matching": the DLL offered FSR 3/2 only under this vkd3d-proton.
         failures+=("${candidate##*/}: $(failure_reason "$R")")
     fi
@@ -131,26 +140,6 @@ if [[ -z $chosen ]]; then
          "the assets on a PC with a Radeon RX 7000/9000 and copy the fsr4_411 folder over." >&2
     tail -5 "$R/umu.log" >&2 2>/dev/null || true
     exit 5
-fi
-progress "${first[@]}"
-
-# The FP8 variant: the same size with the matrices visible. Another variant when its shaders differ.
-rm -rf "$R/fp8"
-fp8=0
-if [[ ${BB_FSR4CAP_FP8:-auto} != 0 ]]; then
-    [[ ${BB_FSR4CAP_FP8:-auto} != 1 ]] || fp8_config=wmma_rdna3_workaround
-    variant=fp8
-    shaders() { (cd "$1" 2>/dev/null && ls cs_*.dxil 2>/dev/null); }
-    if capture "${first[@]}" &&
-       [[ $(shaders "$R/fp8/capture_${first[0]}_${first[1]}") != "$(shaders "$R/capture_${first[0]}_${first[1]}")" ]]; then
-        fp8=1
-        total=40
-        progress "${first[@]}"
-    else
-        rm -rf "$R/fp8"
-        echo "FP8 variant: not offered on this GPU (RDNA4 only), INT8 only"
-    fi
-    variant=int8
 fi
 
 record() { # record <render WxH> <output WxH>
@@ -183,9 +172,40 @@ record_all() {
         record $c || return
     done
 }
-record_all
-if [[ $fp8 == 1 ]]; then
+
+if [[ $only_fp8 == 1 ]]; then
+    echo "RDNA4 GPU detected: DLL runs the FP8 cooperative matrix variant"
+    rm -rf "$R"/capture_*
+    fp8=1
     variant=fp8
-    record_all || true
-    variant=int8
+    progress "${first[@]}"
+    record_all
+else
+    progress "${first[@]}"
+
+    # The FP8 variant: the same size with the matrices visible. Another variant when its shaders differ.
+    rm -rf "$R/fp8"
+    fp8=0
+    if [[ ${BB_FSR4CAP_FP8:-auto} != 0 ]]; then
+        [[ ${BB_FSR4CAP_FP8:-auto} != 1 ]] || fp8_config=wmma_rdna3_workaround
+        variant=fp8
+        shaders() { (cd "$1" 2>/dev/null && ls cs_*.dxil 2>/dev/null); }
+        if capture "${first[@]}" &&
+           [[ $(shaders "$R/fp8/capture_${first[0]}_${first[1]}") != "$(shaders "$R/capture_${first[0]}_${first[1]}")" ]]; then
+            fp8=1
+            total=40
+            progress "${first[@]}"
+        else
+            rm -rf "$R/fp8"
+            echo "FP8 variant: not offered on this GPU (RDNA4 only), INT8 only"
+        fi
+        variant=int8
+    fi
+
+    record_all
+    if [[ $fp8 == 1 ]]; then
+        variant=fp8
+        record_all || true
+        variant=int8
+    fi
 fi

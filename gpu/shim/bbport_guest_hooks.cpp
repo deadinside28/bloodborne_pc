@@ -336,6 +336,12 @@ void OnTrap(int sig, siginfo_t* info, void* context) {
         previous_action.sa_handler(sig);
         return;
     }
+    // Defensive fallback: if this is a trace/single-step trap (e.g. from debugger watchpoint) or TF is set,
+    // clear TF and return safely instead of crashing the process.
+    if (info && (info->si_code == 2 /*TRAP_TRACE*/ || (g[REG_EFL] & 0x100))) {
+        g[REG_EFL] &= ~0x100;
+        return;
+    }
     signal(SIGTRAP, SIG_DFL);
     raise(SIGTRAP);
 }

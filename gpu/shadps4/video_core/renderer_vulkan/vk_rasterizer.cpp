@@ -11,6 +11,8 @@
 #include "game_profile.h"
 #include "bbport_ce_stats.h"
 #include "bbport_toggles.h"
+#include "bbport_settings.h"
+#include "cutscene_detector.h"
 #include "bbport_write_log.h"
 #include "bbport_free_check.h"
 #include "bbport_guest_memory.h"
@@ -702,7 +704,8 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     }
     // bbport: scene color: a full-size RGBA16F target drawn with the scene depth.
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth() &&
-        cb_descs[0].first && std::popcount(key.mrt_mask) <= 2) {
+        cb_descs[0].first && std::popcount(key.mrt_mask) <= 2 &&
+        texture_cache.HasImage(cb_descs[0].first) && texture_cache.HasImage(db_desc.first)) {
         const auto& color = texture_cache.GetImage(cb_descs[0].first);
         const auto& depth = texture_cache.GetImage(db_desc.first);
         if (color.info.pixel_format == vk::Format::eR16G16B16A16Sfloat &&
@@ -812,7 +815,11 @@ u32 VerifyInterval() {
 bool Rasterizer::DrawPipeWanted() {
     const char* env = std::getenv("BB_DRAW_PIPE");
     if (env && env[0]) {
-        return env[0] == '1';
+        return env[0] != '0';
+    }
+    const auto& s = BbSettings::Get();
+    if (s.draw_pipe.load() == BbSettings::DrawPipeOff) {
+        return false;
     }
     // Stage B spins while draws flow. Measured ahead with 16 threads (+19%) and with 4 cores /
     // 8 threads (taskset, Steam Deck-like: +18%).
@@ -820,7 +827,25 @@ bool Rasterizer::DrawPipeWanted() {
 }
 
 bool Rasterizer::UseDrawPipe() const {
-    return draw_pipe && !host_markers_enabled && !BbToggle::Disabled(BbToggle::DrawPipeline);
+    if (!draw_pipe || host_markers_enabled || BbToggle::Disabled(BbToggle::DrawPipeline)) {
+        return false;
+    }
+    const int mode = BbSettings::Get().draw_pipe.load();
+    if (mode == BbSettings::DrawPipeOff) {
+        return false;
+    }
+    // Dynamic cutscene detection from Debugger
+    if (Debugger::CutsceneDetector::Get().IsCutsceneActive()) {
+        return false;
+    }
+    if (mode == BbSettings::DrawPipeHybrid) {
+        // Hybrid mode: cutscenes and cinematic camera passes use user clip planes.
+        // Run them synchronously on Stage A to guarantee 100% texture and mesh fidelity.
+        if (Regs().clipper_control.user_clip_plane_enable != 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool Rasterizer::OnStageA() const {

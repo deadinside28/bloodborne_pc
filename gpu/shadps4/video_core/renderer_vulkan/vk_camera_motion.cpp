@@ -176,12 +176,65 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
 CameraMotion::~CameraMotion() = default;
 
 float CameraMotion::VerticalFov() const noexcept {
-    return 2.0f * std::atan(1.0f / std::abs(current.proj[1]));
+    if (std::abs(current.proj[1]) < 1e-4f || !std::isfinite(current.proj[1])) {
+        return 0.7853982f;
+    }
+    const float fov = 2.0f * std::atan(1.0f / std::abs(current.proj[1]));
+    if (fov <= 0.05f || fov >= 3.10f || !std::isfinite(fov)) {
+        return 0.7853982f;
+    }
+    return fov;
 }
 
 float CameraMotion::Near() const noexcept {
     // depth = zs + zo / z is 0 at the near plane.
-    return -current.proj[3] / current.proj[2];
+    if (std::abs(current.proj[2]) > 1e-6f) {
+        const float n = -current.proj[3] / current.proj[2];
+        if (n > 0.0f && std::isfinite(n)) {
+            return n;
+        }
+    }
+    return 0.1f;
+}
+
+float CameraMotion::Far() const noexcept {
+    const float d = 1.0f - current.proj[2];
+    if (std::abs(d) > 1e-4f) {
+        const float f = -current.proj[3] / d;
+        if (f > 0.0f && std::isfinite(f)) {
+            return f;
+        }
+    }
+    return 3000.0f;
+}
+
+void CameraMotion::GetCameraVectors(float pos[3], float up[3], float right[3],
+                                    float forward[3]) const noexcept {
+    if (current.valid) {
+        pos[0] = current.inv_view[3];
+        pos[1] = current.inv_view[7];
+        pos[2] = current.inv_view[11];
+
+        right[0] = current.inv_view[0];
+        right[1] = current.inv_view[4];
+        right[2] = current.inv_view[8];
+
+        up[0] = current.inv_view[1];
+        up[1] = current.inv_view[5];
+        up[2] = current.inv_view[9];
+
+        forward[0] = current.inv_view[2];
+        forward[1] = current.inv_view[6];
+        forward[2] = current.inv_view[10];
+    } else {
+        pos[0] = pos[1] = pos[2] = 0.0f;
+        right[0] = 1.0f;
+        right[1] = right[2] = 0.0f;
+        up[0] = up[2] = 0.0f;
+        up[1] = 1.0f;
+        forward[0] = forward[1] = 0.0f;
+        forward[2] = 1.0f;
+    }
 }
 
 void CameraMotion::PrintState(int frame) const {
@@ -397,6 +450,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
 }
 
 void CameraMotion::Overlay(VideoCore::ImageId frame) {
+    if (!depth_id || !frame || !texture_cache.HasImage(depth_id) || !texture_cache.HasImage(frame)) return;
     auto& depth = texture_cache.GetImage(depth_id);
     auto& color = texture_cache.GetImage(frame);
     const auto depth_format = depth.info.pixel_format;

@@ -149,6 +149,9 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
 }
 
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    sel.infos.fill(nullptr);
+    sel.modules.fill(nullptr);
+
     compute_key.Deserialize(ar);
 
     ComputePipeline::SerializationSupport sdata{};
@@ -164,6 +167,8 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     Serialization::Archive meta_ar{std::move(meta_blob)};
 
     if (!LoadPipelineStage(meta_ar, 0)) {
+        sel.infos.fill(nullptr);
+        sel.modules.fill(nullptr);
         return false;
     }
 
@@ -219,6 +224,10 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    sel.infos.fill(nullptr);
+    sel.modules.fill(nullptr);
+    sel.fetch_shader.reset();
+
     sel.graphics_key.Deserialize(ar);
 
     GraphicsPipeline::SerializationSupport sdata{};
@@ -234,12 +243,18 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
         Storage::DataBase::Instance().Load(Storage::BlobType::ShaderMeta,
                                            fmt::format("{:#018x}", hash), meta_blob);
         if (meta_blob.empty()) {
+            sel.infos.fill(nullptr);
+            sel.modules.fill(nullptr);
+            sel.fetch_shader.reset();
             return false;
         }
 
         Serialization::Archive meta_ar{std::move(meta_blob)};
 
         if (!LoadPipelineStage(meta_ar, stage_idx)) {
+            sel.infos.fill(nullptr);
+            sel.modules.fill(nullptr);
+            sel.fetch_shader.reset();
             return false;
         }
     }
@@ -447,8 +462,8 @@ void PipelineCache::WarmUp() {
 
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
     if (num_total_pipelines > num_pipelines) {
-        LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
-                    num_total_pipelines - num_pipelines);
+        LOG_INFO(Render, "{} dynamic pipelines will be compiled at runtime",
+                 num_total_pipelines - num_pipelines);
     }
 
     Storage::DataBase::Instance().FinishPreload();

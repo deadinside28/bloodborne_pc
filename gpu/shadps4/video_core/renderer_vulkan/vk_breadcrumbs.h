@@ -46,6 +46,8 @@ void ReportDeviceLost(const char* where);
 void ReportStuck(const char* where);
 /// Frame statistics: per stream, the commands noted and how many the GPU has yet to finish.
 void PrintProgress();
+/// Reads mapped guest memory safely; returns number of bytes read.
+size_t ReadGuest(u64 address, void* out, size_t size);
 
 /// Breadcrumbs around what is recorded on `cmdbuf` right here (not deferred) in the scope.
 class Scope {

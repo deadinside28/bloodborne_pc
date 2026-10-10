@@ -115,6 +115,14 @@ else
         -o "$work/fsr4cap.exe" -ld3d12 -ldxguid -static
 fi
 copy_in "$upscaler" "$work/amd_fidelityfx_upscaler_dx12.dll"
+"$python" -c "
+with open('$work/amd_fidelityfx_upscaler_dx12.dll', 'r+b') as f:
+    d = f.read()
+    if d[0x8b90:0x8b97] == bytes.fromhex('40534883ec4048'):
+        f.seek(0x8b90); f.write(bytes.fromhex('4885d20f95c0c3'))
+    if d[0x98860:0x98863] == bytes.fromhex('48895c'):
+        f.seek(0x98860); f.write(bytes.fromhex('b001c3'))
+"
 rm -f -- "$work/amd_fidelityfx_loader_dx12.dll"
 if [[ -n $loader ]]; then
     copy_in "$loader" "$work/amd_fidelityfx_loader_dx12.dll"

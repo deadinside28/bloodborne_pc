@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <dlfcn.h>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <utility>
@@ -24,7 +26,33 @@ namespace {
 
 std::string AssetDir() {
     const char* dir = std::getenv("BB_FSR4_DIR");
-    return dir && dir[0] ? dir : "fsr4_shaders";
+    if (dir && dir[0]) {
+        return dir;
+    }
+    if (std::filesystem::is_directory("fsr4_shaders")) {
+        return "fsr4_shaders";
+    }
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<void*>(&AssetDir), &info) && info.dli_fname) {
+        std::filesystem::path lib_path(info.dli_fname);
+        std::error_code ec;
+        auto cand1 = lib_path.parent_path().parent_path().parent_path() / "fsr4_shaders";
+        if (std::filesystem::is_directory(cand1, ec)) {
+            return cand1.string();
+        }
+        auto cand2 = lib_path.parent_path().parent_path() / "fsr4_shaders";
+        if (std::filesystem::is_directory(cand2, ec)) {
+            return cand2.string();
+        }
+    }
+    if (const char* home = std::getenv("HOME")) {
+        auto cand3 = std::filesystem::path(home) / ".local/share/bbport/fsr4_shaders";
+        std::error_code ec;
+        if (std::filesystem::is_directory(cand3, ec)) {
+            return cand3.string();
+        }
+    }
+    return "fsr4_shaders";
 }
 
 bool ReadFile(const std::string& path, std::vector<u8>& data) {

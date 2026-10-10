@@ -372,6 +372,7 @@ void AvPlayerState::UpdateEndOfFileState() {
     }
     lock.unlock();
 
+    SetState(AvState::Stop);
     EmitEvent(AvPlayerEvents::StateStop);
 }
 

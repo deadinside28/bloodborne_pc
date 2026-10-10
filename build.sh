@@ -21,6 +21,12 @@ if ! { command -v pkg-config >/dev/null && pkg-config --exists vulkan sdl3 && co
 fi
 read -r -a includes <<< "$(pkg-config --cflags vulkan sdl3)"
 read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3)"
+if [[ -d "$HOME/.local/include" ]]; then
+    includes+=("-I$HOME/.local/include")
+fi
+if [[ -d "$HOME/.local/lib" ]]; then
+    libraries+=("-L$HOME/.local/lib" "-Wl,-rpath,$HOME/.local/lib")
+fi
 # GPU library (shadPS4 video core + drivers), built by CMake into out/gpu/libbbgpu.so.
 # BB_PGO: generate (instrumented build that writes pgo/ while the game runs), use, off.
 # Default: use the profile in pgo/ when there is one. BB_LTO=OFF disables link-time optimization.
@@ -39,9 +45,16 @@ for patch in gpu/patches/fsr-vulkan/*.patch; do
         git -C gpu/third_party/fsr-vulkan apply "$PWD/$patch"
     fi
 done
-cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" \
-    -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" >/dev/null
-echo "GPU library: PGO $pgo, LTO ${BB_LTO:-ON}"
+march_opt=()
+if [[ -n ${BB_MARCH:-} && ${BB_MARCH} != "off" ]]; then
+    march_opt+=("-march=$BB_MARCH")
+fi
+if [[ -f out/gpu/CMakeCache.txt ]] && ! grep -q "$PWD/gpu" out/gpu/CMakeCache.txt 2>/dev/null; then
+    rm -rf out/gpu/CMakeCache.txt out/gpu/CMakeFiles
+fi
+cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="$HOME/.local" -DBB_PGO="$pgo" \
+    -DBB_LTO="${BB_LTO:-ON}" -DBB_MARCH="${BB_MARCH:-off}" -DBB_PGO_DIR="$PWD/pgo" >/dev/null
+echo "GPU library: PGO $pgo, LTO ${BB_LTO:-ON}, MARCH ${BB_MARCH:-off}"
 # A failed GPU build must stop here: an older libbbgpu.so would otherwise be used silently.
 if ! ninja -C out/gpu bbgpu > out/gpu-build.log 2>&1; then
     grep -v '^\[' out/gpu-build.log | tail -40 >&2
@@ -66,19 +79,19 @@ runtime=(src/runtime*.c)
 atrac9=(third_party/LibAtrac9/C/src/*.c)
 if [[ ! -f out/libatrac9.a || -n $(find third_party/LibAtrac9/C/src -newer out/libatrac9.a -name '*.c') ]]; then
     rm -rf out/atrac9 && mkdir -p out/atrac9
-    for source in "${atrac9[@]}"; do "$CC" -std=c99 -O2 -g -w -c "$source" -o "out/atrac9/$(basename "${source%.c}").o"; done
+    for source in "${atrac9[@]}"; do "$CC" -std=c99 -O2 -g -w "${march_opt[@]}" -c "$source" -o "out/atrac9/$(basename "${source%.c}").o"; done
     ar rcs out/libatrac9.a out/atrac9/*.o
 fi
-"$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/vulkan_smoke.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/bb-probe
+"$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie "${march_opt[@]}" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/vulkan_smoke.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/bb-probe
 echo "Built $PWD/out/bb-probe"
 # GPU check for run.sh (live_resolution=auto) and the launcher's gamepad list (--gamepads).
-"$CC" -std=c11 -O2 -Wall -Wextra -Werror "${includes[@]}" tools/gpu_capabilities.c "${libraries[@]}" -o out/bb-gpu-capabilities
+"$CC" -std=c11 -O2 -Wall -Wextra -Werror "${march_opt[@]}" "${includes[@]}" tools/gpu_capabilities.c "${libraries[@]}" -o out/bb-gpu-capabilities
 if [[ ${1:-} == --test ]]; then
-    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${includes[@]}" -I. -Isrc tests/test_pad.c "${libraries[@]}" -o out/pad-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${march_opt[@]}" "${includes[@]}" -I. -Isrc tests/test_pad.c "${libraries[@]}" -o out/pad-test
     out/pad-test
-    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/runtime-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${march_opt[@]}" -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/runtime-test
     out/runtime-test
-    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc tests/test_file_mods.c -o out/file-mods-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${march_opt[@]}" -Isrc tests/test_file_mods.c -o out/file-mods-test
     out/file-mods-test
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_sema.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/sema-test
     out/sema-test

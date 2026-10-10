@@ -796,6 +796,11 @@ void OnStepTrap(int sig, siginfo_t* info, void* ucontext) {
         previous_trap_action.sa_handler(sig);
         return;
     }
+    if (info && (info->si_code == 2 /*TRAP_TRACE*/ ||
+                 (static_cast<ucontext_t*>(ucontext)->uc_mcontext.gregs[REG_EFL] & TrapFlag))) {
+        static_cast<ucontext_t*>(ucontext)->uc_mcontext.gregs[REG_EFL] &= ~TrapFlag;
+        return;
+    }
     signal(SIGTRAP, SIG_DFL);
     raise(SIGTRAP);
 }

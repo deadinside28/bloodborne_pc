@@ -96,7 +96,7 @@ const char16_t* TextOf(u32 id) {
     const Text& t = texts[id - IdBase];
     const GameLanguage game = game_language.load();
     const bool russian = game == GameLanguage::Unknown
-                             ? BbSettings::Get().menu_language == BbSettings::MenuLanguage::Russian
+                             ? BbSettings::Get().menu_language.load() == static_cast<int>(BbSettings::MenuLanguage::Russian)
                              : game == GameLanguage::Russian;
     return russian ? t.russian.c_str() : t.english.c_str();
 }

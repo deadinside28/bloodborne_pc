@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_settings.h"
+#include "bbport_strings.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -26,11 +27,7 @@ float Clamp(float v, float lo, float hi) {
 void Set(Values& v, const std::string& key, const std::string& value) {
     const float f = float(std::atof(value.c_str()));
     const int i = std::atoi(value.c_str());
-    if (key == "menu_language") {
-        if (value == "en") v.menu_language = MenuLanguage::English;
-        else if (value == "ru") v.menu_language = MenuLanguage::Russian;
-        else std::printf("Settings: unknown menu_language '%s' (expected en or ru)\n", value.c_str());
-    } else if (key == "upscaler") {
+    if (key == "upscaler") {
         for (int u = 0; u < UpscalerCount; ++u) {
             if (value == UpscalerName(u)) {
                 v.upscaler = u;
@@ -69,16 +66,44 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fsr4_auto_exposure = i != 0;
     } else if (key == "fsr4_invert_jitter") {
         v.fsr4_invert_jitter = i != 0;
+    } else if (key == "puddle_reflections") {
+        v.puddle_reflections = i != 0;
+    } else if (key == "frame_generation") {
+        v.frame_generation = i != 0;
+    } else if (key == "draw_pipe") {
+        if (value == "off" || value == "0" || value == "false") {
+            v.draw_pipe = DrawPipeOff;
+        } else if (value == "on" || value == "1" || value == "true") {
+            v.draw_pipe = DrawPipeOn;
+        } else {
+            v.draw_pipe = DrawPipeHybrid;
+        }
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
+    } else if (key == "menu_language") {
+        if (value == "en" || value == "english" || value == "0") {
+            v.menu_language = LangEnglish;
+        } else if (value == "pt" || value == "pt_br" || value == "pt-br" || value == "portuguese" || value == "1") {
+            v.menu_language = LangPortuguese;
+        } else if (value == "ru" || value == "russian" || value == "2") {
+            v.menu_language = LangRussian;
+        }
     } else if (key == "output_res") {
         for (int r = 0; r < OutputCount; ++r) {
             if (value == std::to_string(OutputWidths[r]) + "x" + std::to_string(OutputHeights[r])) {
                 v.output_res = r;
             }
         }
+    } else if (key == "mouse_sensitivity") {
+        v.mouse_sensitivity = Clamp(f, 0.05f, 10.0f);
+    } else if (key == "mouse_invert_y") {
+        v.mouse_invert_y = i != 0;
+    } else if (key == "mouse_invert_x") {
+        v.mouse_invert_x = i != 0;
+    } else if (key == "mouse_capture") {
+        v.mouse_capture = i != 0;
     } else {
         for (int e = 0; e < EffectCount; ++e) {
             if (key == Effects[e].key) {
@@ -96,7 +121,7 @@ Values& Get() {
 }
 
 const char* MenuText(const char* english, const char* russian) {
-    return Get().menu_language == MenuLanguage::Russian ? russian : english;
+    return Get().menu_language.load() == LangRussian ? russian : english;
 }
 
 void Load() {
@@ -116,9 +141,17 @@ void Load() {
                 }
             }
         }
-        v.menu_language = lang && (lang[0] == 'r' || lang[0] == 'R') && (lang[1] == 'u' || lang[1] == 'U')
-                              ? MenuLanguage::Russian
-                              : MenuLanguage::English;
+        if (lang) {
+            if (std::strstr(lang, "pt") || std::strstr(lang, "PT")) {
+                v.menu_language = LangPortuguese;
+            } else if (std::strstr(lang, "ru") || std::strstr(lang, "RU")) {
+                v.menu_language = LangRussian;
+            } else {
+                v.menu_language = LangEnglish;
+            }
+        } else {
+            v.menu_language = LangPortuguese;
+        }
     }
     if (FILE* file = std::fopen(Path(), "r")) {
         char line[256];
@@ -146,6 +179,7 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
+        {"BB_DRAW_PIPE", "draw_pipe"},              {"BB_FRAME_GEN", "frame_generation"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -161,12 +195,16 @@ void Load() {
     v.startup_model_lod = v.model_lod;
     v.startup_output_res = v.output_res;
     v.startup_live_resolution = v.live_resolution;
+    v.startup_draw_pipe = v.draw_pipe.load();
+    v.startup_frame_generation = v.frame_generation.load();
 }
 
-void ConfigureUpscalerSupport(bool fsr4, bool fsr411) {
+void ConfigureUpscalerSupport(bool fsr4, bool fsr411, bool fsr411_fp8, bool fsr411_fp8emu) {
     auto& v = Get();
     v.fsr4_supported = fsr4;
     v.fsr411_supported = fsr4 && fsr411;
+    v.fsr411_fp8 = fsr411_fp8;
+    v.fsr411_fp8emu = fsr411_fp8emu;
     const int requested = v.upscaler;
     if ((requested == UpscalerFsr4 && !v.fsr4_supported) ||
         (requested == UpscalerFsr411 && !v.fsr411_supported)) {
@@ -222,7 +260,7 @@ void Save() {
         return std::string(text);
     };
     const auto flag = [](bool value) { return std::string(value ? "1" : "0"); };
-    put("menu_language", v.menu_language == MenuLanguage::Russian ? "ru" : "en");
+    put("menu_language", LanguageCode(v.menu_language.load()));
     put("upscaler", UpscalerName(v.upscaler));
     put("preset", std::to_string(v.preset.load()));
     put("sharpen", flag(v.sharpen));
@@ -237,6 +275,9 @@ void Save() {
     put("show_fps", flag(v.show_fps));
     put("fsr4_auto_exposure", flag(v.fsr4_auto_exposure));
     put("fsr4_invert_jitter", flag(v.fsr4_invert_jitter));
+    put("puddle_reflections", flag(v.puddle_reflections.load()));
+    put("frame_generation", flag(v.frame_generation.load()));
+    put("draw_pipe", std::to_string(int(v.draw_pipe.load())));
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         put(Effects[e].key, flag(v.effects[e]));
@@ -246,6 +287,10 @@ void Save() {
                           std::to_string(OutputHeights[v.output_res]));
     // Read by run.sh at start.
     put("live_resolution", v.live_resolution < 0 ? "auto" : flag(v.live_resolution != 0));
+    put("mouse_sensitivity", fixed(v.mouse_sensitivity.load(), 2));
+    put("mouse_invert_y", flag(v.mouse_invert_y.load()));
+    put("mouse_invert_x", flag(v.mouse_invert_x.load()));
+    put("mouse_capture", flag(v.mouse_capture.load()));
     if (v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));
     }
@@ -308,6 +353,20 @@ const char* PresetName(int preset) {
 const char* UpscalerName(int upscaler) {
     static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
+}
+
+const char* LanguageCode(int lang) {
+    static constexpr const char* codes[LangCount] = {"en", "pt_br", "ru"};
+    return codes[std::clamp(lang, 0, LangCount - 1)];
+}
+
+const char* LanguageName(int lang) {
+    static constexpr const char* names[LangCount] = {"English", "Português (Brasil)", "Русский"};
+    return names[std::clamp(lang, 0, LangCount - 1)];
+}
+
+const char* EffectLabel(int effect_index, int lang) {
+    return BbStrings::EffectLabel(effect_index, lang);
 }
 
 } // namespace BbSettings

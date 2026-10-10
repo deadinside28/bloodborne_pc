@@ -16,6 +16,10 @@ add_compile_options(-fno-omit-frame-pointer)
 # profile). Covers bbgpu and the static libraries linked into it. No -march: the same build
 # runs on the Steam Deck.
 option(BB_LTO "Link-time optimization of bbgpu" ON)
+set(BB_MARCH "off" CACHE STRING "Target CPU architecture for compiler optimizations (-march)")
+if (NOT BB_MARCH STREQUAL "off")
+    add_compile_options(-march=${BB_MARCH})
+endif()
 set(BB_PGO "off" CACHE STRING "Profile-guided optimization: off, generate, use")
 set(BB_PGO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../pgo" CACHE PATH "Profile directory")
 if (BB_LTO)
@@ -38,6 +42,10 @@ elseif (BB_PGO STREQUAL "use")
     # (or built differently for it, bbgpu_init) are compiled without it.
     add_compile_options(-fprofile-use=${BB_PGO_DIR} -fprofile-partial-training
                         -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch)
+endif()
+
+if(IS_DIRECTORY "$ENV{HOME}/.local/lib")
+    link_directories("$ENV{HOME}/.local/lib")
 endif()
 
 find_package(Vulkan REQUIRED)
@@ -139,7 +147,11 @@ add_dependencies(bbgpu host_shaders)
 target_sources(bbgpu PRIVATE third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp
     third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp
     third_party/imgui/backends/imgui_impl_vulkan.cpp)
-target_include_directories(bbgpu PRIVATE third_party/imgui third_party/imgui/backends)
+target_include_directories(bbgpu PRIVATE third_party/imgui third_party/imgui/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_CURRENT_SOURCE_DIR}/../debugger ${CMAKE_CURRENT_SOURCE_DIR}/../ui)
+file(GLOB DEBUGGER_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../debugger/*.cpp)
+file(GLOB UI_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../ui/*.cpp)
+target_sources(bbgpu PRIVATE ${DEBUGGER_SOURCES} ${UI_SOURCES})
 # Dear ImGui stays private to libbbgpu.so. The library is linked into bb-probe, so its exports are
 # in the global symbol scope; a Vulkan layer carrying its own Dear ImGui without -Bsymbolic
 # (vkShade 0.1) had its ImGui_ImplVulkan_Init bound to this copy, which called the Vulkan loader
@@ -160,7 +172,10 @@ target_compile_options(bbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-f
 target_compile_options(bbgpu PRIVATE -ftls-model=initial-exec)
 # Runtime symbols (runtime_memory_*, runtime_process_*) resolve against bb-probe.
 target_link_options(bbgpu PRIVATE -Wl,--allow-shlib-undefined)
-target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
+if(IS_DIRECTORY "$ENV{HOME}/.local/lib")
+    target_link_options(bbgpu PRIVATE -Wl,-rpath,"$ENV{HOME}/.local/lib")
+endif()
+target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan ffx-vulkan::framegeneration-presenter-policy)
 target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::X11 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 
@@ -201,7 +216,11 @@ add_executable(camera-motion-test EXCLUDE_FROM_ALL ../tests/test_camera_motion.c
 target_include_directories(camera-motion-test PRIVATE shim shadps4 ${SHADER_INCLUDE} third_party/gcn/include)
 target_compile_options(camera-motion-test PRIVATE -UNDEBUG -fPIC)
 target_link_libraries(camera-motion-test PRIVATE bbgpu)
-add_dependencies(camera-motion-test host_shaders)
+add_executable(frame-generation-test EXCLUDE_FROM_ALL ../tests/test_frame_generation.cpp ../tests/test_gpu_runtime_stubs.cpp)
+target_include_directories(frame-generation-test PRIVATE shim shadps4 ${SHADER_INCLUDE} third_party/gcn/include third_party/fsr-vulkan/include)
+target_compile_options(frame-generation-test PRIVATE -UNDEBUG -fPIC)
+target_link_libraries(frame-generation-test PRIVATE bbgpu)
+add_dependencies(frame-generation-test host_shaders)
 
 add_executable(translation-memory-test EXCLUDE_FROM_ALL ../tests/test_translation_memory.cpp
     ../tests/test_gpu_runtime_stubs.cpp)
@@ -213,7 +232,8 @@ target_link_libraries(translation-memory-test PRIVATE bbgpu)
 
 # bbport: FSR 4 benchmark outside the game (tools/fsr4_bench.cpp): ninja -C out/gpu fsr4-bench.
 add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_support.cpp
-    shim/bbport_settings.cpp)
+    shim/bbport_settings.cpp
+    shim/bbport_strings.cpp)
 target_include_directories(upscaler-support-test PRIVATE shim)
 target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 

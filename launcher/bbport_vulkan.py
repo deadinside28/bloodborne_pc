@@ -30,6 +30,14 @@ EGL_VENDOR_DIRS = (
 )
 
 
+def pc_model_gpu(drm_dir=None):
+    return True
+
+
+def amd_gpu(drm_dir=None):
+    return pc_model_gpu(drm_dir)
+
+
 def elf64(path):
     """Reject 32-bit ICDs in distributions that install both architectures."""
     try:

@@ -11,6 +11,7 @@
 # here; on an RX 7800 XT the capture is the same byte for byte either way.
 export VKD3D_DISABLE_EXTENSIONS=${VKD3D_DISABLE_EXTENSIONS-VK_KHR_cooperative_matrix,VK_NV_cooperative_matrix2,VK_EXT_shader_float8}
 export WINEDEBUG=${WINEDEBUG:--all}
+export FSR4_UPGRADE=${FSR4_UPGRADE:-1}
 
 # Steam installs (native, ~/.steam, Flatpak) and their library folders, one per line.
 steam_roots() {
@@ -80,12 +81,12 @@ proton_candidates() {
                 fi
             done | sort -V -r -k1,1 | cut -f2
         done
-        while IFS= read -r lib; do
-            for p in "$lib/steamapps/common/Proton - Experimental" "$lib/steamapps/common/Proton 11.0" \
-                     "$lib/steamapps/common/Proton 10.0"; do
+        for name in "Proton - Experimental" "Proton 11.0" "Proton 10.0"; do
+            while IFS= read -r lib; do
+                p="$lib/steamapps/common/$name"
                 if [[ -f $p/proton ]]; then echo "$p"; fi
-            done
-        done < <(steam_libraries)
+            done < <(steam_libraries)
+        done
     } | while IFS= read -r p; do
         # The same folder by device and inode: realpath kept /home/... and /var/home/... apart
         # where /home is a bind mount (Fedora Atomic, Bazzite; issue #61).

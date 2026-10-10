@@ -115,7 +115,10 @@ public:
         return values[id.index].object;
     }
 
-    bool is_allocated(SlotId id) const {
+    bool is_allocated(SlotId id) const noexcept {
+        if (!id || id.index / 64 >= stored_bitset.size()) {
+            return false;
+        }
         return ReadStorageBit(id.index);
     }
 

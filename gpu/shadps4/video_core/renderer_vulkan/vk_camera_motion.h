@@ -58,9 +58,14 @@ public:
     [[nodiscard]] std::array<u32, 2> RenderSize() const noexcept {
         return render_size;
     }
-    /// Vertical field of view and near/far planes of the current camera.
     [[nodiscard]] float VerticalFov() const noexcept;
     [[nodiscard]] float Near() const noexcept;
+    [[nodiscard]] float Far() const noexcept;
+    void GetCameraVectors(float pos[3], float up[3], float right[3], float forward[3]) const noexcept;
+    void GetJitter(float& x, float& y) const noexcept {
+        x = jitter[0];
+        y = jitter[1];
+    }
     // Current projection, previous projection, and row Z of previous-view * inverse-view.
     [[nodiscard]] std::array<std::array<float, 4>, 3> TaaDepthParameters() const noexcept;
     /// bbport: the matrices and jitter of the motion of this frame, printed with an upscaler dump

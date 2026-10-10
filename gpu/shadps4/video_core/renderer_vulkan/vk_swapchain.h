@@ -59,6 +59,10 @@ public:
         return !zero_extent && swapchain;
     }
 
+    vk::PresentModeKHR GetPresentMode() const noexcept {
+        return present_mode;
+    }
+
     u32 GetWidth() const {
         return width;
     }

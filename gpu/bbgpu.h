@@ -30,8 +30,15 @@ int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* Mouse motion and wheel accumulated since last call. */
+void bbgpu_get_mouse_motion(float *dx, float *dy, int *wheel);
+float bbgpu_get_mouse_sensitivity(void);
+int bbgpu_get_mouse_invert_y(void);
+int bbgpu_get_mouse_invert_x(void);
 /* Patches the loaded image before the game runs (image still writable): libGnm entry hooks. */
 void bbgpu_patch_image(unsigned char *image, uint64_t size);
+uintptr_t bbgpu_get_guest_image_base(void);
+uint64_t bbgpu_get_guest_image_size(void);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 #ifdef __cplusplus

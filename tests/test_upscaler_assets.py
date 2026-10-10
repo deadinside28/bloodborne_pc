@@ -37,3 +37,17 @@ class UpscalerAssetsTests(unittest.TestCase):
             self.assertIn('initializer.bin', fsr411_problem(root, '1920x1080', 1))
             (folder / 'initializer.bin').write_bytes(bytes(131072))
             self.assertIsNone(fsr411_problem(root, '1920x1080', 1))
+
+    def test_fp8_model_recognized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = root / 'fp8' / 't1080_m0'
+            folder.mkdir(parents=True)
+            names = ['spd', 'prepass', 'pass0_post', 'postpass', 'rcas']
+            for i in range(1, 13):
+                names.extend([f'pass{i}', f'pass{i}_post'])
+            for name in names:
+                (folder / (name + '.spv')).write_bytes(bytes(20))
+            (folder / 'initializer.bin').write_bytes(bytes(131072))
+            self.assertIsNone(fsr411_problem(root, '1920x1080', 1))
+

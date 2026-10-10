@@ -206,9 +206,13 @@ public:
                                          AmdGpu::BorderColorBuffer border_color_base,
                                          bool is_depth, float extra_lod_bias = 0.0f);
 
+    [[nodiscard]] bool HasImage(ImageId id) const noexcept {
+        return id && slot_images.is_allocated(id);
+    }
+
     /// Retrieves the image with the specified id.
-    Image* TryGetImage(ImageId id, u64 uid) {
-        if (!slot_images.is_allocated(id)) return nullptr;
+    Image* TryGetImage(ImageId id, u64 uid = 0) {
+        if (!HasImage(id)) return nullptr;
         auto& image = slot_images[id];
         return !uid || image.image_uid == uid ? &image : nullptr;
     }

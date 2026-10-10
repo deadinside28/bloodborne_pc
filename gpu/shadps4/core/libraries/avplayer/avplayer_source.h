@@ -135,6 +135,12 @@ public:
         return m_cv.wait_for(lock, timeout, std::move(pred));
     }
 
+    template <class Pred, class Rep, class Period>
+    bool WaitFor(std::chrono::duration<Rep, Period> timeout, std::stop_token stop, Pred pred) {
+        std::unique_lock lock(m_mutex);
+        return m_cv.wait_for(lock, std::move(stop), timeout, std::move(pred));
+    }
+
     void Notify() {
         std::unique_lock lock(m_mutex);
         m_cv.notify_all();

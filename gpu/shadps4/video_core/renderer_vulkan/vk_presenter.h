@@ -48,6 +48,7 @@ enum SchedulerType {
 };
 
 class Rasterizer;
+class FrameGenerationManager;
 
 class Presenter {
 public:
@@ -110,6 +111,17 @@ private:
     void RecreateFrame(Frame* frame, u32 width, u32 height);
 
     void SetExpectedGameSize(s32 width, s32 height);
+
+    bool BlitAndPresentFrame(vk::Image src_image, u32 src_w, u32 src_h,
+                             const Frame* frame, bool signal_frame_done,
+                             bool is_generated = false);
+
+    void RecordPresentCommands(vk::CommandBuffer cmdbuf, vk::Image swapchain_image,
+                               vk::Extent2D extent, vk::Image src_image,
+                               u32 src_w, u32 src_h, bool is_generated = false);
+
+    void PresentWithFrameGeneration(Frame* frame, FrameGenerationManager* fg,
+                                    std::chrono::steady_clock::duration elapsed);
 
 private:
     float expected_ratio{1920.0 / 1080.0f};

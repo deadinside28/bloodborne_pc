@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Dockerfile for building portable BBPort releases on Ubuntu 22.04 (glibc 2.35)
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 1. Repositories and base build toolchain
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential make ninja-build software-properties-common nasm \
+    ca-certificates curl wget gnupg git pkg-config \
+    python3 python3-pip && \
+    add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
+    curl -q -sSf https://packages.lunarg.com/lunarg-signing-key-pub.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/lunarg.gpg && \
+    curl -sSf https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list -o /etc/apt/sources.list.d/lunarg-vulkan.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    gcc-13 g++-13 \
+    libxxhash-dev \
+    libx11-dev libxcb1-dev libwayland-dev libxext-dev \
+    libasound2-dev libpulse-dev libxcursor-dev libxinerama-dev libxi-dev libxrandr-dev libxss-dev libxxf86vm-dev libxkbcommon-dev libdrm-dev libgbm-dev libxtst-dev \
+    libzstd-dev libgl1-mesa-dev libvulkan-dev glslang-tools && \
+    rm -rf /var/lib/apt/lists/*
+
+# Configure GCC 13 as the default compiler
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 --slave /usr/bin/g++ g++ /usr/bin/g++-13 && \
+    update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-13 100 && \
+    update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-13 100
+
+ENV CC=gcc-13
+ENV CXX=g++-13
+
+# Modern CMake via pip
+RUN pip3 install --no-cache-dir cmake
+
+# Modern Vulkan-Headers (vulkan-sdk-1.4.363.0) matching modern drivers & shadPS4 requirements
+RUN git clone --depth 1 --branch vulkan-sdk-1.4.363.0 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers && \
+    cmake -G Ninja -S /tmp/vulkan-headers -B /tmp/vulkan-headers/build-usr -DCMAKE_INSTALL_PREFIX=/usr && \
+    cmake --build /tmp/vulkan-headers/build-usr --target install && \
+    cmake -G Ninja -S /tmp/vulkan-headers -B /tmp/vulkan-headers/build-local -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake --build /tmp/vulkan-headers/build-local --target install && \
+    rm -rf /tmp/vulkan-headers
+
+# Modern Boost headers (v1.84.0) for C++20/C++23 std::span and small_vector support
+RUN curl --http1.1 -fSL --retry 3 https://archives.boost.io/release/1.84.0/source/boost_1_84_0.tar.gz -o /tmp/boost.tar.gz && \
+    tar -xzf /tmp/boost.tar.gz -C /tmp boost_1_84_0/boost && \
+    rm -f /tmp/boost.tar.gz && \
+    rm -rf /usr/include/boost /usr/local/include/boost && \
+    mv /tmp/boost_1_84_0/boost /usr/local/include/boost && \
+    ln -s /usr/local/include/boost /usr/include/boost && \
+    rm -rf /tmp/boost_1_84_0
+
+# 2. Build and install SDL3 from official source
+RUN git clone --depth 1 https://github.com/libsdl-org/SDL.git -b main /tmp/sdl3 && \
+    cmake -G Ninja -S /tmp/sdl3 -B /tmp/sdl3/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DSDL_TEST_ENABLES=OFF -DSDL_X11_XSCRNSAVER=OFF -DSDL_X11_XTEST=OFF && \
+    cmake --build /tmp/sdl3/build -j$(nproc) --target install && \
+    rm -rf /tmp/sdl3
+
+# 2.5. Minimal self-contained FFmpeg (H.264, AAC, MP4 for game cutscenes)
+RUN git clone --depth 1 --branch n6.1 https://github.com/FFmpeg/FFmpeg.git /tmp/ffmpeg && \
+    cd /tmp/ffmpeg && \
+    ./configure --prefix=/usr/local \
+        --enable-shared --enable-pic --disable-static \
+        --disable-programs --disable-doc --disable-everything \
+        --enable-decoder=h264,aac,mp3,pcm_s16le \
+        --enable-demuxer=mov,mp4,m4a,3gp,3g2,matroska \
+        --enable-parser=h264,aac \
+        --enable-protocol=file \
+        --enable-swscale --enable-swresample && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/ffmpeg
+
+# 3. Modern fmt (10.x)
+RUN git clone --depth 1 --branch 10.2.1 https://github.com/fmtlib/fmt.git /tmp/fmt && \
+    cmake -G Ninja -S /tmp/fmt -B /tmp/fmt/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DFMT_TEST=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=ON && \
+    cmake --build /tmp/fmt/build -j$(nproc) --target install && \
+    rm -rf /tmp/fmt
+
+# 4. Zydis + Zycore (disassembler)
+RUN git clone --depth 1 --recursive https://github.com/zyantific/zydis.git /tmp/zydis && \
+    cmake -G Ninja -S /tmp/zydis/dependencies/zycore -B /tmp/zydis/dependencies/zycore/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DZYCORE_BUILD_SHARED_LIB=ON && \
+    cmake --build /tmp/zydis/dependencies/zycore/build -j$(nproc) --target install && \
+    cmake -G Ninja -S /tmp/zydis -B /tmp/zydis/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DZYDIS_BUILD_SHARED_LIB=ON && \
+    cmake --build /tmp/zydis/build -j$(nproc) --target install && \
+    rm -rf /tmp/zydis
+
+# 5. miniz (compression)
+RUN git clone --depth 1 --branch 3.1.2 https://github.com/richgel999/miniz.git /tmp/miniz && \
+    cmake -G Ninja -S /tmp/miniz -B /tmp/miniz/build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON && \
+    cmake --build /tmp/miniz/build -j$(nproc) --target install && \
+    rm -rf /tmp/miniz
+
+# 6. Header-only libraries: magic_enum, tsl-robin-map, VulkanMemoryAllocator
+RUN git clone --depth 1 --branch v0.9.5 https://github.com/Neargye/magic_enum.git /tmp/magic_enum && \
+    mkdir -p /usr/local/include/magic_enum && \
+    cp /tmp/magic_enum/include/magic_enum/* /usr/local/include/magic_enum/ && \
+    cmake -G Ninja -S /tmp/magic_enum -B /tmp/magic_enum/build -DCMAKE_INSTALL_PREFIX=/usr/local -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF && \
+    cmake --build /tmp/magic_enum/build --target install && \
+    rm -rf /tmp/magic_enum
+
+RUN git clone --depth 1 --branch v1.3.0 https://github.com/Tessil/robin-map.git /tmp/robin_map && \
+    cmake -G Ninja -S /tmp/robin_map -B /tmp/robin_map/build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake --build /tmp/robin_map/build --target install && \
+    rm -rf /tmp/robin_map
+
+RUN git clone --depth 1 --branch v3.1.0 https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git /tmp/vma && \
+    cmake -G Ninja -S /tmp/vma -B /tmp/vma/build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake --build /tmp/vma/build --target install && \
+    rm -rf /tmp/vma
+
+# 7. xbyak (JIT assembler)
+RUN git clone --depth 1 https://github.com/herumi/xbyak.git /tmp/xbyak && \
+    cmake -G Ninja -S /tmp/xbyak -B /tmp/xbyak/build -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake --build /tmp/xbyak/build --target install && \
+    rm -rf /tmp/xbyak
+
+RUN ldconfig
+
+WORKDIR /bbport
+CMD ["bash", "-c", "bash build.sh && python3 package.py --no-build"]
