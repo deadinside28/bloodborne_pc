@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // coop_assets: the Bloodborne (PS4 1.09, CUSA00900) menu files for the
 // "Co-op - menu and text" loose-file mod.
 //

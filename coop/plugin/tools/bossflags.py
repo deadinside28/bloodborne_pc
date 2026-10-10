@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """bossflags.py <dvdroot_ps4>: every boss's defeat flag and the Insight cost of the bells,
 read from the 1.09 dump (the sources of addrs.hpp's kBossFlags and of the free-bells switch).
 

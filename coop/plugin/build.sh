@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # build.sh [eboot.elf]: builds build/bbcoop.so for bbport (desktop and Steam Deck) and,
 # given the decrypted 1.09 ELF, checks every patch and function byte in addrs.hpp
 # against it.

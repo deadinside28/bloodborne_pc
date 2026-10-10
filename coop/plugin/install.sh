@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # install.sh [ssh host]: puts build/bbcoop.so in bbport's plugins folder, and
 # build/mod in its mods folder as "Co-op - menu and text", on this machine or,
 # given one, on that ssh host (a Steam Deck, say). Nothing else is changed.

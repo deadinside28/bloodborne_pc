@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // bbcoop: seamless-style co-op for two players on a private server, as a
 // bbhost (v0.2.17, plugin API 11) plugin. Both machines run it; one is the
 // host, whose world the two play in, the other the guest.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """bbcoop-server: a private Bloodborne online server for two bbhost players on one LAN.
 
 Nothing here talks to any public service. It answers, from memory:

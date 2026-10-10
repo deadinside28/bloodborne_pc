@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """no_walls.py <dvdroot_ps4> <mod folder>: the walls the game raises between areas while two play
 together, taken out as a loose-file mod for bbport (its launcher merges <data>/mods/* at start).
 

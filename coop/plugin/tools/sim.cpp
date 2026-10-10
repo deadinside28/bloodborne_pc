@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sim <host.so> <guest.so> <eboot.elf> <workdir>: two copies of the built
 // plugin (two files: dlopen loads one path once) in one process, each with a stand-in bbhost API and a pretend game
 // (a few objects at the offsets the plugin reads), talking over loopback

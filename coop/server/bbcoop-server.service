@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # A user service: copy to ~/.config/systemd/user/, set the path below to your checkout, then
 # systemctl --user enable --now bbcoop-server
 [Unit]

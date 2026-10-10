@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """test_client.py: plays a full co-op summon against bbcoop-server the way two bbhost games do.
 
   guest: logs in, registers its P2P port (STUN + context_start), puts up a co-op sign and

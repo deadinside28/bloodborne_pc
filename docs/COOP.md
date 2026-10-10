@@ -175,8 +175,12 @@ AI coding agents: see [coop/AGENTS.md](../coop/AGENTS.md).
 
 ## Licence note
 
-`gpu/shim/online/`, `gpu/shim/plugins/` and `coop/plugin/tools/coop_assets.cpp` are adapted
-from bbhost and are **GPL-3.0-or-later**, while bbport is GPL-2.0-or-later. Linked together,
-the combined program can only be distributed under GPL-3.0. This needs the maintainer's
-decision before merging (accept GPL-3.0 for builds with online play, keep the online parts
-optional, or replace them with GPL-2.0-compatible code).
+`coop/` is MIT ([coop/LICENSE](../coop/LICENSE)), except
+`coop/plugin/tools/coop_assets.cpp`, which is adapted from bbhost and stays
+GPL-3.0-or-later. No warranty of any kind.
+
+`gpu/shim/online/` and `gpu/shim/plugins/` are adapted from
+[bbhost](https://github.com/droogie/bbhost) and are **GPL-3.0-or-later**, while bbport is
+GPL-2.0-or-later. Linked together, the combined program can only be distributed under
+GPL-3.0. This needs the maintainer's decision before merging (accept GPL-3.0 for builds with
+online play, keep the online parts optional, or replace them with GPL-2.0-compatible code).

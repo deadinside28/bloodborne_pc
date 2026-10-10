@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every address, byte patch and flag bbcoop uses, for the Bloodborne 1.09
 // eboot (US CUSA00900 and EU CUSA03173 share it, SHA-256 d65f0b4f...; the
 // decrypted ELF bbhost runs is 941f887a...).

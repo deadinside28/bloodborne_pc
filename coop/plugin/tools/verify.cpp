@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // verify <eboot.elf>: checks every patch's expected bytes and every called or
 // hooked function's first bytes in addrs.hpp against the decrypted 1.09 ELF,
 // and that each patch's replacement is the same length. Exit 0 when all match.

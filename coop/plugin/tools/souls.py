@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import struct, zlib
 
 def dcx(data):
