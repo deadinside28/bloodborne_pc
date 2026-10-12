@@ -25,6 +25,7 @@
 #include <pthread.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#include <sys/prctl.h>
 #endif
 
 typedef struct { uint64_t address, size, flags; } Segment;
@@ -138,6 +139,24 @@ __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
 #endif
 static ABI void guest_exit(void) { puts("Runtime: process finalizer callback reached"); }
 #ifndef _WIN32
+/* BB_FAULT_WAIT=1: a fatal fault or a GPU-library assertion leaves the process alive, stopped
+ * in its handler, so a debugger can attach to the faulting thread with its registers and stack
+ * still there: bash tools/debug_attach.sh <pid>. Any process of this user may attach
+ * (PR_SET_PTRACER_ANY, set at startup). Exported (-rdynamic): libbbgpu.so calls it too. */
+void bb_fault_wait(const char *what) {
+    const char *wait = getenv("BB_FAULT_WAIT");
+    if (!wait || strcmp(wait, "1")) return;
+    char line[256];
+    snprintf(line, sizeof(line), "bbport: %s; BB_FAULT_WAIT=1: the process stays alive for a debugger:"
+             " bash tools/debug_attach.sh %d\n", what, (int)getpid());
+    { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+    if (fork() == 0) {
+        snprintf(line, sizeof(line), "%s. Waiting for a debugger: bash tools/debug_attach.sh %d", what, (int)getppid());
+        execlp("notify-send", "notify-send", "-u", "critical", "bbport stopped", line, (char *)NULL);
+        _exit(0);
+    }
+    for (;;) pause();
+}
 static void fault(int sig, siginfo_t *info, void *context) {
     /* GPU page tracking (write-protected guest pages) is resolved first. */
     if (gpu_enabled && sig == SIGSEGV && bbgpu_handle_fault(context, info->si_addr)) return;
@@ -197,6 +216,8 @@ static void fault(int sig, siginfo_t *info, void *context) {
             snprintf(line, sizeof(line), "  #%d %p\n", i, frames[i]);
         ssize_t written_=write(2, line, strlen(line)); (void)written_;
     }
+    snprintf(line, sizeof(line), "fault (signal %d)", sig);
+    bb_fault_wait(line);
     _exit(128 + sig);
 }
 #endif
@@ -389,6 +410,7 @@ int main(int argc, char **argv) {
     struct sigaction sa = {0}; sa.sa_sigaction = fault; sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGSEGV, &sa, NULL); sigaction(SIGILL, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
+    { const char *w = getenv("BB_FAULT_WAIT"); if (w && !strcmp(w, "1")) prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0); }
     Dl_info self_info;
     if (dladdr((void *)main,&self_info)) exe_base=(uintptr_t)self_info.dli_fbase;
     struct sigaction dump = {0}; dump.sa_sigaction = thread_dump; dump.sa_flags = SA_SIGINFO|SA_RESTART;
