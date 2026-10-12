@@ -8,6 +8,20 @@ otherwise).
 import os
 
 EN = {
+    # Experimental shaders (shader packs)
+    "Экспериментальные шейдеры": "Experimental shaders",
+    "Замены шейдеров игры, по папке на набор: в ней файлы .spv с именем "
+    "<стадия>_0x<хэш>_<вариант>.spv (см. docs/DEBUGGING.md). Включённые наборы "
+    "копируются в user/shader/patch при запуске; при совпадении файлов побеждает "
+    "набор ниже в списке. Экспериментально: может испортить картинку.":
+        "Replacements for the game's shaders, one folder per pack holding .spv files named "
+        "<stage>_0x<hash>_<perm>.spv (see docs/DEBUGGING.md). Enabled packs are copied into "
+        "user/shader/patch at launch; on the same shader the pack lower in the list wins. "
+        "Experimental: can break the picture.",
+    "Папка шейдеров": "Shaders folder",
+    "Выбрать папку шейдеров": "Choose the shaders folder",
+    "Открыть папку шейдеров": "Open the shaders folder",
+    "Наборов шейдеров нет": "No shader packs",
     # Window, pages, buttons
     "Запустить": "Play",
     "Остановить": "Stop",

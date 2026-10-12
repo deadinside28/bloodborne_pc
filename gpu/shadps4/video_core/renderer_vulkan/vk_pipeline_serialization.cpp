@@ -175,6 +175,9 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     ASSERT(is_new);
     it.value() = std::move(pipeline);
+    // bbport: pipelines restored from the cache register with their modules too, so a shader
+    // patch written at runtime (PollShaderPatches -> ReplaceShader) drops them as well.
+    module_related_pipelines[sel.modules[0]].emplace_back(compute_key);
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
@@ -250,6 +253,11 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
     ASSERT(is_new);
     it.value() = std::move(pipeline);
+    for (const auto& m : sel.modules) {
+        if (m) {
+            module_related_pipelines[m].emplace_back(sel.graphics_key);
+        }
+    }
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
@@ -278,6 +286,19 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             throw Serialization::CorruptData{"damaged SPIR-V in the shader cache"};
         }
         return false;
+    }
+    // bbport: BB_PATCH_SHADERS=1: a patch file replaces a cached translation as it replaces a
+    // fresh one (CompileModule).
+    if (EmulatorSettings.IsPatchShaders()) {
+        if (auto patch = GetShaderPatch(program->info.pgm_hash, program->info.hw_stage, perm_idx,
+                                        "spv")) {
+            LOG_INFO(Loader, "Loaded patch for {} shader {:#x} (cached pipeline)",
+                     program->info.hw_stage, program->info.pgm_hash);
+            std::printf("GPU: shader patch loaded for %s 0x%llx, cached pipeline (BB_PATCH_SHADERS)\n",
+                        fmt::format("{}", program->info.hw_stage).c_str(),
+                        (unsigned long long)program->info.pgm_hash);
+            spv = std::move(*patch);
+        }
     }
 
     // Permutation hash depends on shader variation index. To prevent collisions, we need insert it

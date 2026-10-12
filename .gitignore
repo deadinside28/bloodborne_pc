@@ -23,6 +23,8 @@ perf.data
 /bloodborne_upscalers_*.md
 mods.json
 patches.json
+shaders.json
+shaders_installed.json
 # Local: game logs, messages and archives from users, internal plans
 /logs/
 /message*.txt

@@ -51,6 +51,10 @@ if [[ ${BB_SAVE_LOG:-} == 1 ]]; then
     # Bash builtins only (the AppImage's PATH has no tee).
     exec > >(while IFS= read -r line || [[ -n $line ]]; do printf '%s\n' "$line"; printf '%s\n' "$line" >&3; done) 2>&1
 fi
+# Shader packs enabled in the launcher (Experimental shaders): named here so the log shows them.
+if [[ -n ${BB_SHADER_PACKS:-} ]]; then
+    echo "Shader packs: $BB_SHADER_PACKS (BB_PATCH_SHADERS=1; files in the user folder's shader/patch)"
+fi
 if [[ -z ${PYTHON:-} ]]; then
     PYTHON=$(command -v python3 || true)
     if [[ -z $PYTHON ]]; then

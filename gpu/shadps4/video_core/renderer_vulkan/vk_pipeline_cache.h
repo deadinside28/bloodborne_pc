@@ -155,6 +155,9 @@ public:
     Result GetProgram(PipelineSelection& sel, Shader::HwStage stage, Shader::SwStage l_stage,
                       const Shader::ShaderParams& params, Shader::Backend::Bindings& binding);
 
+    /// bbport: BB_PATCH_SHADERS=1: a patch file written while the game runs replaces its shader
+    /// at once (GPU thread, once a second; see PollShaderPatches in the .cpp).
+    void PollShaderPatches();
     std::optional<vk::ShaderModule> ReplaceShader(vk::ShaderModule module,
                                                   std::span<const u32> spv_code);
 
@@ -194,6 +197,12 @@ private:
     Shader::Profile profile{};
     Shader::Pools pools;
     tsl::robin_map<size_t, std::unique_ptr<Program>> program_cache;
+    /// bbport: shader patches reloaded at runtime (ReplaceShader): the replaced modules and
+    /// their pipelines are kept for the rest of the session, never destroyed (recorded commands
+    /// and prepared draws may still name them; a few MB per reload, a development feature).
+    std::vector<vk::ShaderModule> retired_modules;
+    std::vector<std::unique_ptr<GraphicsPipeline>> retired_graphics_pipelines;
+    std::vector<std::unique_ptr<ComputePipeline>> retired_compute_pipelines;
     /// bbport: exclusive for program/permutation insertions, shared for worker lookups.
     std::shared_mutex programs_mutex;
     u64 prepared_hits = 0, prepared_misses = 0;
