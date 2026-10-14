@@ -78,7 +78,12 @@ static void attach(GuestThread *t) {
     current=t;
 }
 static GuestThread *new_thread(void) {
-    GuestThread *t=calloc(1,sizeof(*t));
+    /* Hybrid locks pack scePthreadSelf() into 40 owner bits, then compare
+     * the unpacked owner with the full handle. Host worker malloc arenas can
+     * return higher addresses, making a thread fail its own owner check and
+     * sleep forever. Records already live until process exit; low anonymous
+     * mappings preserve that lifetime and are zero initialized. */
+    GuestThread *t=runtime_low_map(sizeof(*t),PROT_READ|PROT_WRITE);
     if (!t) return NULL;
     t->attr=(ThreadAttr){.magic=ATTR_MAGIC,.policy=1,.prio=DEFAULT_PRIO,.stack=DEFAULT_STACK,.affinity=0x7f};
     return t;
