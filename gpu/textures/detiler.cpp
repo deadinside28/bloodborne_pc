@@ -241,9 +241,36 @@ void Detiler::TileImage(Image& image, std::span<vk::BufferImageCopy> buffer_copi
     }
     runtime.DownloadImage(&image, staging.buffer, buffer_copies);
     runtime.FlushBarriers();
+    const u32 texels = info.guest_size / (info.num_bits / 8);
+    // bbport: the tiler writes a texel at a time at swizzled addresses. Into host memory (the
+    // game's memory in place, BB_LAYER_MEMORY) each of those writes crossed the bus on its own:
+    // ~4.8 ms for a 1280x720 RGBA8 render target that a compute shader reads as a texel buffer,
+    // four times a frame at 1440p, on an RTX 5090 (PCIe 5; the dispatches themselves took
+    // ~0.1 ms). Tiled into VRAM and copied over in one transfer instead. Only where the tiler
+    // writes every byte of the copy: all levels back to back over guest_size and whole
+    // workgroups (else bytes it leaves alone would be overwritten).
+    const bool host_destination = out_buffer->mem_type == MemoryType::HostCached ||
+                                  out_buffer->mem_type == MemoryType::HostUncached;
+    u64 covered = 0;
+    for (u32 level = 0; level < buffer_copies.size(); ++level) {
+        const auto& mip = info.mips_layout[level];
+        covered = mip.offset == covered ? covered + mip.size : ~0ULL;
+    }
+    if (host_destination && covered == info.guest_size && texels % 64 == 0) {
+        const auto tiled =
+            runtime.GetStagingPool().Request(info.guest_size, MemoryType::DeviceLocal);
+        Dispatch(Pipeline(info, true), {tiled.buffer->Handle(), tiled.offset, info.guest_size},
+                 {staging.buffer->Handle(), staging.offset, info.guest_size}, levels, texels);
+        runtime.AccessBuffer(tiled.buffer, tiled.offset, info.guest_size,
+                             vk::PipelineStageFlagBits2::eComputeShader,
+                             vk::AccessFlagBits2::eShaderWrite);
+        const vk::BufferCopy copy{
+            .srcOffset = tiled.offset, .dstOffset = out_offset, .size = info.guest_size};
+        runtime.CopyBuffer(tiled.buffer, out_buffer, {&copy, 1});
+        return;
+    }
     Dispatch(Pipeline(info, true), {out_buffer->Handle(), out_offset, info.guest_size},
-             {staging.buffer->Handle(), staging.offset, info.guest_size}, levels,
-             info.guest_size / (info.num_bits / 8));
+             {staging.buffer->Handle(), staging.offset, info.guest_size}, levels, texels);
     runtime.AccessBuffer(out_buffer, out_offset, info.guest_size,
                          vk::PipelineStageFlagBits2::eComputeShader,
                          vk::AccessFlagBits2::eShaderWrite);
