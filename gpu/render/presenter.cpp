@@ -124,7 +124,11 @@ void Presenter::SetHDR(bool enable) {
     if (!IsHDRSupported()) {
         return;
     }
-    swapchain.SetHDR(enable);
+    if (swapchain.GetHDR() != enable) {
+        // Recreates the swapchain: no submission meanwhile (see PresentImage).
+        std::scoped_lock lock{Scheduler::submit_mutex};
+        swapchain.SetHDR(enable);
+    }
     hdr.store(enable, std::memory_order_relaxed);
 }
 
@@ -625,16 +629,26 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last) {
     if (width == 0 || height == 0) {
         return false;
     }
+    // bbport: a new swapchain first waits for the device (vkDeviceWaitIdle), which needs every
+    // queue to itself: the recording threads submit to the same queue (BB_ASYNC_SUBMIT). Both at
+    // once on window resizes (validation layer: "VkQueue is simultaneously used in bb:VkRecorder
+    // (vkQueueSubmit) and bb:Present (vkDeviceWaitIdle)") and NVIDIA lost the device (Xid 13
+    // "Subchannel Mismatch", Xid 31 in the host engine). Submissions hold submit_mutex; so does
+    // this, as the recreation after a failed present below did already.
+    const auto recreate = [&] {
+        std::scoped_lock lock{Scheduler::submit_mutex};
+        swapchain.Recreate(width, height);
+    };
     // A resized window (or one minimised at the last try) needs a new swapchain.
     if (width != swapchain.GetWidth() || height != swapchain.GetHeight() ||
         !swapchain.IsPresentable()) {
-        swapchain.Recreate(width, height);
+        recreate();
         if (!swapchain.IsPresentable()) {
             return false;
         }
     }
     if (!swapchain.AcquireNextImage()) {
-        swapchain.Recreate(width, height);
+        recreate();
         if (!swapchain.AcquireNextImage()) {
             // Resized faster than the swapchain can follow: this frame is skipped.
             LOG_WARNING(Render_Vulkan, "Skipping a frame: no swapchain image");
