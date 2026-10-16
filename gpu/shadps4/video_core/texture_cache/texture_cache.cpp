@@ -1384,6 +1384,13 @@ void TextureCache::NoteVramShort() {
     vram_short_until.store(now + 30, std::memory_order_relaxed);
 }
 
+bool TextureCache::VramShort() {
+    const u64 now = u64(std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count());
+    return now < vram_short_until.load(std::memory_order_relaxed);
+}
+
 void TextureCache::RunGarbageCollector() {
     SCOPE_EXIT {
         ++gc_tick;

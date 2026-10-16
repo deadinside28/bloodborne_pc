@@ -356,6 +356,9 @@ private:
     void ReleaseResidencySlot(vk::DeviceMemory memory, u64 offset);
     /// Unbinds a VRAM block of memory the game unmapped (uploaded again if mapped and used).
     void EvictVramBlock(u64 block);
+    /// VRAM short (TextureCache::VramShort): the copies of at least `wanted` blocks unused for
+    /// 2 s go, oldest first, and their slots serve the blocks being bound.
+    void ReclaimVramBlocks(u64 wanted);
     [[nodiscard]] static u32 VramIdleSeconds();
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
@@ -617,6 +620,7 @@ private:
     };
     std::unordered_map<VkDeviceMemory, ResidencyChunk> residency_chunks;
     u32 idle_scan_second = 0;
+    u32 reclaim_failed_second = 0; ///< ReclaimVramBlocks found nothing to drop then
     u32 last_evacuation = 0; ///< ProcessIdleBlocks: when a chunk was last emptied
     u32 block_size{};
     u32 block_shift{};

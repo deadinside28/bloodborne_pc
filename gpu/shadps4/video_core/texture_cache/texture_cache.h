@@ -295,6 +295,9 @@ public:
     /// collector evicts by submissions under pressure again, as before 0.5, instead of keeping
     /// textures unused for seconds.
     static void NoteVramShort();
+    /// bbport: VRAM near the driver's budget or ran out (NoteVramShort) lately: BufferCache drops
+    /// guest copies unused for a while rather than allocating more (ReclaimVramBlocks).
+    static bool VramShort();
 
     template <typename Func>
     void ForEachImageInRegion(VAddr cpu_addr, size_t size, Func&& func) {

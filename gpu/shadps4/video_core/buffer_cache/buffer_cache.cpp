@@ -1500,6 +1500,12 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         vram_blocks += range.end - range.start;
     }
 
+    // bbport: VRAM near full (#163: 4 GB NVIDIA, old memory model, whose copies were never
+    // freed; no system memory for NVIDIA's sparse arena): copies unused for a while give their
+    // slots to these blocks instead of a new allocation the driver refuses.
+    if (vram_blocks > free_slot_count && !LayerMode() && TextureCache::VramShort()) {
+        ReclaimVramBlocks(vram_blocks - free_slot_count);
+    }
     if (vram_blocks != 0) {
         // bbport: the slots of blocks that left VRAM first, block by block. A request of several
         // blocks only ever took new space, and the free slots piled up while new 64 MiB chunks
@@ -1850,8 +1856,16 @@ void BufferCache::EvictVramBlock(u64 block) {
     const VAddr address = block << block_shift;
     for (const auto& arena : arenas) {
         if (arena.cpu_addr <= address && address - arena.cpu_addr < arena.size_bytes) {
-            BindsForArena(&arena)->binds.emplace_back(vk::SparseMemoryBind{
-                .resourceOffset = address - arena.cpu_addr,
+            // One unbind for neighbouring blocks: NVIDIA's vkQueueBindSparse is slow per range.
+            auto& binds = BindsForArena(&arena)->binds;
+            const u64 offset_in_arena = address - arena.cpu_addr;
+            if (!binds.empty() && !binds.back().memory &&
+                binds.back().resourceOffset + binds.back().size == offset_in_arena) {
+                binds.back().size += block_size;
+                continue;
+            }
+            binds.emplace_back(vk::SparseMemoryBind{
+                .resourceOffset = offset_in_arena,
                 .size = block_size,
                 .memory = {},
                 .memoryOffset = 0,
@@ -1866,6 +1880,63 @@ void BufferCache::EvictVramBlock(u64 block) {
     // After the work submitted so far: it may still read the block.
     bind_wait_tick = std::max(bind_wait_tick, scheduler.CurrentTick() - 1);
     BbStats::vram_unmapped_bytes.fetch_add(block_size, std::memory_order_relaxed);
+}
+
+void BufferCache::ReclaimVramBlocks(u64 wanted) {
+    const u32 now = BbStats::coarse_second.load(std::memory_order_relaxed);
+    if (now == reclaim_failed_second) {
+        return; // nothing to drop a moment ago
+    }
+    // Blocks in VRAM not bound for 2 s (so not in the commands being recorded), without data
+    // only the GPU has (as ProcessDemotions): last use, block.
+    std::vector<std::pair<u32, u64>> candidates;
+    for (const auto& range : resident_ranges) {
+        if (!residency_chunks.contains(static_cast<VkDeviceMemory>(range.memory))) {
+            continue; // in place
+        }
+        for (u64 block = range.start; block < range.end; ++block) {
+            const VAddr address = block << block_shift;
+            const u32 used = group_use[address >> USE_GROUP_BITS];
+            if (now - used >= 2 && !in_place_blocks.Contains(block) &&
+                !IsRegionGpuModified(address, block_size) &&
+                !gpu_modified_ranges.Intersects(address, block_size)) {
+                candidates.emplace_back(used, block);
+            }
+        }
+    }
+    // At least 32 MiB at a time: fewer scans and sparse binds.
+    const u64 count =
+        std::min<u64>(candidates.size(), std::max<u64>(wanted, 32_MB >> block_shift));
+    if (count == 0) {
+        reclaim_failed_second = now;
+        return;
+    }
+    const auto end = candidates.begin() + count;
+    std::partial_sort(candidates.begin(), end, candidates.end());
+    std::sort(candidates.begin(), end,
+              [](const auto& a, const auto& b) { return a.second < b.second; });
+    // Each run of blocks also leaves the BDA page table: a shader reaching it by pointer faults
+    // and has it bound again (FaultManager), instead of reading the unbound range.
+    u64 run_start = candidates.front().second, run_end = run_start;
+    const auto clear_run = [&] {
+        runtime.FillBuffer(bda_pagetable_buffer.get(), run_start * sizeof(vk::DeviceAddress),
+                           (run_end - run_start) * sizeof(vk::DeviceAddress), 0u);
+    };
+    for (auto it = candidates.begin(); it != end; ++it) {
+        const u64 block = it->second;
+        if (block != run_end) {
+            clear_run();
+            run_start = block;
+        }
+        EvictVramBlock(block);
+        run_end = block + 1;
+    }
+    clear_run();
+    static std::atomic<u32> told{0};
+    if (told.fetch_add(1, std::memory_order_relaxed) < 16) {
+        std::printf("Guest memory: VRAM is short: %llu MiB of copies unused for 2 s dropped\n",
+                    (unsigned long long)((count << block_shift) >> 20));
+    }
 }
 
 void BufferCache::ProcessIdleBlocks() {
