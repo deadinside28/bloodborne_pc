@@ -1219,18 +1219,21 @@ void Install(RangeCallback on_gpu_range_allocated) {
     action.sa_flags = SA_SIGINFO | SA_NODEFER;
     sigemptyset(&action.sa_mask);
     sigaction(SIGTRAP, &action, &previous_action);
+    // The memory model's hooks (copies, the GPU memory allocator, the heap) tell the buffer cache of
+    // the game's GPU memory: only for the PC model (a callback). The old model keeps VRAM copies
+    // with write tracking and needs none of them; the hooks after these are for every model.
+    const bool memory_hooks = on_gpu_range_allocated != nullptr;
     int patched = 0;
     for (const auto& site : MemcpySites) {
-        patched += Patch(ImageBase + site.offset, site.code, sizeof(site.code));
+        patched += memory_hooks && Patch(ImageBase + site.offset, site.code, sizeof(site.code));
     }
-    std::printf("Guest hooks: %d of %zu resource copy sites tell the GPU side of their writes\n",
-                patched, MemcpySites.size());
     on_range_allocated = on_gpu_range_allocated;
-    const bool allocator = Patch(ImageBase + AllocReturn, AllocReturnCode, sizeof(AllocReturnCode));
+    const bool allocator =
+        memory_hooks && Patch(ImageBase + AllocReturn, AllocReturnCode, sizeof(AllocReturnCode));
     // BB_HEAP_HOOKS=0 (bisecting): the heap's ranges are not reported.
     const char* heap_env = std::getenv("BB_HEAP_HOOKS");
-    const bool heap_hooks = !heap_env || heap_env[0] != '0';
-    if (BbStats::enabled) {
+    const bool heap_hooks = memory_hooks && (!heap_env || heap_env[0] != '0');
+    if (memory_hooks && BbStats::enabled) {
         Patch(ImageBase + CollectorEntry, CollectorEntryCode, sizeof(CollectorEntryCode));
     }
     int heap_sites = 0;
@@ -1240,9 +1243,16 @@ void Install(RangeCallback on_gpu_range_allocated) {
         }
         heap_sites += Patch(ImageBase + site, HeapAllocReturnCode, sizeof(HeapAllocReturnCode));
     }
-    std::printf("Guest hooks: GPU heap allocations seen at %d of %zu call sites\n", heap_sites,
-                HeapAllocReturns.size());
-    std::printf("Guest hooks: GPU memory allocator %s\n", allocator ? "tells the GPU side of new ranges" : "not found");
+    if (memory_hooks) {
+        std::printf("Guest hooks: %d of %zu resource copy sites tell the GPU side of their writes\n",
+                    patched, MemcpySites.size());
+        std::printf("Guest hooks: GPU heap allocations seen at %d of %zu call sites\n", heap_sites,
+                    HeapAllocReturns.size());
+        std::printf("Guest hooks: GPU memory allocator %s\n",
+                    allocator ? "tells the GPU side of new ranges" : "not found");
+    } else {
+        std::printf("Guest hooks: none for the GPU memory (this memory model keeps copies)\n");
+    }
     // Native detours over the traps just placed (BB_GUEST_HOOK_TRAPS=1 keeps the traps).
     const char* traps_env = std::getenv("BB_GUEST_HOOK_TRAPS");
     if (!(traps_env && traps_env[0] == '1') && (stub_page = MapStubPage()) != nullptr) {

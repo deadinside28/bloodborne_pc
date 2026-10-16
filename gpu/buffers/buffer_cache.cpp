@@ -522,15 +522,21 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                     "in VRAM (as BB_GUEST_IN_PLACE=0)\n");
     }
     // Hooks in the game's own code, from its profile (games/). BB_GUEST_HOOKS=0: none, as for a
-    // game the port knows nothing about.
+    // game the port knows nothing about. Every memory model gets them: the GX command heap guard
+    // (#162), the aspect ratio, the mouse look and the menu pointer have nothing to do with where
+    // the game's memory is (with the old model the guard was missing and the crash at 0x2199310
+    // came back). Only the hooks that tell this cache of new GPU ranges need the PC model: without
+    // it fresh_range is null and the profile leaves them out.
     const char* hooks_env = std::getenv("BB_GUEST_HOOKS");
     const Game::Profile* game = Game::Active();
-    if (GuestInPlace() && game && game->install_hooks && !(hooks_env && hooks_env[0] == '0')) {
+    if (game && game->install_hooks && !(hooks_env && hooks_env[0] == '0')) {
         static BufferCache* hooked_cache = this;
         game->install_hooks(Game::CoreServices{
-            .fresh_range = [](u64 address, u64 size) { hooked_cache->NoteFreshRange(address, size); },
+            .fresh_range = GuestInPlace() ? +[](u64 address, u64 size) {
+                hooked_cache->NoteFreshRange(address, size);
+            } : nullptr,
         });
-    } else if (GuestInPlace() && game) {
+    } else if (game && game->install_hooks) {
         std::printf("Guest hooks: off (BB_GUEST_HOOKS=0): nothing in the game's own code is hooked\n");
     }
     if (LayerMode()) {
