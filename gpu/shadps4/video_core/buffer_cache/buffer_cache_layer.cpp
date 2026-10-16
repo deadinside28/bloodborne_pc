@@ -578,7 +578,7 @@ u64 BufferCache::LayerPromoteRun(u64 first, u64 end) {
             Layer().RemoveMirror(old.base);
             auto node = layer_mirrors.extract(old.base);
             if (!node.empty()) {
-                layer_retired.push_back({std::move(node.mapped()), scheduler.CurrentTick()});
+                layer_retired.push_back({std::move(node.mapped()), RetireTick(old.base, old.size)});
             }
         }
         Layer().AddMirror(start, bytes, target->Handle(), target->BufferDeviceAddress(), target);
@@ -694,10 +694,32 @@ void BufferCache::LayerDemote(u64 first, u64 end, bool copy_back, int reason) {
         auto node = layer_mirrors.extract(mirror.base);
         if (!node.empty()) {
             BbStats::residency_alloc_bytes.fetch_sub(mirror.size, std::memory_order_relaxed);
-            layer_retired.push_back({std::move(node.mapped()), scheduler.CurrentTick()});
+            layer_retired.push_back({std::move(node.mapped()), RetireTick(mirror.base, mirror.size)});
         }
     }
     ++layer_generation;
+}
+
+void BufferCache::DemoteAllMirrors() {
+    if (layer_mirrors.empty()) {
+        return;
+    }
+    const size_t before = layer_retired.size();
+    LayerDemote(0, (1ull << 48) >> block_shift, true, 3);
+    static u32 reports = 0;
+    if (++reports % 600 == 3) { // what the hold kept (only mirrors over the RTAO's index ranges)
+        size_t held = 0;
+        for (size_t i = before; i < layer_retired.size(); ++i) {
+            held += layer_retired[i].second == HeldTick ? 1 : 0;
+        }
+        std::printf("RTAO test: %zu mirrors retired, %zu held (hold %s, %zu index ranges)\n",
+                    layer_retired.size() - before, held, retire_hold.Active() ? "on" : "off",
+                    retire_hold.Ranges());
+    }
+}
+
+u64 BufferCache::RetireTick(VAddr base, u64 size) const {
+    return retire_hold.Holds(base, size) ? HeldTick : scheduler.CurrentTick();
 }
 
 void BufferCache::LayerMaintain() {
@@ -870,7 +892,7 @@ u64 BufferCache::LayerCompactMirrors(u64 wanted) {
             BbStats::residency_alloc_bytes.fetch_add(size, std::memory_order_relaxed);
             kept += size;
         }
-        layer_retired.push_back({std::move(node.mapped()), scheduler.CurrentTick()});
+        layer_retired.push_back({std::move(node.mapped()), RetireTick(start, old_size)});
         LayerRepublish(lo, hi); // paged bindings find the new buffers
         ++layer_generation;
         freed += old_size - kept;

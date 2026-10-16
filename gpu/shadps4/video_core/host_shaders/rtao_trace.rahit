@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: ray-traced AO, pipeline variant: the foliage (non-opaque geometry) stops the ray with
+// probability `foliage` per hit (rtao_trace_constants.glsl), otherwise the ray passes on.
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "rtao_trace_constants.glsl"
+
+void main() {
+    if (!FoliageBlocks(gl_LaunchIDEXT.xy, uint(gl_PrimitiveID), gl_WorldRayDirectionEXT)) {
+        ignoreIntersectionEXT;
+    }
+}

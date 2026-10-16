@@ -30,7 +30,28 @@ public:
     }
 
     using DrawInfo = Motion::Draw;
-    u32 PrepareDraw(const DrawInfo& draw);
+    /// bbport: `allocation` (optional) receives this draw's allocation, empty when none.
+    u32 PrepareDraw(const DrawInfo& draw, Motion::History::Allocation* allocation = nullptr);
+    /// bbport: the ray-traced AO's capture. Set at start when BB_RTAO is set, ray queries are
+    /// supported and object motion is on; otherwise nothing below exists and nothing changes.
+    [[nodiscard]] static bool RtaoCapture() noexcept {
+        return rtao_capture;
+    }
+    /// Positions of a draw the motion path leaves out (no history: it moves with the camera),
+    /// for the ray-traced AO only: a store without a load, in a region and parameter block of
+    /// its own, outside the motion history (whose matching and room stay as without it).
+    u32 PrepareCapture(const DrawInfo& draw, Motion::History::Allocation& allocation);
+    vk::Buffer PositionsBuffer() const noexcept {
+        return positions_buffer;
+    }
+    /// The RTAO capture's own positions per frame (0 without it).
+    u32 CapturePerFrame() const noexcept {
+        return capture_per_frame;
+    }
+    /// Entries of the positions buffer (both regions, both halves, element 0).
+    u64 PositionsEntries() const noexcept {
+        return 1 + 2ull * (PositionsPerFrame + capture_per_frame);
+    }
     /// Small skeletons: whether the bone palette changed (Motion::History::Moving).
     bool Moving(const Motion::History::GateKey& key, u64 palette) {
         return history.Moving(key, palette);
@@ -99,6 +120,13 @@ private:
     // Positions (device local): two halves (current/previous frame) of vec4; element 0 is reserved.
     static constexpr u32 PositionsPerFrame = 4u << 20;
     Motion::History history{PositionsPerFrame};
+    // bbport: the RTAO capture, after the motion halves: two halves of its own and a block of
+    // parameters after the motion ones in each frame slot (none without the capture).
+    static inline bool rtao_capture = false;
+    static constexpr u32 CapturePositions = 4u << 20, CaptureParams = 8192;
+    u32 capture_per_frame = 0, capture_params = 0;
+    u32 capture_used = 0, capture_params_used = 0;
+    u64 capture_draws = 0, capture_skips = 0; // (per report)
     Motion::IndexRangeCache index_ranges;
     std::array<u64, FrameSlots> params_ticks{};
     vk::Buffer params_buffer{};

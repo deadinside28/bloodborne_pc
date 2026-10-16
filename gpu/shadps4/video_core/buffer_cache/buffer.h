@@ -150,6 +150,10 @@ struct Buffer {
         return buffer.buffer;
     }
 
+    bool HasBufferDeviceAddress() const noexcept {
+        return buffer.bda_addr != 0;
+    }
+
     vk::DeviceAddress BufferDeviceAddress() const noexcept {
         ASSERT_MSG(buffer.bda_addr != 0, "Can't get BDA from a non BDA buffer");
         return buffer.bda_addr;

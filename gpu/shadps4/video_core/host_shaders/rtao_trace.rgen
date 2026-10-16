@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: ray-traced AO, the trace as a ray-generation shader (pipeline=1 in rtao.txt): the AO rays
+// go through traceRayEXT, the closest-hit shader returns the distance, the miss shader -1.
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_samplerless_texture_functions : require
+#extension GL_GOOGLE_include_directive : require
+
+layout(location = 0) rayPayloadEXT float hit_t;
+
+#include "rtao_trace_body.glsl"
+
+float OcclusionHit(vec3 origin, vec3 dir, float t_min, float t_max) {
+    hit_t = -1.0;
+    // With foliage the non-opaque geometry's hits go through rtao_trace.rahit.
+    const uint flags = foliage > 0.0 ? gl_RayFlagsNoneEXT : gl_RayFlagsOpaqueEXT;
+    traceRayEXT(scene, flags | gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, 0, 0, 0, origin,
+                t_min, dir, t_max, 0);
+    return hit_t;
+}
+
+void main() {
+    TracePixel(ivec2(gl_LaunchIDEXT.xy));
+}

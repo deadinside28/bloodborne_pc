@@ -105,6 +105,18 @@ FPS_MODES = [("Без ограничения (патч)", "uncap"), ("60", "60")
              ("30 (как на PS4)", "30")]
 PRESENT_MODES = [("Mailbox", "Mailbox"), ("FIFO (VSync)", "Fifo"),
                  ("FIFO Relaxed", "FifoRelaxed"), ("Immediate", "Immediate")]
+# Ray-traced AO (vk_rtao.cpp) quality presets: rays per half-res pixel, radius (m), strength,
+# distance (m: AO and its geometry end there; the surface snap reaches as far), foliage (the
+# chance an alpha-tested hit blocks a ray; 0: grass and leaves cast no AO; about +0.7 ms).
+RTAO_PRESETS = {
+    "low": {"rays": 1, "radius": 1.0, "strength": 1.0, "distance": 25.0, "foliage": 0.0},
+    "medium": {"rays": 2, "radius": 1.5, "strength": 1.0, "distance": 40.0, "foliage": 0.0},
+    "high": {"rays": 4, "radius": 2.0, "strength": 1.0, "distance": 60.0, "foliage": 0.35},
+}
+RTAO_PRESET_CHOICES = [("Низкое", "low", "1 луч, радиус 1 м, до 25 м; около 0,6 мс"),
+                       ("Среднее", "medium", "2 луча, радиус 1,5 м, до 40 м; около 1 мс"),
+                       ("Высокое", "high", "4 луча, радиус 2 м, до 60 м, листва; около 2,3 мс"),
+                       ("Своё", "custom", "Значения ниже")]
 # A third element is a note shown under the row's title while that choice is selected: the
 # choice labels stay short, so the selected one is shown in full.
 DRAW_PIPE = [("Авто", "", "Включён при 8 и более потоках процессора"), ("Включён", "1"),
@@ -123,6 +135,13 @@ DEFAULTS = {
     "user_dir": "",
     "mods_dir": "",
     "mods_enabled": True,
+    "rtao": False,
+    "rtao_preset": "medium",
+    "rtao_rays": 2,
+    "rtao_radius": 1.5,
+    "rtao_strength": 1.0,
+    "rtao_distance": 40.0,
+    "rtao_foliage": 0.0,
     "patches_dir": "",
     "language": "1",
     "fullscreen": False,
@@ -296,6 +315,15 @@ def game_environment(s):
     env["BB_MODS_DIR"] = str(Path(s.get("mods_dir") or DATA_DIR / "mods").expanduser())
     env["BB_MODS_CONFIG"] = str(DATA_DIR / "mods.json")
     env["BB_MODS_ENABLED"] = "1" if s.get("mods_enabled", True) else "0"
+    # Ray-traced AO (vk_rtao.cpp): on by BB_RTAO=1; the quality values go through its live settings
+    # file (user/rtao.txt, other keys there are kept), the surface snap as far as the AO reaches.
+    if s.get("rtao"):
+        env["BB_RTAO"] = "1"
+        distance = float(s.get("rtao_distance", 40.0))
+        write_live_settings(settings_user_dir(s) / "rtao.txt",
+                            {"rays": int(s.get("rtao_rays", 2)), "radius": float(s.get("rtao_radius", 1.5)),
+                             "strength": float(s.get("rtao_strength", 1.0)), "far": distance,
+                             "snap": distance, "foliage": float(s.get("rtao_foliage", 0.0)), "enabled": 1})
     env["BB_PATCHES_DIR"] = str(patches_dir(s))
     env["BB_PATCHES_CONFIG"] = str(DATA_DIR / "patches.json")
     env["BB_LANGUAGE"] = s["language"]
@@ -429,6 +457,33 @@ CONTROLS = [
 ]
 
 
+def settings_user_dir(settings):
+    return Path(settings["user_dir"]).expanduser() if settings.get("user_dir") else DATA_DIR / "user"
+
+
+def write_live_settings(path, values):
+    """Updates key=value lines of a live settings file (user/rtao.txt), keeping the other keys."""
+    lines = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        pass
+    seen = set()
+    out = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip()
+        if key in values:
+            out.append(f"{key}={values[key]:g}" if isinstance(values[key], float) else f"{key}={values[key]}")
+            seen.add(key)
+        else:
+            out.append(line)
+    for key, value in values.items():
+        if key not in seen:
+            out.append(f"{key}={value:g}" if isinstance(value, float) else f"{key}={value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
 def connected_gamepads():
     """(GUID, name) of the connected gamepads (bb-gpu-capabilities --gamepads), [] if unknown."""
     tool = PORT_DIR / ("bin" if PACKAGED else "out") / "bb-gpu-capabilities"
@@ -452,6 +507,28 @@ def connected_displays():
     return [(name if names.count(name) == 1 else str(number),
              f"{number}: {name} ({size})" + (tr(", основной") if primary == "1" else ""))
             for number, (name, size, primary) in enumerate(rows, 1)]
+
+
+def rt_capability():
+    """The RTAO class of the game's GPU (bb-gpu-capabilities --rt: none, emulated, nomem,
+    untested, slow, ok), "" if unknown."""
+    tool = PORT_DIR / ("bin" if PACKAGED else "out") / "bb-gpu-capabilities"
+    try:
+        run = subprocess.run([str(tool), "--rt"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return run.stdout.split("\t", 1)[0].strip() if run.returncode == 0 else ""
+
+
+# The RTAO switch's subtitle by GPU class (ticket 43): True where the switch is disabled.
+RTAO_GPU_NOTES = {
+    "none": (True, "Недоступно: нужна трассировка лучей Vulkan (AMD RX 6000+, NVIDIA RTX, Intel Arc)."),
+    "emulated": (True, "Недоступно: эта видеокарта только эмулирует трассировку лучей, это отняло "
+                       "бы большую часть FPS."),
+    "nomem": (True, "Недоступно: нужно не меньше 4 ГБ видеопамяти."),
+    "untested": (False, "Не проверено на этой видеокарте."),
+    "slow": (False, "Медленнее на этой видеокарте (2–4 мс на кадр)."),
+}
 
 
 class FolderList:
@@ -607,6 +684,78 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.refresh_patches()
         page.add(self.patches_group)
 
+        rtao = Adw.PreferencesGroup(
+            title=tr("Трассировка лучей (экспериментально)"),
+            description=tr("Затенение окружения трассировкой лучей (RTAO) вместо экранного SSAO игры: "
+                           "тени в углах и под предметами, в том числе от того, что вне кадра. Нужны "
+                           "видеокарта с трассировкой лучей, апскейлер с векторами движения объектов и "
+                           "включённое затенение SSAO. 0,6–1,6 мс на кадр (RX 9070 XT); значения меняются и на "
+                           "лету через user/rtao.txt."))
+        self.rtao_row = Adw.SwitchRow(title=tr("Затенение трассировкой лучей (RTAO)"),
+                                      subtitle="BB_RTAO", active=self.settings.get("rtao", False))
+        rtao.add(self.rtao_row)
+        self.rtao_preset_row = combo_row(tr("Качество"), None, RTAO_PRESET_CHOICES,
+                                         self.settings.get("rtao_preset", "medium"))
+        rtao.add(self.rtao_preset_row)
+        self.rtao_rays_row = Adw.SpinRow.new_with_range(1, 8, 1)
+        self.rtao_rays_row.set_title(tr("Лучей на пиксель"))
+        self.rtao_rays_row.set_subtitle(tr("Больше — меньше шума, дороже"))
+        self.rtao_radius_row = Adw.SpinRow.new_with_range(0.5, 3.0, 0.25)
+        self.rtao_radius_row.set_title(tr("Радиус, м"))
+        self.rtao_radius_row.set_subtitle(tr("Как далеко предметы затеняют друг друга"))
+        self.rtao_radius_row.set_digits(2)
+        self.rtao_strength_row = Adw.SpinRow.new_with_range(0.0, 1.0, 0.05)
+        self.rtao_strength_row.set_title(tr("Сила"))
+        self.rtao_strength_row.set_digits(2)
+        self.rtao_distance_row = Adw.SpinRow.new_with_range(10.0, 80.0, 5.0)
+        self.rtao_distance_row.set_title(tr("Дальность, м"))
+        self.rtao_distance_row.set_subtitle(tr("Дальше затенения нет; больше — дороже"))
+        self.rtao_foliage_row = Adw.SpinRow.new_with_range(0.0, 1.0, 0.05)
+        self.rtao_foliage_row.set_title(tr("Листва"))
+        self.rtao_foliage_row.set_subtitle(tr("Трава и листья затеняют с этой долей; 0 — не затеняют. "
+                                              "Около +0,7 мс"))
+        self.rtao_foliage_row.set_digits(2)
+        self.rtao_value_rows = {"rays": self.rtao_rays_row, "radius": self.rtao_radius_row,
+                                "strength": self.rtao_strength_row, "distance": self.rtao_distance_row,
+                                "foliage": self.rtao_foliage_row}
+        for key, row in self.rtao_value_rows.items():
+            # A value saved before the key existed: the saved preset's (foliage, for "high").
+            preset = RTAO_PRESETS.get(self.settings.get("rtao_preset"), RTAO_PRESETS["medium"])
+            row.set_value(float(self.settings.get("rtao_" + key, preset[key])))
+            rtao.add(row)
+        self.rtao_applying = False
+
+        def rtao_preset_chosen(*_):
+            preset = RTAO_PRESETS.get(combo_value(self.rtao_preset_row))
+            if preset is None:
+                return
+            self.rtao_applying = True
+            for key, row in self.rtao_value_rows.items():
+                row.set_value(preset[key])
+            self.rtao_applying = False
+
+        def rtao_value_changed(*_):
+            if self.rtao_applying:
+                return
+            values = {key: row.get_value() for key, row in self.rtao_value_rows.items()}
+            match = next((name for name, preset in RTAO_PRESETS.items()
+                          if all(abs(values[k] - v) < 1e-3 for k, v in preset.items())), "custom")
+            if combo_value(self.rtao_preset_row) != match:
+                self.rtao_preset_row.set_selected(self.rtao_preset_row.values.index(match))
+
+        def rtao_rows_sensitive(*_):
+            for row in (self.rtao_preset_row, *self.rtao_value_rows.values()):
+                row.set_sensitive(self.rtao_row.get_active())
+
+        self.rtao_preset_row.connect("notify::selected", rtao_preset_chosen)
+        for row in self.rtao_value_rows.values():
+            row.connect("notify::value", rtao_value_changed)
+        self.rtao_row.connect("notify::active", rtao_rows_sensitive)
+        rtao_value_changed()
+        rtao_rows_sensitive()
+        self.rt_class = rt_capability()
+        page.add(rtao)
+
         screen = Adw.PreferencesGroup(title=tr("Экран"))
         self.output_row = combo_row(tr("Разрешение вывода"),
                                     tr("Апскейлер дорисовывает кадр; Steam Deck — 720p"),
@@ -740,6 +889,10 @@ class LauncherWindow(Adw.ApplicationWindow):
                                     "dvdroot_ps4 игры или модом; без неё патч не применяется"))
             self.effect_rows[key] = row
             effects.add(row)
+        for row, signal in ((self.upscaler_row, "notify::selected"), (self.motion_row, "notify::active"),
+                            (self.effect_rows["effect_ssao"], "notify::active")):
+            row.connect(signal, lambda *_: self.update_rtao_gate())
+        self.update_rtao_gate()
         # The title's "play online / play offline": the port has no PSN.
         self.skip_network_row = Adw.SwitchRow(
             title=tr("Пропускать выбор «по сети / вне сети»"),
@@ -871,6 +1024,22 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.settings["user_dir"] = ""
         self.update_user_status()
         self.store()
+
+    def update_rtao_gate(self):
+        """The RTAO switch: off and disabled when the GPU cannot run it or a requirement (an
+        upscaler with object motion, the game's SSAO) is off; the subtitle says why."""
+        disabled, note = RTAO_GPU_NOTES.get(self.rt_class, (False, None))
+        if not disabled:
+            if combo_value(self.upscaler_row) == "off":
+                disabled, note = True, "Нужен апскейлер (FSR, DLSS или TAA)."
+            elif not self.motion_row.get_active():
+                disabled, note = True, "Нужны векторы движения объектов (раздел апскейлера)."
+            elif not self.effect_rows["effect_ssao"].get_active():
+                disabled, note = True, "Нужно включённое затенение SSAO (эффекты игры)."
+        if disabled:
+            self.rtao_row.set_active(False)
+        self.rtao_row.set_sensitive(not disabled)
+        self.rtao_row.set_subtitle(tr(note) if note else "BB_RTAO")
 
     def update_upscaler_status(self):
         value = combo_value(self.upscaler_row)
@@ -1037,6 +1206,13 @@ class LauncherWindow(Adw.ApplicationWindow):
         s["vk_validation"] = self.validation_row.get_active()
         s["extra_env"] = self.extra_row.get_text().strip()
         s["mods_enabled"] = self.mods_enabled_row.get_active()
+        s["rtao"] = self.rtao_row.get_active()
+        s["rtao_preset"] = combo_value(self.rtao_preset_row)
+        s["rtao_rays"] = int(self.rtao_rays_row.get_value())
+        s["rtao_radius"] = float(self.rtao_radius_row.get_value())
+        s["rtao_strength"] = float(self.rtao_strength_row.get_value())
+        s["rtao_distance"] = float(self.rtao_distance_row.get_value())
+        s["rtao_foliage"] = float(self.rtao_foliage_row.get_value())
         s["online"] = self.online_row.get_active()
         s["online_community"] = self.community_row.get_text().strip()
         s["online_server"] = self.server_row.get_text().strip()

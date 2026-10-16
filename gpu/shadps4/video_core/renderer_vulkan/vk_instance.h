@@ -218,6 +218,18 @@ public:
     }
 
     /// Returns true when VK_EXT_primitive_topology_list_restart is supported for regular lists.
+    /// bbport: ray queries and acceleration structures (ray-traced AO).
+    bool IsRayQuerySupported() const {
+        return ray_query;
+    }
+    /// bbport: VK_KHR_ray_tracing_position_fetch (it defines the BLAS flag ALLOW_DATA_ACCESS).
+    bool IsRayTracingPositionFetchSupported() const noexcept {
+        return position_fetch;
+    }
+    /// bbport: VK_KHR_ray_tracing_pipeline (the RTAO trace's pipeline variant).
+    bool IsRayTracingPipelineSupported() const noexcept {
+        return ray_tracing_pipeline;
+    }
     bool IsListRestartSupported() const {
         return list_restart && list_restart_features.primitiveTopologyListRestart;
     }
@@ -602,6 +614,9 @@ private:
     bool shader_atomic_float2{};
     bool workgroup_memory_explicit_layout{};
     bool maintenance_5{};
+    bool ray_query{}; // bbport: VK_KHR_ray_query + acceleration structures (vk_rtao.cpp)
+    bool ray_tracing_pipeline{}; // bbport: VK_KHR_ray_tracing_pipeline
+    bool position_fetch{}; // bbport: VK_KHR_ray_tracing_position_fetch
     bool maintenance_8{};
     bool buffer_marker{};
     bool attachment_feedback_loop{};

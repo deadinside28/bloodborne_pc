@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: ray-traced AO, the trace with ray queries in a compute shader (the default variant).
+#version 460
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_samplerless_texture_functions : require
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 4) in; // 8x4: AMD's guidance for ray queries in compute
+
+#include "rtao_trace_body.glsl"
+
+float OcclusionHit(vec3 origin, vec3 dir, float t_min, float t_max) {
+    rayQueryEXT query;
+    // With foliage the non-opaque geometry's hits come back here as candidates.
+    const uint flags = foliage > 0.0 ? gl_RayFlagsNoneEXT : gl_RayFlagsOpaqueEXT;
+    rayQueryInitializeEXT(query, scene, flags | gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
+                          origin, t_min, dir, t_max);
+    while (rayQueryProceedEXT(query)) {
+        if (FoliageBlocks(gl_GlobalInvocationID.xy, rayQueryGetIntersectionPrimitiveIndexEXT(query, false), dir)) {
+            rayQueryConfirmIntersectionEXT(query);
+        }
+    }
+    return rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT
+               ? rayQueryGetIntersectionTEXT(query, true)
+               : -1.0;
+}
+
+void main() {
+    TracePixel(ivec2(gl_GlobalInvocationID.xy));
+}

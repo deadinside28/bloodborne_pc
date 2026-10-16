@@ -52,6 +52,9 @@ public:
     const Shader::Info& GetStage(Shader::SwStage stage) const noexcept {
         return *stages[u32(stage)];
     }
+    bool HasStage(Shader::SwStage stage) const noexcept {
+        return stages[u32(stage)] != nullptr;
+    }
 
     bool IsCompute() const {
         return is_compute;

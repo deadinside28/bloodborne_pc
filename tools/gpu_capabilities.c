@@ -4,7 +4,8 @@
  * BB_GAMEPAD). --displays: the monitors, "name<tab>WxH<tab>primary (1 or 0)" per line in SDL's
  * order (the launcher's monitor list, BB_DISPLAY; issue #69). --read-input: one key or button for the
  * launcher's controls (below). --device: "vendorID<tab>name" of the GPU the game takes (run.sh:
- * memory model and driver workarounds by vendor and chip). */
+ * memory model and driver workarounds by vendor and chip). --rt: whether the ray-traced AO can
+ * run (the launcher's RTAO switch), below. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,6 +69,34 @@ static int live_resolution_suits(VkPhysicalDevice device) {
             discrete ? "discrete" : "integrated or other", (unsigned long long)(memory >> 20),
             suits ? "on" : "off (startup resolution patch)");
     return suits;
+}
+
+/* --rt: "class<tab>device-local MiB<tab>name" for the launcher's RTAO switch (vk_rtao.cpp).
+ * none: no VK_KHR_ray_query and acceleration structures. emulated: the extensions are there but
+ * traced in software (a CPU device; RADV before RDNA2 with emulate_rt; NVIDIA GTX): a fraction of
+ * the frame rate. nomem: the RTAO's smallest budgets need 12 % of a ~3.8 GiB heap
+ * (rtao_geometry.h). untested: NVIDIA, Intel, or AMD without RADV. slow: RDNA2, or under 8 GB
+ * (reduced geometry budgets). ok: RDNA3 and RDNA4 on RADV, where it has been measured. */
+static const char *rt_class(VkPhysicalDevice device) {
+    if (!has_extension(device, "VK_KHR_ray_query") ||
+        !has_extension(device, "VK_KHR_acceleration_structure") ||
+        !has_extension(device, "VK_KHR_deferred_host_operations"))
+        return "none";
+    VkPhysicalDeviceDriverProperties driver = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceProperties2 props = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                                         .pNext = &driver};
+    vkGetPhysicalDeviceProperties2(device, &props);
+    const char *name = props.properties.deviceName;
+    if (props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) return "emulated";
+    // RADV names the chip "(RADV GFX1201)": GFX1030+ is RDNA2, 11xx RDNA3, 12xx RDNA4.
+    const char *gfx = driver.driverID == VK_DRIVER_ID_MESA_RADV ? strstr(name, "GFX") : NULL;
+    const int chip = gfx ? atoi(gfx + 3) : 0;
+    if (chip && chip < 1030) return "emulated";
+    if (props.properties.vendorID == 0x10de && strstr(name, "GTX")) return "emulated";
+    if (largest_local_heap(device) < (VkDeviceSize)3800 << 20) return "nomem";
+    if (!chip) return "untested";
+    if (chip < 1100 || largest_local_heap(device) < (VkDeviceSize)7680 << 20) return "slow";
+    return "ok";
 }
 
 static int list_gamepads(void) {
@@ -215,6 +244,7 @@ int main(int argc, char **argv) {
     }
     const int live_mode = argc > 1 && !strcmp(argv[1], "--live-resolution");
     const int device_mode = argc > 1 && !strcmp(argv[1], "--device");
+    const int rt_mode = argc > 1 && !strcmp(argv[1], "--rt");
     const VkApplicationInfo app = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "bbport scene scaling probe",
@@ -262,6 +292,15 @@ int main(int argc, char **argv) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(selected, &props);
         printf("%#06x\t%s\n", props.vendorID, props.deviceName);
+        free(devices);
+        vkDestroyInstance(instance, NULL);
+        return 0;
+    }
+    if (rt_mode) {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(selected, &props);
+        printf("%s\t%llu\t%s\n", rt_class(selected),
+               (unsigned long long)(largest_local_heap(selected) >> 20), props.deviceName);
         free(devices);
         vkDestroyInstance(instance, NULL);
         return 0;

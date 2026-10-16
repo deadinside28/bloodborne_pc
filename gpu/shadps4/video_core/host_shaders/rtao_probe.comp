@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: ray-traced AO, static-cache probe (vk_rtao.cpp): each probed draw's captured vertices in
+// world space, reduced to a count, centroid, bounding box and the first vertex. Two passes: pass 1
+// reduces chunks of 4096 indices (one workgroup each: a big mesh no longer walks its indices in one
+// workgroup), pass 2 combines a draw's chunks (one workgroup per draw). The host reads them back a few frames later; a draw whose summary stays the same
+// over several frames is static and gets its own world-space BLAS.
+#version 450
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "rtao_geometry.glsl"
+
+struct Stats {
+    uint id;
+    uint count;
+    float mean[3];
+    float bmin[3];
+    float bmax[3];
+    float first[3];
+    uint pad[2];
+};
+struct Partial {
+    vec4 sum_count;   // xyz sum, w count
+    vec4 bmin;
+    vec4 bmax;
+};
+layout(binding = 0, std430) readonly buffer Geometries { Geometry geometries[]; };
+layout(binding = 1, std430) writeonly buffer Out { Stats stats[]; };
+layout(binding = 2, std430) readonly buffer Chunks { uvec2 chunks[]; };    // geometry, first index
+layout(binding = 3, std430) buffer Partials { Partial partials[]; };
+layout(binding = 4, std430) readonly buffer Ranges { uvec2 ranges[]; };    // per geometry: first chunk, chunks
+const uint ChunkIndices = 4096u;
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Positions { vec4 p[]; };
+
+
+layout(push_constant) uniform Constants {
+    uint64_t positions_address;
+    uint num_geometries;
+    uint id;
+    vec4 proj;
+    vec4 inv_view[3];    // view -> world rows
+    uint pass_index;     // 1: chunks, 2: per draw
+    uint num_chunks;
+};
+
+shared vec3 s_sum[64];
+shared vec3 s_min[64];
+shared vec3 s_max[64];
+shared uint s_count[64];
+
+vec3 World(vec4 clip) {
+    // The expand's view space (clip.w = view depth), then the game's inverse view.
+    const vec4 v = vec4(clip.x / abs(proj.x), clip.y / abs(proj.y), clip.w, 1.0);
+    return vec3(dot(inv_view[0], v), dot(inv_view[1], v), dot(inv_view[2], v));
+}
+
+void Reduce(uint lane) {
+    barrier();
+    for (uint step = 32u; step > 0u; step >>= 1) {
+        if (lane < step) {
+            s_sum[lane] += s_sum[lane + step];
+            s_min[lane] = min(s_min[lane], s_min[lane + step]);
+            s_max[lane] = max(s_max[lane], s_max[lane + step]);
+            s_count[lane] += s_count[lane + step];
+        }
+        barrier();
+    }
+}
+
+void main() {
+    const uint lane = gl_LocalInvocationID.x;
+    if (pass_index == 1u) {
+        const uint ci = gl_WorkGroupID.x;
+        if (ci >= num_chunks) {
+            return;
+        }
+        const uvec2 chunk = chunks[ci];
+        const Geometry g = geometries[chunk.x];
+        Positions positions = Positions(positions_address);
+        Words words = Words(g.index_address);
+        // Only the vertices the indices use: the capture writes no others, and its unused slots
+        // hold whatever an earlier draw left there.
+        const uint restart_value = (g.index16 & 1u) != 0u ? 0xffffu : 0xffffffffu;
+        const uint end = min(chunk.y + ChunkIndices, g.index_count * g.instances);
+        vec3 sum = vec3(0.0), bmin = vec3(1e30), bmax = vec3(-1e30);
+        uint count = 0u;
+        for (uint n = chunk.y + lane; n < end; n += 64u) {
+            const uint instance = n / g.index_count;
+            const uint i = n - instance * g.index_count;
+            const uint index = g.index_address != 0ul ? ReadIndex(words, g.index16, i) : i;
+            if (g.restart != 0u && index == restart_value) {
+                continue;
+            }
+            const int vertex = int(index) + g.base_vertex - int(g.first_vertex);
+            if (vertex < 0 || uint(vertex) >= g.vertices) {
+                continue;
+            }
+            const vec4 clip = positions.p[g.store + uint(vertex) + instance * g.vertices];
+            if (any(isnan(clip)) || any(isinf(clip))) {
+                continue;
+            }
+            const vec3 w = World(clip);
+            sum += w;
+            bmin = min(bmin, w);
+            bmax = max(bmax, w);
+            ++count;
+        }
+        s_sum[lane] = sum;
+        s_min[lane] = bmin;
+        s_max[lane] = bmax;
+        s_count[lane] = count;
+        Reduce(lane);
+        if (lane == 0u) {
+            partials[ci].sum_count = vec4(s_sum[0], float(s_count[0]));
+            partials[ci].bmin = vec4(s_min[0], 0.0);
+            partials[ci].bmax = vec4(s_max[0], 0.0);
+        }
+        return;
+    }
+    // Pass 2: one workgroup per probed draw combines its chunks.
+    const uint gi = gl_WorkGroupID.x;
+    if (gi >= num_geometries) {
+        return;
+    }
+    const Geometry g = geometries[gi];
+    if ((g.flags & 2u) == 0u) {
+        return;
+    }
+    const uvec2 range = ranges[gi];
+    vec3 sum = vec3(0.0), bmin = vec3(1e30), bmax = vec3(-1e30);
+    uint count = 0u;
+    for (uint c = range.x + lane; c < range.x + range.y; c += 64u) {
+        const Partial p = partials[c];
+        sum += p.sum_count.xyz;
+        count += uint(p.sum_count.w);
+        bmin = min(bmin, p.bmin.xyz);
+        bmax = max(bmax, p.bmax.xyz);
+    }
+    s_sum[lane] = sum;
+    s_min[lane] = bmin;
+    s_max[lane] = bmax;
+    s_count[lane] = count;
+    Reduce(lane);
+    Positions positions = Positions(positions_address);
+    Words words = Words(g.index_address);
+    if (lane == 0u) {
+        const uint n = s_count[0];
+        const vec3 c = n > 0u ? s_sum[0] / float(n) : vec3(0.0);
+        // The first index's vertex (a vertex that is surely written).
+        const uint i0 = g.index_address != 0ul ? ReadIndex(words, g.index16, 0u) : 0u;
+        const int v0 = int(i0) + g.base_vertex - int(g.first_vertex);
+        const vec4 c0 = (v0 >= 0 && uint(v0) < g.vertices) ? positions.p[g.store + uint(v0)] : vec4(0.0);
+        const vec3 f = (any(isnan(c0)) || any(isinf(c0))) ? vec3(0.0) : World(c0);
+        stats[gi].count = n;
+        stats[gi].mean[0] = c.x; stats[gi].mean[1] = c.y; stats[gi].mean[2] = c.z;
+        stats[gi].bmin[0] = s_min[0].x; stats[gi].bmin[1] = s_min[0].y; stats[gi].bmin[2] = s_min[0].z;
+        stats[gi].bmax[0] = s_max[0].x; stats[gi].bmax[1] = s_max[0].y; stats[gi].bmax[2] = s_max[0].z;
+        stats[gi].first[0] = f.x; stats[gi].first[1] = f.y; stats[gi].first[2] = f.z;
+        stats[gi].id = id; // last: the host checks it to know the entry is this frame's
+    }
+}

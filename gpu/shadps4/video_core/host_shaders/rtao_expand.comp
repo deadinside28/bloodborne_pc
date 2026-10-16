@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: ray-traced AO, geometry expansion (vk_rtao.cpp). One invocation per output triangle:
+// the draw's indices are read from the game's index buffer, the vertices' clip positions from the
+// object-motion capture, and a flat view-space triangle list is written for the BLAS build.
+#version 450
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "rtao_geometry.glsl"
+
+layout(binding = 0, std430) readonly buffer Geometries { Geometry geometries[]; };
+layout(binding = 1, std430) writeonly buffer Triangles { float vertices[]; }; // 9 floats per triangle
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Positions { vec4 p[]; };
+// Diagnostic (every 120th pass, RayTracedAO::SampleExtents): per table entry the largest
+// triangle (mm, centre to farthest vertex), its triangles over 4 m and the nearest of those (cm).
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer Extents { uint v[]; };
+
+layout(push_constant) uniform Constants {
+    uint64_t positions_address;
+    uint64_t extent_address; // 0: no diagnostic this pass
+    vec4 proj;             // x scale, y scale, z scale, z offset (signed)
+    uint num_geometries;
+    uint total_triangles;
+    float far_cut;        // triangles entirely beyond this distance stay out (sky, far terrain)
+    uint pad1;
+    vec4 inv_view[3];     // view -> world rows (world-space entries)
+};
+
+
+void main() {
+    const uint t = gl_GlobalInvocationID.x;
+    if (t >= total_triangles) {
+        return;
+    }
+    // The geometry of this triangle: binary search over the offsets.
+    uint lo = 0u, hi = num_geometries - 1u;
+    while (lo < hi) {
+        const uint mid = (lo + hi + 1u) >> 1;
+        if (geometries[mid].triangle_offset <= t) {
+            lo = mid;
+        } else {
+            hi = mid - 1u;
+        }
+    }
+    const Geometry g = geometries[lo];
+    const uint local = t - g.triangle_offset;
+    const uint tris_per_instance = g.index_count / 3u;
+    const uint instance = local / tris_per_instance;
+    const uint tri = local - instance * tris_per_instance;
+    Words words = Words(g.index_address);
+    Positions positions = Positions(positions_address);
+    const uint restart_value = (g.index16 & 1u) != 0u ? 0xffffu : 0xffffffffu;
+    const bool world = (g.flags & 1u) != 0u;
+    vec3 out_pos[3];
+    bool valid = true;
+    for (uint k = 0u; k < 3u; ++k) {
+        const uint i = tri * 3u + k;
+        const uint index = g.index_address != 0ul ? ReadIndex(words, g.index16, i) : i;
+        if (g.restart != 0u && index == restart_value) {
+            valid = false;
+            break;
+        }
+        const int vertex = int(index) + g.base_vertex - int(g.first_vertex);
+        if (vertex < 0 || uint(vertex) >= g.vertices) {
+            valid = false;
+            break;
+        }
+        const vec4 clip = positions.p[g.store + uint(vertex) + instance * g.vertices];
+        // Behind the camera is fine for a world-space cache build (the BLAS outlives this view).
+        if ((!world && !(clip.w > 1e-4)) || any(isnan(clip)) || any(isinf(clip))) {
+            valid = false;
+            break;
+        }
+        // The game's projection: clip.w is the view-space depth, clip.xy = view.xy * |scale|.
+        out_pos[k] = vec3(clip.x / abs(proj.x), clip.y / abs(proj.y), clip.w);
+        if (world) {
+            const vec4 v = vec4(out_pos[k], 1.0);
+            out_pos[k] = vec3(dot(inv_view[0], v), dot(inv_view[1], v), dot(inv_view[2], v));
+        }
+        if (any(isnan(out_pos[k])) || any(isinf(out_pos[k])) || any(greaterThan(abs(out_pos[k]), vec3(1e5)))) {
+            valid = false; // keeps infinities and absurd extents out of the BVH bounds
+            break;
+        }
+    }
+    // Far geometry: its huge boxes enclose the whole scene and every ray had to descend into them.
+    // By distance to the triangle's nearest point bound: its closest vertex, or its centre for
+    // big triangles whose vertices all lie far away while the face passes close.
+    const vec3 centre = (out_pos[0] + out_pos[1] + out_pos[2]) / 3.0;
+    const float near_d = min(min(length(out_pos[0]), length(out_pos[1])), min(length(out_pos[2]), length(centre)));
+    const float extent = max(max(distance(out_pos[0], centre), distance(out_pos[1], centre)), distance(out_pos[2], centre));
+    if (valid && !world && far_cut > 0.0 && near_d - extent > far_cut) {
+        valid = false;
+    }
+    if (valid && extent_address != 0ul) {
+        Extents e = Extents(extent_address);
+        atomicMax(e.v[lo * 3u], uint(min(extent, 4.0e6) * 1000.0));
+        if (extent > 4.0) {
+            atomicAdd(e.v[lo * 3u + 1u], 1u);
+            atomicMin(e.v[lo * 3u + 2u], uint(min(max(near_d, 0.0), 4.0e7) * 100.0));
+        }
+    }
+    const uint base = (g.out_base + local) * 9u;
+    for (uint k = 0u; k < 3u; ++k) {
+        // Invalid: NaN makes the triangle inactive, the build drops it (zeros would pile up
+        // thousands of degenerate triangles at the camera, where the primary-ray test starts).
+        const vec3 v = valid ? out_pos[k] : vec3(uintBitsToFloat(0x7fc00000u));
+        vertices[base + k * 3u + 0u] = v.x;
+        vertices[base + k * 3u + 1u] = v.y;
+        vertices[base + k * 3u + 2u] = v.z;
+    }
+}

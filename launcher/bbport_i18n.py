@@ -8,6 +8,52 @@ otherwise).
 import os
 
 EN = {
+    # Ray-traced AO
+    "Трассировка лучей (экспериментально)": "Ray tracing (experimental)",
+    "Затенение окружения трассировкой лучей (RTAO) вместо экранного SSAO игры: "
+    "тени в углах и под предметами, в том числе от того, что вне кадра. Нужны "
+    "видеокарта с трассировкой лучей, апскейлер с векторами движения объектов и "
+    "включённое затенение SSAO. 0,6–1,6 мс на кадр (RX 9070 XT); значения меняются и на "
+    "лету через user/rtao.txt.":
+        "Ray-traced ambient occlusion (RTAO) in place of the game's screen-space SSAO: shadows in "
+        "corners and under objects, including from what is off screen. Needs a GPU with ray "
+        "tracing, an upscaler with object motion vectors and SSAO turned on. 0.6-1.6 ms per "
+        "frame on an RX 9070 XT; the values also change live through user/rtao.txt.",
+    "Затенение трассировкой лучей (RTAO)": "Ray-traced ambient occlusion (RTAO)",
+    "Недоступно: нужна трассировка лучей Vulkan (AMD RX 6000+, NVIDIA RTX, Intel Arc).":
+        "Not available: needs Vulkan ray tracing (AMD RX 6000+, NVIDIA RTX, Intel Arc).",
+    "Недоступно: эта видеокарта только эмулирует трассировку лучей, это отняло бы большую "
+    "часть FPS.":
+        "Not available: this GPU only emulates ray tracing, which would cost most of the frame rate.",
+    "Недоступно: нужно не меньше 4 ГБ видеопамяти.": "Not available: needs at least 4 GB of video memory.",
+    "Не проверено на этой видеокарте.": "Untested on this GPU.",
+    "Медленнее на этой видеокарте (2–4 мс на кадр).": "Slower on this GPU (2-4 ms per frame).",
+    "Нужен апскейлер (FSR, DLSS или TAA).": "Needs an upscaler (FSR, DLSS or TAA).",
+    "Нужны векторы движения объектов (раздел апскейлера).": "Needs object motion vectors (upscaler section).",
+    "Нужно включённое затенение SSAO (эффекты игры).": "Needs the game's SSAO on (game effects).",
+    "Качество": "Quality",
+    "Низкое": "Low",
+    "Среднее": "Medium",
+    "Высокое": "High",
+    "Своё": "Custom",
+    "1 луч, радиус 1 м, до 25 м; около 0,6 мс": "1 ray, 1 m radius, up to 25 m; about 0.6 ms",
+    "2 луча, радиус 1,5 м, до 40 м; около 1 мс": "2 rays, 1.5 m radius, up to 40 m; about 1 ms",
+    "4 луча, радиус 2 м, до 60 м, листва; около 2,3 мс": "4 rays, 2 m radius, up to 60 m, foliage; about 2.3 ms",
+    "Листва": "Foliage",
+    "Трава и листья затеняют с этой долей; 0 — не затеняют. Около +0,7 мс":
+        "Grass and leaves occlude at this share; 0: they do not. About +0.7 ms",
+    "Значения ниже": "The values below",
+    "Лучей на пиксель": "Rays per pixel",
+    "Больше — меньше шума, дороже": "More: less noise, more cost",
+    "Радиус, м": "Radius, m",
+    "Как далеко предметы затеняют друг друга": "How far objects shade each other",
+    "Сила": "Strength",
+    "Дальность, м": "Distance, m",
+    "Дальше затенения нет; больше — дороже": "No occlusion beyond it; farther costs more",
+    "8 — подобрано для Bloodborne; 12 уже окрашивает": "8 is tuned for Bloodborne; 12 already tints",
+    "Ослабление на светлых поверхностях": "Damping on bright surfaces",
+    "0 — везде одинаково; 4 — яркие сцены почти без изменений":
+        "0: the same everywhere; 4: bright scenes almost unchanged",
     # Window, pages, buttons
     "Запустить": "Play",
     "Остановить": "Stop",

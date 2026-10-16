@@ -9,6 +9,7 @@
 #include "bbport_settings.h"
 #include "bbport_toggles.h"
 #include "shader_recompiler/runtime_info.h"
+#include "video_core/renderer_vulkan/rtao_geometry.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
@@ -63,12 +64,19 @@ ObjectMotion::ObjectMotion(const Instance& instance_, Scheduler& scheduler_)
         std::printf("Object motion: vertexPipelineStoresAndAtomics unsupported, off\n");
         return;
     }
+    // bbport: the ray-traced AO's capture (vk_rtao.cpp), decided once here.
+    if (Rtao::Requested() && instance.IsRayQuerySupported()) {
+        rtao_capture = true;
+        capture_per_frame = CapturePositions;
+        capture_params = CaptureParams;
+    }
     void* mapped = nullptr;
     u64 params_address = 0, positions_address = 0;
-    if (!CreateBuffer(instance, vk::DeviceSize(1 + FrameSlots * ParamsPerFrame) * 32, true,
+    if (!CreateBuffer(instance, vk::DeviceSize(1 + FrameSlots * (ParamsPerFrame + capture_params)) * 32, true,
                       params_buffer, params_allocation, &mapped, params_address) ||
-        !CreateBuffer(instance, vk::DeviceSize(1 + 2 * PositionsPerFrame) * 16, false,
+        !CreateBuffer(instance, vk::DeviceSize(PositionsEntries()) * 16, false,
                       positions_buffer, positions_allocation, nullptr, positions_address)) {
+        rtao_capture = false;
         std::printf("Object motion: buffer creation failed, off\n");
         return;
     }
@@ -78,6 +86,10 @@ ObjectMotion::ObjectMotion(const Instance& instance_, Scheduler& scheduler_)
     Shader::MotionVectors::positions_address = positions_address;
     enabled = true;
     std::printf("Object motion: on (%u vertices per frame)\n", PositionsPerFrame);
+    if (rtao_capture) {
+        std::printf("Object motion: ray-traced AO capture on (%u vertices per frame of its own)\n",
+                    capture_per_frame);
+    }
 }
 
 ObjectMotion::~ObjectMotion() {
@@ -109,6 +121,13 @@ void ObjectMotion::OnFrameStart() {
                     (unsigned long long)index_ranges.stats.stale, index_ranges.Size());
         index_ranges.stats = {};
         history.stats = {};
+        if (rtao_capture) {
+            std::printf("Object motion: RTAO capture: %llu draws, %llu skipped (room) in 600 frames; "
+                        "last frame %u/%u vertices\n",
+                        (unsigned long long)capture_draws, (unsigned long long)capture_skips, capture_used,
+                        capture_per_frame);
+            capture_draws = capture_skips = 0;
+        }
     }
     history.NextFrame();
     ++frame;
@@ -122,6 +141,8 @@ void ObjectMotion::OnFrameStart() {
         params_ticks[slot] = 0;
     }
     params_used = 0;
+    capture_used = 0;
+    capture_params_used = 0;
     for (auto& target : targets) {
         target.written = false;
     }
@@ -139,23 +160,65 @@ void ObjectMotion::OnFrameStart() {
     });
 }
 
-u32 ObjectMotion::PrepareDraw(const DrawInfo& draw) {
+u32 ObjectMotion::PrepareDraw(const DrawInfo& draw, Motion::History::Allocation* allocation_out) {
+    if (allocation_out) {
+        *allocation_out = {};
+    }
     if (!enabled || BbToggle::Disabled(1u << 29) || params_used >= ParamsPerFrame) {
         return 0;
     }
     const auto allocation = history.Prepare(draw);
+    if (allocation_out) {
+        *allocation_out = allocation;
+    }
     u32 flags = (allocation.store ? Shader::MotionVectors::FlagStore : 0) |
                 (allocation.load ? Shader::MotionVectors::FlagLoad : 0);
     if (!flags) {
         return 0;
     }
     const u32 slot = u32(frame % FrameSlots);
-    const u32 index = 1 + slot * ParamsPerFrame + params_used++;
+    const u32 index = 1 + slot * (ParamsPerFrame + capture_params) + params_used++;
     u32* param = params_mapped + index * 8;
     param[0] = allocation.store;
     param[1] = allocation.load;
     param[2] = allocation.vertices;
     param[3] = flags;
+    param[4] = allocation.first_vertex;
+    param[5] = allocation.first_instance;
+    param[6] = allocation.instances;
+    param[7] = 0;
+    params_ticks[slot] = scheduler.CurrentTick();
+    return index;
+}
+
+u32 ObjectMotion::PrepareCapture(const DrawInfo& draw, Motion::History::Allocation& allocation) {
+    allocation = {};
+    if (!enabled || !rtao_capture || BbToggle::Disabled(1u << 29) || capture_params_used >= capture_params) {
+        return 0;
+    }
+    const u64 count = u64(draw.vertices.count) * draw.instances;
+    if (!count || u64(draw.vertices.first) + draw.vertices.count - 1 > INT32_MAX) {
+        return 0;
+    }
+    if (count > capture_per_frame - capture_used) {
+        ++capture_skips;
+        return 0;
+    }
+    allocation = {.store = u32(1 + 2ull * PositionsPerFrame + (frame & 1) * capture_per_frame + capture_used),
+                  .load = 0,
+                  .vertices = draw.vertices.count,
+                  .instances = draw.instances,
+                  .first_vertex = draw.vertices.first,
+                  .first_instance = draw.first_instance};
+    capture_used += u32(count);
+    ++capture_draws;
+    const u32 slot = u32(frame % FrameSlots);
+    const u32 index = 1 + slot * (ParamsPerFrame + capture_params) + ParamsPerFrame + capture_params_used++;
+    u32* param = params_mapped + index * 8;
+    param[0] = allocation.store;
+    param[1] = 0;
+    param[2] = allocation.vertices;
+    param[3] = Shader::MotionVectors::FlagStore; // no load: the fragment output is a gated draw's
     param[4] = allocation.first_vertex;
     param[5] = allocation.first_instance;
     param[6] = allocation.instances;

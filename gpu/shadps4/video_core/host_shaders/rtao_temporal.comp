@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: ray-traced AO, temporal accumulation of denoiser 2 (vk_rtao.cpp, denoise=2). The trace
+// writes this frame's raw AO; here it is blended with the reprojected history at 1/N, where N is
+// the per-pixel count of accumulated frames (capped at max_n, reset on disocclusion), and the
+// history is first clipped to the current frame's local mean +- clip_k standard deviations
+// (variance clipping: a stale shadow cannot trail behind a moving edge).
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform texture2D raw_tex;    // half res: this frame's ao, view z
+layout(binding = 1) uniform texture2D hist_tex;   // half res: previous ao, view z, N
+layout(binding = 2) uniform texture2D motion_tex; // full res, pixels, previous - current
+layout(binding = 3, rgba16f) uniform writeonly image2D hist_out;
+layout(binding = 4, rg16f) uniform writeonly image2D ao_out;
+
+layout(push_constant) uniform Constants {
+    vec2 half_size;
+    ivec2 sub;        // this frame's sample inside the 2x2 block (as the trace)
+    float max_n;      // accumulated frames at most (the blend weight's floor is 1 / max_n)
+    float clip_k;     // history clip: mean +- clip_k sigma of the 3x3 neighbourhood
+    uint history_ok;  // 0: no usable history (first pass, a cut)
+    float clip_floor; // the clip's half-width at least this: with few rays a 3x3 neighbourhood
+                      // often has no hit at all (sigma 0), and the clip then pushed history to 1
+};
+
+void main() {
+    const ivec2 hp = ivec2(gl_GlobalInvocationID.xy);
+    if (hp.x >= int(half_size.x) || hp.y >= int(half_size.y)) {
+        return;
+    }
+    const vec2 c = texelFetch(raw_tex, hp, 0).rg;
+    if (c.g >= 1e8) { // sky
+        imageStore(hist_out, hp, vec4(1.0, c.g, 0.0, 0.0));
+        imageStore(ao_out, hp, vec4(1.0, c.g, 0.0, 0.0));
+        return;
+    }
+    const float z = c.g;
+    // The local distribution of this frame's raw AO, on the same surface only.
+    float sum = 0.0, sum2 = 0.0, count = 0.0;
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            const ivec2 q = clamp(hp + ivec2(i, j), ivec2(0), ivec2(half_size) - 1);
+            const vec2 s = texelFetch(raw_tex, q, 0).rg;
+            if (abs(s.g - z) < 0.05 * z + 0.05) {
+                sum += s.r;
+                sum2 += s.r * s.r;
+                count += 1.0;
+            }
+        }
+    }
+    const float mean = sum / count;
+    const float sigma = sqrt(max(sum2 / count - mean * mean, 0.0));
+
+    // The history where this pixel was: bilinear over four half-res texels, each only where its
+    // depth agrees.
+    float ao = mean; // fresh pixels start from the local mean (one frame of few rays is noisy)
+    float n = 1.0;
+    if (history_ok != 0u) {
+        const ivec2 fp = hp * 2 + sub;
+        const vec2 motion = texelFetch(motion_tex, fp, 0).rg;
+        const vec2 prev_hpf = (vec2(fp) + 0.5 + motion) / 2.0 - 0.5;
+        const ivec2 p0 = ivec2(floor(prev_hpf));
+        const vec2 pf = prev_hpf - vec2(p0);
+        float hist = 0.0, hist_n = 0.0, hist_w = 0.0;
+        for (int j = 0; j < 2; ++j) {
+            for (int i = 0; i < 2; ++i) {
+                const ivec2 pp = p0 + ivec2(i, j);
+                if (any(lessThan(pp, ivec2(0))) || any(greaterThanEqual(pp, ivec2(half_size)))) {
+                    continue;
+                }
+                const vec3 prev = texelFetch(hist_tex, pp, 0).rgb;
+                const float wb = (i == 0 ? 1.0 - pf.x : pf.x) * (j == 0 ? 1.0 - pf.y : pf.y);
+                const float wd = abs(prev.g - z) < 0.03 * z ? 1.0 : 0.0;
+                hist += prev.r * wb * wd;
+                hist_n += prev.b * wb * wd;
+                hist_w += wb * wd;
+            }
+        }
+        if (hist_w > 0.5) {
+            hist /= hist_w;
+            n = min(hist_n / hist_w + 1.0, max_n);
+            const float half_width = max(clip_k * sigma, clip_floor);
+            hist = clamp(hist, mean - half_width, mean + half_width);
+            ao = mix(hist, c.r, 1.0 / n);
+        }
+    }
+    imageStore(hist_out, hp, vec4(ao, z, n, 0.0));
+    imageStore(ao_out, hp, vec4(ao, z, 0.0, 0.0));
+}

@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: ray-traced AO, applied into the game's own AO mask (R8, scene size) after the game's
+// upsample pass: depth-aware upsample of the half-res trace, mask = min(mask, lerp(1, ao, strength)).
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform texture2D ao_tex;    // half res: ao, view z
+layout(binding = 1) uniform texture2D depth_tex; // full res
+layout(binding = 2, r8) uniform image2D mask_img; // the game's mask, read + write
+
+layout(push_constant) uniform Constants {
+    vec4 proj;
+    vec2 full_size;
+    vec2 half_size;
+    float strength;
+    uint debug;
+    float power;      // ao = pow(ao, power)
+    uint blur;        // 0: 2x2 bilinear upsample, 1: 4x4 tent (a small denoise)
+    uint replace;     // 1: the mask becomes ours alone (the game's AO ignored)
+    uint pad1;
+};
+
+float ViewZ(float depth) { return proj.w / min(depth - proj.z, -1e-8); }
+
+void main() {
+    const ivec2 fp = ivec2(gl_GlobalInvocationID.xy);
+    if (fp.x >= int(full_size.x) || fp.y >= int(full_size.y)) {
+        return;
+    }
+    const float depth = texelFetch(depth_tex, fp, 0).r;
+    if (depth >= 1.0) {
+        return;
+    }
+    const float z = ViewZ(depth);
+    const vec2 hpf = (vec2(fp) + 0.5) / 2.0 - 0.5;
+    const ivec2 h0 = ivec2(floor(hpf));
+    const vec2 f = hpf - vec2(h0);
+    float ao = 0.0, wsum = 0.0, wmatch = 0.0;
+    const int lo = blur != 0u ? -1 : 0, hi = blur != 0u ? 2 : 1;
+    const float reach = blur != 0u ? 1.5 : 1.0; // tent radius in half-res texels
+    for (int j = lo; j <= hi; ++j) {
+        for (int i = lo; i <= hi; ++i) {
+            const ivec2 hp = clamp(h0 + ivec2(i, j), ivec2(0), ivec2(half_size) - 1);
+            const vec2 s = texelFetch(ao_tex, hp, 0).rg;
+            const vec2 d = abs(vec2(h0 + ivec2(i, j)) - hpf);
+            const float wb = max(reach - d.x, 0.0) * max(reach - d.y, 0.0);
+            // Depth-aware, no bleeding across edges; the absolute term keeps the relief of
+            // near cobbles (a few cm) from flipping neighbours in and out with the jitter.
+            const float wd = exp(-abs(s.g - z) / (0.03 * z + 0.1));
+            const float w = wb * wd + 1e-5;
+            ao += s.r * w;
+            wsum += w;
+            wmatch += wb * wd;
+        }
+    }
+    // Few half-res texels on this surface (thin features: the sword): fade towards unoccluded
+    // rather than a guess that flips every frame with the sampling (a hard switch flickered).
+    ao = mix(1.0, ao / wsum, clamp(wmatch / 0.3, 0.0, 1.0));
+    ao = pow(clamp(ao, 0.0, 1.0), power);
+    const float game = imageLoad(mask_img, fp).r;
+    const float ours = mix(1.0, ao, strength);
+    imageStore(mask_img, fp, vec4(debug != 0u ? ao : (replace != 0u ? ours : min(game, ours)), 0.0, 0.0, 0.0));
+}

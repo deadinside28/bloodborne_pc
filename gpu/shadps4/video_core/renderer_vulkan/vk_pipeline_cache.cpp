@@ -23,6 +23,7 @@
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/runtime_info.h"
+#include "video_core/renderer_vulkan/vk_object_motion.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -181,7 +182,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
             !instance.IsDepthClipControlSupported() &&
             regs.clipper_control.clip_space == AmdGpu::ClipSpace::MinusWToW;
         info.hw.vs.clip_disable = regs.IsClipDisabled();
-        info.hw.vs.motion_vectors = sel.motion;
+        info.hw.vs.motion_vectors = sel.motion || sel.capture;
         break;
     }
     case HwStage::Fragment: {
@@ -760,6 +761,7 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
                           regs.stage_enable.raw == AmdGpu::ShaderStageEnable::VgtStages::Vs;
     }
     sel.motion = false;
+    sel.capture = false;
 
     // First pass to fill render target information needed by shader recompiler
     for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {
@@ -836,7 +838,11 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         if (all_motion) {
             sel.motion = true;
         }
-        if (sel.motion && !RefreshGraphicsStages(sel)) {
+        // bbport: the ray-traced AO needs every G-buffer draw's positions. Pipelines the motion
+        // path leaves out get the vertex stores only: their fragment shader, attachments and
+        // the motion image stay as without the RTAO (key value 2).
+        sel.capture = !sel.motion && ObjectMotion::RtaoCapture();
+        if ((sel.motion || sel.capture) && !RefreshGraphicsStages(sel)) {
             return false;
         }
     }
@@ -871,6 +877,9 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         key.num_samples = std::max(key.num_samples, color_samples);
     }
 
+    if (sel.capture) {
+        key.motion_vectors = 2; // vertex stores only: no attachment (see above)
+    }
     if (sel.motion) {
         constexpr u32 mv = Shader::MotionVectors::Output;
         key.motion_vectors = 1;
