@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -69,6 +70,17 @@ std::mutex banner_mutex;
 std::string banner_text;
 std::atomic<bool> banner_active{false};
 std::string prompt_title, prompt_text;
+/// Trophies to announce, oldest first; the front one is on screen (as shadPS4's trophy_ui.cpp:
+/// slides in from the right, stays, fades out over the last second).
+struct TrophyToast {
+    char grade;
+    std::string name;
+    float elapsed = 0.0f;
+};
+std::mutex trophy_mutex;
+std::deque<TrophyToast> trophy_queue;
+std::atomic<bool> trophy_active{false};
+constexpr float TrophySeconds = 6.0f, TrophySlide = 0.4f;
 
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
@@ -870,6 +882,67 @@ void FpsCounter() {
     ImGui::End();
 }
 
+// The front trophy of the queue: a dark panel at the top centre (the game's HUD has its health at
+// the top left, its echoes and insight at the top right), sliding down, with a badge in the
+// grade's colour, "Trophy earned" and the name.
+void TrophyWindow(float dt) {
+    TrophyToast toast;
+    {
+        std::scoped_lock lock{trophy_mutex};
+        if (trophy_queue.empty()) {
+            trophy_active = false;
+            return;
+        }
+        auto& front = trophy_queue.front();
+        if (front.elapsed <= 0.0f && front.elapsed + dt > 0.0f) {
+            std::printf("Overlay: trophy shown: %s\n", front.name.c_str());
+        }
+        front.elapsed += dt;
+        if (front.elapsed > TrophySeconds) {
+            trophy_queue.pop_front();
+            trophy_active = !trophy_queue.empty();
+            return;
+        }
+        toast = front;
+    }
+    if (toast.elapsed < 0.0f) {
+        return; // a delayed one (BB_TROPHY_TEST)
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float s = base_scale;
+    const ImVec2 size{380.0f * s, 76.0f * s};
+    const float slide = std::min(toast.elapsed / TrophySlide, 1.0f);
+    const float eased = 1.0f - (1.0f - slide) * (1.0f - slide);
+    const float x = viewport->WorkPos.x + (viewport->WorkSize.x - size.x) * 0.5f;
+    const float y = viewport->WorkPos.y - size.y + (size.y + 24.0f * s) * eased;
+    const float alpha = std::clamp(std::min(slide, TrophySeconds - toast.elapsed), 0.0f, 1.0f);
+    auto* draw = ImGui::GetForegroundDrawList();
+    const auto a = [alpha](int r, int g, int b, int base) { return IM_COL32(r, g, b, int(base * alpha)); };
+    draw->AddRectFilled({x, y}, {x + size.x, y + size.y}, a(12, 10, 8, 220), 8.0f * s);
+    draw->AddRect({x, y}, {x + size.x, y + size.y}, a(150, 130, 100, 200), 8.0f * s, 0, 1.5f * s);
+    // The badge: the grade's colour (platinum, gold, silver, bronze; grey unknown) and its letter.
+    const ImU32 badge = toast.grade == 'P'   ? a(200, 215, 235, 255)
+                        : toast.grade == 'G' ? a(222, 180, 60, 255)
+                        : toast.grade == 'S' ? a(185, 190, 196, 255)
+                        : toast.grade == 'B' ? a(176, 112, 64, 255)
+                                             : a(120, 120, 120, 255);
+    const ImVec2 centre{x + 38.0f * s, y + size.y * 0.5f};
+    draw->AddCircleFilled(centre, 24.0f * s, badge);
+    draw->AddCircle(centre, 24.0f * s, a(30, 25, 20, 255), 0, 2.0f * s);
+    const char letter[2] = {toast.grade == '?' ? 'T' : toast.grade, 0};
+    const ImVec2 letter_size = ImGui::CalcTextSize(letter);
+    draw->AddText({centre.x - letter_size.x * 0.5f, centre.y - letter_size.y * 0.5f}, a(30, 25, 20, 255), letter);
+    const float text_x = x + 76.0f * s, wrap = size.x - 88.0f * s;
+    // In the game's language, as the name (BB_LANGUAGE, the PS4 number: 8 Russian).
+    static const bool russian = [] {
+        const char* env = std::getenv("BB_LANGUAGE");
+        return env && std::atoi(env) == 8;
+    }();
+    draw->AddText({text_x, y + 12.0f * s}, a(200, 185, 150, 255), russian ? "Получен трофей" : "Trophy earned");
+    draw->AddText(nullptr, 0.0f, {text_x, y + 12.0f * s + ImGui::GetTextLineHeightWithSpacing()},
+                  a(240, 232, 215, 255), toast.name.c_str(), nullptr, wrap);
+}
+
 void TextPrompt() {
     std::string title, text;
     {
@@ -1131,8 +1204,15 @@ void SetBanner(const char* text) {
     banner_active = text != nullptr && text[0] != 0;
 }
 
+void ShowTrophy(char grade, const std::string& name, const std::filesystem::path& icon, float delay) {
+    (void)icon;
+    std::scoped_lock lock{trophy_mutex};
+    trophy_queue.push_back({grade, name, -delay});
+    trophy_active = true;
+}
+
 bool Visible() {
-    return initialized && (menu_open || prompt_active || banner_active ||
+    return initialized && (menu_open || prompt_active || banner_active || trophy_active ||
                            BbSettings::Get().show_fps);
 }
 
@@ -1201,6 +1281,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     if (prompt_active && !menu_open) {
         TextPrompt();
+    }
+    if (trophy_active) {
+        TrophyWindow(io.DeltaTime);
     }
     if (banner_active) {
         std::string text;

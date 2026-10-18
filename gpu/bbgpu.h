@@ -59,6 +59,11 @@ void bbgpu_filter_pad(uint32_t *buttons, const uint8_t *sticks);
 float bbgpu_frame_aspect(void);
 /* A line of text over the game, near the bottom, until called with NULL (any thread). */
 void bbgpu_overlay_banner(const char *utf8);
+/* Trophies (gpu/shim/bbport_trophies.cpp): setup takes the game's sce_sys folder and the user
+ * folder (once); unlock keeps the trophy and announces it over the frame the first time, and
+ * returns the platinum unlocked along with it, else -1. */
+void bbgpu_trophy_setup(const char *sce_sys_host_dir, const char *user_dir);
+int bbgpu_trophy_unlock(int id);
 /* Native mouse look: turns the game's camera (radians, applied at its next update); 0 when the
  * camera hook is not in (another game version, BB_NATIVE_MOUSE=0) or the camera does not take the
  * turns now (lock-on, menus): drive the right stick then. */

@@ -266,18 +266,25 @@ static ABI int32_t ime_result(uint32_t *result) {
 }
 static ABI int32_t ime_term(void) { memset(&ime,0,sizeof(ime)); return 0; }
 
-/* ---- Trophies: accepted locally, recorded in the log ---- */
+/* ---- Trophies: kept in the user folder and announced over the frame (bbgpu_trophy_*) ---- */
 static ABI int32_t trophy_context(int32_t *ctx,int32_t user,uint32_t label,uint64_t options) {
     (void)user; (void)label; (void)options;
     if (!ctx) return TROPHY_INVALID;
     *ctx=new_id(); return 0;
 }
 static ABI int32_t trophy_handle(int32_t *handle) { if (!handle) return TROPHY_INVALID; *handle=new_id(); return 0; }
-static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) { (void)ctx; (void)handle; (void)options; return 0; }
+static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) {
+    (void)ctx; (void)handle; (void)options;
+    char sce_sys[1024];
+    if (runtime_file_host_path("/app0/sce_sys",sce_sys,sizeof(sce_sys))) sce_sys[0]=0;
+    bbgpu_trophy_setup(sce_sys[0] ? sce_sys : NULL,runtime_file_user_dir());
+    return 0;
+}
 static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) {
     (void)ctx; (void)handle;
     printf("Runtime: trophy %d unlocked\n",id);
-    if (platinum) *platinum=-1;
+    const int32_t plat=bbgpu_trophy_unlock(id);
+    if (platinum) *platinum=plat;
     return 0;
 }
 static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,void *data) {

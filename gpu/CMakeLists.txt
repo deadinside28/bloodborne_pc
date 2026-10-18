@@ -208,6 +208,15 @@ if (NOT WIN32)
     target_link_options(bbgpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
 target_link_libraries(bbgpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
+# Trophy names: trophy00.trp decrypted with the user's trophy key (shim/bbport_trophies.cpp).
+# Without OpenSSL the unlocks are kept and shown by number.
+find_package(OpenSSL QUIET COMPONENTS Crypto)
+if (OpenSSL_FOUND)
+    target_link_libraries(bbgpu PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(bbgpu PRIVATE BB_TROPHY_DECRYPT=1)
+else()
+    message(STATUS "Trophy names: off (OpenSSL's libcrypto missing; unlocks shown by number)")
+endif()
 target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 if (NOT WIN32)
@@ -238,6 +247,9 @@ if (WIN32)
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(trophy-test EXCLUDE_FROM_ALL ../tests/test_trophies.cpp shim/bbport_trophy_data.cpp)
+target_compile_options(trophy-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(trophy-test PRIVATE shim)
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)

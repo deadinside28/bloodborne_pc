@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include "common/types.h"
 #include "vulkan/vk_common.h"
@@ -30,6 +31,10 @@ void UpdateTextInput(SDL_Window* window);
 bool Visible();
 /// A line of text over the game until called with null (bbgpu_overlay_banner).
 void SetBanner(const char* text);
+/// A trophy unlocked (bbport_trophies.cpp): announced at the top right for a few seconds, one
+/// after another. grade: P G S B, '?' unknown. The icon is not drawn yet (no PNG decoder here).
+/// delay: seconds of drawn frames before it shows (BB_TROPHY_TEST: past the game's start).
+void ShowTrophy(char grade, const std::string& name, const std::filesystem::path& icon, float delay = 0.0f);
 
 /// Present thread: draws into `view` (layout ColorAttachmentOptimal).
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
