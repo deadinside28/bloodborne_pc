@@ -9,6 +9,16 @@ namespace Vulkan::UiComposition {
 
 enum class Background { None, Copy, Temporal };
 
+inline constexpr uint32_t LogicalWidth = 1920;
+inline constexpr uint32_t LogicalHeight = 1080;
+
+constexpr std::array<uint32_t, 2> LogicalSize(uint32_t output_width, uint32_t output_height) {
+    if (!output_width || !output_height) return {LogicalWidth, LogicalHeight};
+    const uint32_t height = uint32_t((uint64_t(LogicalWidth) * output_height + output_width / 2) /
+                                     output_width);
+    return {LogicalWidth, height};
+}
+
 // UI composition must not require scene depth/camera or an active FSR context.
 constexpr Background Choose(bool scaled, bool ui_draw, bool scene_ready, bool fsr_active) {
     if (!scaled || !ui_draw) {
@@ -17,9 +27,10 @@ constexpr Background Choose(bool scaled, bool ui_draw, bool scene_ready, bool fs
     return scene_ready && fsr_active ? Background::Temporal : Background::Copy;
 }
 
-inline bool NativeViewport(float width, float height) {
-    return std::abs(std::abs(width) - 1920.0f) < 0.5f &&
-           std::abs(std::abs(height) - 1080.0f) < 0.5f;
+inline bool NativeViewport(float width, float height, uint32_t logical_width = LogicalWidth,
+                           uint32_t logical_height = LogicalHeight) {
+    return std::abs(std::abs(width) - float(logical_width)) < 0.5f &&
+           std::abs(std::abs(height) - float(logical_height)) < 0.5f;
 }
 
 // Scaleform draws, including the first stencil/movie pass. A native-size viewport
@@ -34,10 +45,11 @@ constexpr bool MovieShader(uint64_t hash) {
 }
 
 inline std::array<float, 2> Scale(uint32_t guest_width, uint32_t guest_height,
-                                uint32_t output_width, uint32_t output_height,
-                                bool native_coordinates) {
-    return {float(output_width) / float(native_coordinates ? 1920 : guest_width),
-            float(output_height) / float(native_coordinates ? 1080 : guest_height)};
+                                  uint32_t output_width, uint32_t output_height,
+                                  bool native_coordinates, uint32_t logical_width = LogicalWidth,
+                                  uint32_t logical_height = LogicalHeight) {
+    return {float(output_width) / float(native_coordinates ? logical_width : guest_width),
+            float(output_height) / float(native_coordinates ? logical_height : guest_height)};
 }
 
 } // namespace Vulkan::UiComposition

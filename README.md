@@ -67,7 +67,8 @@ Mesa/RADV) has been tested thoroughly.
   computes motion vectors itself: camera motion from depth and the scene matrices, and object
   motion (characters, cloth, weapons) from the vertex positions of the previous frame. The
   scene is jittered sub-pixel (Halton) and rendered at a reduced resolution; the upscaler fills
-  the output (720p for the Steam Deck, 1080p, 1440p or 2160p) and the UI is drawn natively at the output resolution.
+  the output (1280×800 or 1280×720 for the Steam Deck, 1080p, 1440p or 2160p) and the UI is
+  drawn natively at the output resolution.
   - **FSR 3.1** (FireBurn/FSR-Vulkan).
   - **FSR 4 (INT8, model v07)** on GPUs exposing the required Vulkan shader features —
     RDNA2/3 included (see Requirements).
@@ -178,20 +179,22 @@ its main menu offline (a game patch; the launcher's *Game effects → Skip the �
 `BB_SKIP_NETWORK_CHOICE=0` shows it). With several monitors, *Screen → Monitor* in the launcher
 (`BB_DISPLAY=<number or part of the name>`) picks the one for the game.
 
-**Resolution and preset changes:** for outputs other than 1080p (720p on the Steam Deck,
+**Resolution and preset changes:** for outputs other than 1080p (720p or 800p on the Steam Deck,
 1440p, 4K) the whole game renders at the preset's resolution, set by a patch at start — the
-fastest path. Changing the output or the preset in the in-game menu then needs *Apply and
-restart the game*. The *Live resolution changes* setting (launcher, in-game menu,
-`bbport.ini` `live_resolution=0|1|auto`; **off by default**) instead keeps the game at
-1080p internally and scales its render targets at run time, so 720p/1080p/1440p/4K and the
-presets switch without a restart. It costs more: the game then believes it renders 1080p
-and draws more (e.g. ~8× more small lights), and some targets are copied between sizes —
-use it on strong desktop GPUs only (`auto` turns it on for discrete GPUs with 8+ GB that are
-not pre-Turing NVIDIA). 1080p output and TAA always use the live path.
+fastest path. The Steam Deck's 1280×800 option applies the game's 16:10 aspect and HUD patch;
+it always uses this startup path, even if live resolution is selected. Changing the output or
+preset in the in-game menu then needs *Apply and restart the game*. The *Live resolution changes*
+setting (launcher, in-game menu, `bbport.ini` `live_resolution=0|1|auto`; **off by default**)
+instead keeps the game at 1080p internally and scales its render targets at run time, so
+16:9 outputs and presets switch without a restart. It costs more: the game then believes it
+renders 1080p and draws more (e.g. ~8× more small lights), and some targets are copied between
+sizes — use it on strong desktop GPUs only (`auto` turns it on for discrete GPUs with 8+ GB that
+are not pre-Turing NVIDIA). 1080p output and TAA use the live path on 16:9 outputs.
 
 **TAA:** a separate native-resolution temporal AA mode in the launcher and overlay,
-switchable live without an FSR model. The saved FSR preset is restored when returning
-to FSR. FSR Native AA adds reconstruction on top of full-resolution rendering and can
+switchable live on 16:9 outputs without an FSR model. At 1280×800, changing to TAA requires
+a restart because the guest aspect patch is applied at startup. The saved FSR preset is restored
+when returning to FSR. FSR Native AA adds reconstruction on top of full-resolution rendering and can
 be slower than disabling AA. TAA also adds work compared with no temporal AA.
 The RCAS switch and the 0–2 sharpness control also work with TAA. Sharpening runs after
 temporal accumulation and leaves its history and HUD unchanged.
@@ -286,8 +289,9 @@ emulation of FP8 (`BB_FSR4CAP_FP8=1` records it there too, `fp8emu/`): bit-exact
 `dist/Bloodborne-bbport-x86_64.AppImage`; data in `~/.local/share/bbport`, `--play` starts the
 game without the launcher window (Game Mode). FSR 4.1.1 models are not packaged: build them with
 the launcher's button (see above); they go to `~/.local/share/bbport/fsr4_411`
-(`BB_PACKAGE_FSR411=1` bundles a local `fsr4_411` into an AppImage for your own devices). On the Steam Deck pick the 1280×720 output (the
-game is 16:9; on the 1280×800 screen it gets thin bars).
+(`BB_PACKAGE_FSR411=1` bundles a local `fsr4_411` into an AppImage for your own devices). On the
+Steam Deck pick 1280×800 (16:10) to use the full screen; 1280×720 remains available with the
+game's 16:9 aspect ratio.
 
 **Adding the AppImage to Steam** (*Add a Non-Steam Game*) needs no options; the compatibility tool
 does not matter. (Steam preloads its overlay into every non-Steam game; the AppImage removes it

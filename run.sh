@@ -84,14 +84,16 @@ fi
 # Frame rate: BB_FPS=uncap (default; delta-time patch, vblank 480 Hz, frames shown at once),
 # 60/90 (fixed-timestep patches) or 30 (unpatched). BB_PATCHES adds patch names ("a;b").
 fps=${BB_FPS:-uncap}
-# bbport.ini output_res other than 1080p (720p for the Steam Deck, 1440p, 2160p): the whole game
-# renders at the preset's size of the output (a patch), the upscaler fills the output, the UI is
-# drawn at the output size. Preset and output changes need a restart.
+# bbport.ini output_res other than 1080p (720p/800p for the Steam Deck, 1440p, 2160p): the whole
+# game renders at the preset's size of the output (a patch), the upscaler fills the output, the UI
+# is drawn at the output size. Preset and output changes need a restart. The 16:10 1280x800 mode
+# always uses this path so its guest aspect-ratio patch is applied.
 # Live resolution changes keep the guest at 1920x1080 and scale host targets at run time instead
 # (output and presets change in the menu without a restart, but post-processing stays at 1080p
 # and scene targets are copied back: much slower on the Steam Deck and older GPUs). Chosen by
 # BB_LIVE_RES=0/1, else bbport.ini live_resolution=0/1/auto (auto: the GPU check, strong
-# discrete GPUs get them); off when unset. 1080p output and TAA always use the live path.
+# discrete GPUs get them); off when unset. 1080p and TAA use live targets on 16:9 outputs.
+# 1280x800 is always startup-patched so the game's guest aspect ratio matches the screen.
 # The GPU tools (bb-gpu-capabilities: the game's GPU, its live resolution support).
 if [[ -n ${BB_PROBE:-} ]]; then caps=$(dirname -- "$BB_PROBE")/bb-gpu-capabilities
 elif [[ -n ${BB_PREBUILT:-} ]]; then caps=bin/bb-gpu-capabilities
@@ -114,12 +116,24 @@ if [[ -n ${scaled_output:-} ]]; then
     fi
     [[ $live == 1 ]] || live=0
 fi
+# The 16:10 aspect correction lives in the guest patch, so it cannot use the live 16:9 guest
+# targets. Keep the startup-patched path even when live resolution was requested.
+if [[ ${scaled_output:-} == 1280x800 ]]; then
+    if [[ $live == 1 ]]; then
+        echo "Output ${scaled_output}: live resolution is incompatible with 16:10; using startup patch"
+    fi
+    live=0
+fi
 if [[ $live == 1 ]]; then
     echo "Output ${scaled_output}: live resolution changes (live_resolution=0: startup patch)"
 elif [[ -n ${scaled_output:-} ]]; then
     export BB_RENDER_RES=$scaled_render BB_OUTPUT_RES=$scaled_output BB_AUTO_RENDER_RES=1
     export BB_DMEM_MB=${BB_DMEM_MB:-9152}
-    echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB} MiB (live_resolution=1: live changes)"
+    if [[ $scaled_output == 1280x800 ]]; then
+        echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB} MiB (16:10 startup patch)"
+    else
+        echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB} MiB (live_resolution=1: live changes)"
+    fi
 fi
 "$PYTHON" scripts/patches.py --out "$out" --fps "$fps" --extra "${BB_PATCHES:-}" --settings "$BB_CONFIG" --game-dir "$game" --render-res "${BB_RENDER_RES:-}" --output-res "${BB_OUTPUT_RES:-}" \
     --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}"

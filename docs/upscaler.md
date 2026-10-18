@@ -47,14 +47,15 @@ copy took nine draws.
 - `run.sh` again patches the game's render size for outputs other than 1080p (as in 0.1) and
   marks it with `BB_AUTO_RENDER_RES=1`, so an in-game restart recomputes it. Preset and output
   changes then need a restart (the menu offers it). `BB_LIVE_RES=1` selects the live path.
-  1080p output and TAA keep the live path.
+  1080p output and TAA keep the live path except at 1280×800: that Steam Deck 16:10 mode uses
+  the guest aspect-ratio patch, so it always uses the startup-patched path.
 - Depth/stencil scene proxies need `VK_EXT_shader_stencil_export` again; without it these
   targets stay native (as in 0.1). `BB_SCENE_STENCIL_BITS=1` still forces the portable
   resampler for tests.
 
 ## Live resolution changes (2026-10-01)
 
-The in-game output selector now resizes 720p/1080p/1440p/2160p host targets at a
+The in-game output selector resizes 720p/1080p/1440p/2160p host targets at a
 display-pass boundary. Presets use `output / scale`, including raster sizes above
 1080p (4K Quality: 2560×1440; Native AA: 3840×2160). Guest allocations stay at
 1920×1080; `run.sh` no longer inserts a resolution patch for normal output choices.

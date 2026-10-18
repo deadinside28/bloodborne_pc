@@ -311,6 +311,11 @@ float Halton(u32 index, u32 base) {
 }
 } // namespace
 
+std::array<u32, 2> TemporalUpscaler::UiCoordinateSize() const {
+    const auto size = UiComposition::LogicalSize(target_width, target_height);
+    return {size[0], size[1]};
+}
+
 bool TemporalUpscaler::ReducedScene(const VideoCore::Image& color) const {
     return !scaled_session && scene_targets.Reduced() && scene_targets.EligibleScene(color);
 }
@@ -353,7 +358,11 @@ bool TemporalUpscaler::OnFrameStart() {
     const bool active = Active();
     const bool jitter_on = active && settings.jitter && !BbToggle::Disabled(1u << 25);
     const int upscaler = settings.upscaler.load();
-    const int output = settings.output_res.load();
+    int output = settings.output_res.load();
+    if (!scaled_session && BbSettings::ResolutionNeedsRestart() &&
+        BbSettings::Is16x10Output(output)) {
+        output = applied_output >= 0 ? applied_output : settings.startup_output_res;
+    }
     const bool output_changed = !scaled_session && applied_output != output;
     if (output_changed) {
         target_width = BbSettings::OutputWidths[output];

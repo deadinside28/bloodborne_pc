@@ -16,6 +16,9 @@ int main() {
     assert(Choose(false, true, true, true) == Background::None);
     assert(NativeViewport(1920, -1080));
     assert(!NativeViewport(960, -540));
+    const auto deck_ui = LogicalSize(1280, 800);
+    assert((deck_ui == std::array<uint32_t, 2>{1920, 1200}));
+    assert(NativeViewport(1920, -1200, deck_ui[0], deck_ui[1]));
     assert(MovieShader(0x34e8a281) && MovieShader(0x24042a9b));
     assert(!MovieShader(0x0b0acf50)); // fullscreen post/tonemap also has a native viewport
     assert(!MovieShader(0x6c62a79f)); // shadow geometry
@@ -25,5 +28,7 @@ int main() {
     assert(ui[0] == 1 && ui[1] == 1); // don't double an already native UI viewport
     const auto larger = Scale(960, 540, 3840, 2160, true);
     assert(larger[0] == 2 && larger[1] == 2);
+    const auto deck = Scale(960, 600, 1280, 800, true, deck_ui[0], deck_ui[1]);
+    assert(deck[0] == deck[1] && deck[0] == 2.0f / 3.0f);
     std::puts("UI composition: PASS (menu without camera, HUD, FSR off, viewport scaling)");
 }

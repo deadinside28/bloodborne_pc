@@ -25,7 +25,13 @@ PRESET_SCALES=[1.0,1.5,1.7,2.0,3.0]
 # The community patch changes two independent consumers: the game render/window setup
 # and the UI movie viewport. Keep the latter at native size so glyph rasterisation and
 # vector tessellation do not inherit the scene's FSR resolution.
-RESOLUTION_TEMPLATE='Resolution Patch 1280x720 (16:9)'
+RESOLUTION_TEMPLATE_16_9='Resolution Patch 1280x720 (16:9)'
+RESOLUTION_TEMPLATE_16_10='Resolution Patch 1280x800 (16:10)'
+RESOLUTION_TEMPLATE=RESOLUTION_TEMPLATE_16_9
+RESOLUTION_TEMPLATES={
+    RESOLUTION_TEMPLATE_16_9:(1280,720),
+    RESOLUTION_TEMPLATE_16_10:(1280,800),
+}
 # Effect switches (bbport.ini, in-game menu, launcher): key -> (patch when the key is 0, patch
 # when it is 1). The game reads these at start; a change applies after a restart.
 EFFECTS={
@@ -168,24 +174,44 @@ def render_size(settings,override=''):
     return tuple(max(2,round(v/scale/2)*2) for v in OUTPUT_SIZE)
 
 
-def output_size(settings):
-    """Output (UI) size from bbport.ini output_res, e.g. 3840x2160; 1920x1080 by default."""
+def parse_size(value):
     try:
-        w,h=(int(v) for v in settings.get('output_res','').lower().split('x'))
-        if w>0 and h>0: return (w,h)
-    except ValueError:
-        pass
-    return OUTPUT_SIZE
+        w,h=(int(v) for v in value.lower().split('x'))
+        return (w,h) if w>0 and h>0 else None
+    except (AttributeError,ValueError):
+        return None
+
+
+def output_size(settings):
+    """Output size from bbport.ini output_res; 1920x1080 by default."""
+    return parse_size(settings.get('output_res','')) or OUTPUT_SIZE
+
+
+def is_16_10(size):
+    return size[0] * 10 == size[1] * 16
+
+
+def resolution_template(size):
+    return RESOLUTION_TEMPLATE_16_10 if is_16_10(size) else RESOLUTION_TEMPLATE_16_9
+
+
+def ui_size(output):
+    """Logical UI viewport: 1920 wide, with the selected output's aspect ratio."""
+    return (OUTPUT_SIZE[0], round(OUTPUT_SIZE[0] * output[1] / output[0]))
 
 
 def scaled_sizes(settings):
-    """(render, output) for an output other than 1080p (above it, or 720p for the Steam Deck):
-    the game renders at output / preset scale (or at the output size without upscaler) and the
-    upscaler fills the output. None at 1080p and for TAA (native, live host targets only)."""
+    """(render, output) for startup-patched outputs other than 1080p.
+
+    The Steam Deck's 16:10 mode always needs the game patch, including TAA and live-resolution
+    preferences, because its camera and UI aspect ratio are established in the guest executable.
+    """
     out=output_size(settings)
-    if out==OUTPUT_SIZE or settings.get('upscaler')=='taa': return None
+    if out==OUTPUT_SIZE: return None
+    upscaler=settings.get('upscaler','fsr3')
+    if upscaler=='taa' and not is_16_10(out): return None
     scale=1.0
-    if settings.get('upscaler','fsr3')!='off':
+    if upscaler not in ('off','taa'):
         preset=int(settings.get('preset','0') or 0)
         scale=PRESET_SCALES[max(0,min(preset,len(PRESET_SCALES)-1))]
     render=tuple(max(2,round(v/scale/2)*2) for v in out)
@@ -195,12 +221,14 @@ def scaled_sizes(settings):
     return render,out
 
 
-def resolution_writes(xml,size,app_version,segments,ui=OUTPUT_SIZE):
-    writes=compile_patches(xml,[RESOLUTION_TEMPLATE],app_version,segments)
-    replacements={SCENE_WIDTH:(0xB8,0x500,size[0]),
-                  SCENE_HEIGHT:(0xB8,0x2D0,size[1]),
-                  UI_WIDTH:(0xB8,0x500,ui[0]),
-                  UI_HEIGHT:(0xB9,0x2D0,ui[1])}
+def resolution_writes(xml,size,app_version,segments,ui=OUTPUT_SIZE,output=OUTPUT_SIZE):
+    template=resolution_template(output)
+    base_width,base_height=RESOLUTION_TEMPLATES[template]
+    writes=compile_patches(xml,[template],app_version,segments)
+    replacements={SCENE_WIDTH:(0xB8,base_width,size[0]),
+                  SCENE_HEIGHT:(0xB8,base_height,size[1]),
+                  UI_WIDTH:(0xB8,base_width,ui[0]),
+                  UI_HEIGHT:(0xB9,base_height,ui[1])}
     out=[]
     seen=set()
     for offset,data in writes:
@@ -343,8 +371,9 @@ def main():
         size=render_size(settings)
         if size: print(f'{size[0]}x{size[1]}')
         return
+    settings=read_settings(a.settings)
     names=FPS_PRESETS[a.fps]+[n.strip() for n in a.extra.split(';') if n.strip()]
-    names+=[n for n in effect_patches(read_settings(a.settings)) if n not in names]
+    names+=[n for n in effect_patches(settings) if n not in names]
     if intel_tonemap_fix() and INTEL_TONEMAP not in names:
         names.append(INTEL_TONEMAP)
     if skip_network_choice() and SKIP_NETWORK_CHOICE not in names:
@@ -352,13 +381,14 @@ def main():
     names=validate_patch_requirements(names,a.game_dir)
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
     writes=compile_patches(a.xml,names,a.app_version,segments)
-    size=render_size(read_settings(a.settings),a.render_res) if a.render_res else None
-    # The UI keeps the game's 1920x1080 coordinates even for a larger output: the port draws
-    # it into the output-size image with a viewport scaled by output / 1920
-    # (UiComposition::NativeViewport), so it is rasterized at the output resolution.
-    ui=OUTPUT_SIZE
+    size=render_size(settings,a.render_res) if a.render_res else None
+    output=parse_size(a.output_res) if a.output_res else None
+    output=output or output_size(settings)
+    # Keep the UI at native logical width and match the game's patched aspect ratio; this makes
+    # the 16:10 viewport scale uniformly into the output image.
+    ui=ui_size(output)
     if size:
-        writes+=resolution_writes(a.xml,size,a.app_version,segments,ui)
+        writes+=resolution_writes(a.xml,size,a.app_version,segments,ui,output)
         if size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1]:
             heap='Increased Graphics Heap Sizes'
             writes+=compile_patches(a.xml,[heap],a.app_version,segments)

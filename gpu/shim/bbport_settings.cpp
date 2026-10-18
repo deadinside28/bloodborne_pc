@@ -203,6 +203,8 @@ int RenderPreset() {
 
 bool ResolutionNeedsRestart() {
     const auto& v = Get();
+    // The 16:10 camera/UI aspect is an executable patch even in an otherwise live session.
+    if (v.output_res != v.startup_output_res && Is16x10Output(v.output_res)) return true;
     // TAA needs the live path (native guest targets): run.sh selects it on restart.
     return FixedRenderSession() &&
         (v.preset != v.startup_preset || v.output_res != v.startup_output_res ||

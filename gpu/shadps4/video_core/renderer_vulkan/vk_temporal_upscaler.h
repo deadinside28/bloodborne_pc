@@ -53,6 +53,8 @@ public:
     [[nodiscard]] bool Enabled() const noexcept {
         return enabled;
     }
+    /// Native logical UI coordinates for the current output aspect ratio.
+    [[nodiscard]] std::array<u32, 2> UiCoordinateSize() const;
 
     /// A draw into a full-size RGBA16F target with the scene depth: the scene color.
     void OnSceneColor(VideoCore::ImageId color);

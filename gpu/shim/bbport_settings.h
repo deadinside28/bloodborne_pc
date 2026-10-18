@@ -40,11 +40,15 @@ inline constexpr Effect Effects[] = {
     {"debug_menu", "Debug menu (requires font files)", "Debug menu (нужны файлы шрифтов)", false},
 };
 inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
-/// Live output resolutions: the upscaler's output and the UI host targets.
-inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840};
-inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
-inline constexpr int OutputCount = 4;
-inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
+/// Output resolutions: the upscaler's output and the UI host targets.
+inline constexpr int OutputWidths[] = {1280, 1280, 1920, 2560, 3840};
+inline constexpr int OutputHeights[] = {720, 800, 1080, 1440, 2160};
+inline constexpr int OutputCount = 5;
+inline constexpr int OutputDefault = 2; ///< 1920x1080, the game's own size
+inline constexpr bool Is16x10Output(int output) {
+    return output >= 0 && output < OutputCount &&
+           OutputWidths[output] * 10 == OutputHeights[output] * 16;
+}
 
 struct Values {
     std::atomic<MenuLanguage> menu_language{MenuLanguage::Russian};
@@ -100,7 +104,7 @@ void Load();
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411);
 /// After device creation: DLSS availability; a DLSS setting falls back to FSR 3.1 without it.
 void ConfigureDlssSupport(bool available, const char* problem);
-/// Startup-patched scene dimensions cannot change until run.sh prepares a new image.
+/// Startup-patched scene dimensions and the 16:10 guest aspect cannot change until restart.
 bool FixedRenderSession();
 int RenderPreset();
 bool ResolutionNeedsRestart();

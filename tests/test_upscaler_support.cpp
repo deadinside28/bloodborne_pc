@@ -46,7 +46,7 @@ int main() {
                 assert(s.fsr4_supported == fsr4);
                 assert(s.fsr411_supported == (fsr4 && fsr411));
                 assert(bool(s.fsr4_problem.load()) == unsupported);
-                assert(s.preset == Performance && s.output_res == 2);
+                assert(s.preset == Performance && s.output_res == 3);
                 // Startup patch settings still describe the already applied guest patches.
                 assert(s.startup_upscaler == requested);
                 ConfigureUpscalerSupport(fsr4, fsr411);
@@ -54,6 +54,25 @@ int main() {
             }
         }
     }
+    FILE* config = std::fopen(path, "w");
+    assert(config);
+    std::fputs("upscaler=fsr3\noutput_res=1280x800\n", config);
+    std::fclose(config);
+    Load();
+    assert(s.output_res == 1 && OutputWidths[s.output_res] == 1280 &&
+           OutputHeights[s.output_res] == 800);
+    Save();
+    s.output_res = OutputDefault;
+    Load();
+    assert(s.output_res == 1 && Is16x10Output(s.output_res));
+    assert(!Is16x10Output(OutputDefault));
+    s.startup_output_res = OutputDefault;
+    assert(ResolutionNeedsRestart());
+    s.output_res = OutputDefault;
+    assert(!ResolutionNeedsRestart());
+    s.output_res = 1;
+    s.startup_output_res = 1;
+
     s.startup_preset = Quality;
     s.startup_upscaler = UpscalerFsr3;
     s.upscaler = UpscalerFsr3;

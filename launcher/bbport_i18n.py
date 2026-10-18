@@ -126,7 +126,7 @@ EN = {
     # Screen
     "Экран": "Display",
     "Разрешение вывода": "Output resolution",
-    "Апскейлер дорисовывает кадр; Steam Deck — 720p": "The upscaler fills the frame; Steam Deck: 720p",
+    "Апскейлер дорисовывает кадр; Steam Deck — 1280×800 (16:10, патч при запуске)": "The upscaler fills the frame; Steam Deck: 1280×800 (16:10, startup patch)",
     "Полноэкранный режим": "Fullscreen",
     "Смена разрешения на лету": "Live resolution changes",
     "Без перезапуска, но медленнее на Steam Deck и старых GPU":
@@ -399,7 +399,7 @@ PT_BR = {
     # Screen
     "Экран": "Tela",
     "Разрешение вывода": "Resolução de saída",
-    "Апскейлер дорисовывает кадр; Steam Deck — 720p": "O upscaler preenche o quadro; Steam Deck: 720p",
+    "Апскейлер дорисовывает кадр; Steam Deck — 1280×800 (16:10, патч при запуске)": "O upscaler preenche o quadro; Steam Deck: 1280×800 (16:10, patch de inicialização)",
     "Полноэкранный режим": "Tela cheia",
     "Смена разрешения на лету": "Alteração de resolução em tempo real",
     "Без перезапуска, но медленнее на Steam Deck и старых GPU":
@@ -647,7 +647,7 @@ ZH_CN = {
     # Screen
     "Экран": "显示",
     "Разрешение вывода": "输出分辨率",
-    "Апскейлер дорисовывает кадр; Steam Deck — 720p": "超分辨率会将画面放大到此分辨率；Steam Deck 建议 720p",
+    "Апскейлер дорисовывает кадр; Steam Deck — 1280×800 (16:10, патч при запуске)": "超分辨率会将画面放大到此分辨率；Steam Deck 建议 1280×800（16:10，启动补丁）",
     "Полноэкранный режим": "全屏模式",
     "Смена разрешения на лету": "实时切换分辨率",
     "Без перезапуска, но медленнее на Steam Deck и старых GPU":

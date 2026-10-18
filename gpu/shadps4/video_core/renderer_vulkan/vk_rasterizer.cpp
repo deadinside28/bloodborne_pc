@@ -1635,9 +1635,11 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     PrepareRenderState(pipeline);
     if (upscaler->Enabled() && std::popcount(pipeline->GetGraphicsKey().mrt_mask) == 1) {
         const auto& viewport = Regs().viewports[0];
+        const auto ui_size = upscaler->UiCoordinateSize();
         upscaler->OnDraw(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
                          cb_descs[0].first, db_desc.first,
-                         UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2));
+                         UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2,
+                                                       ui_size[0], ui_size[1]));
     }
     const PreparedDraw* draw_prepared = bind_prepared;
     // bbport: vertex and index buffers are resolved while the helper binds textures (their
@@ -1864,9 +1866,11 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     PrepareRenderState(pipeline);
     if (upscaler->Enabled() && std::popcount(pipeline->GetGraphicsKey().mrt_mask) == 1) {
         const auto& viewport = Regs().viewports[0];
+        const auto ui_size = upscaler->UiCoordinateSize();
         upscaler->OnDraw(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
                          cb_descs[0].first, db_desc.first,
-                         UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2));
+                         UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2,
+                                                       ui_size[0], ui_size[1]));
     }
     if (!BindResources(pipeline)) {
         return;
@@ -4008,17 +4012,20 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         } else {
             state.width = redirect.width;
             state.height = redirect.height;
-            // The UI movie viewport is now 1920x1080 even when the scene is 960x540.
-            // A native viewport (or native window-space UI vertices) must not be doubled
+            // The UI movie viewport uses the output's logical aspect (1920x1200 at 16:10)
+            // even when the scene is smaller. A native viewport (or native window-space UI
+            // vertices) must not be doubled
             // again. The final display copy still uses the guest render-size coordinates.
             const auto& viewport = regs.viewports[0];
+            const auto ui_size = upscaler->UiCoordinateSize();
             const bool native_coordinates = redirect.native_ui &&
-                (UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2) ||
+                (UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2,
+                                               ui_size[0], ui_size[1]) ||
                  (regs.IsClipDisabled() && !regs.viewport_control.xscale_enable &&
                   !regs.viewport_control.yscale_enable));
             target_scale = UiComposition::Scale(guest_extent.first, guest_extent.second,
                                                 redirect.width, redirect.height,
-                                                native_coordinates);
+                                                native_coordinates, ui_size[0], ui_size[1]);
         }
     }
 

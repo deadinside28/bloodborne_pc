@@ -334,8 +334,14 @@ void Menu() {
     if (BbSettings::FixedRenderSession()) {
         ImGui::Text(BbSettings::MenuText("Startup preset: %s", "Пресет при запуске: %s"),
                     BbSettings::PresetName(s.startup_preset));
-        if (const char* automatic = std::getenv("BB_AUTO_RENDER_RES");
-            automatic && automatic[0] == '1') {
+        if (BbSettings::Is16x10Output(s.output_res)) {
+            Hint(BbSettings::MenuText(
+                "1280x800 (16:10) uses the startup aspect-ratio patch. Live resolution changes are "
+                "not supported for this output; changing the preset or output requires a restart.",
+                "Для 1280x800 (16:10) нужен патч соотношения сторон при запуске. Смена разрешения "
+                "на лету не поддерживается; для смены пресета или вывода перезапустите игру."));
+        } else if (const char* automatic = std::getenv("BB_AUTO_RENDER_RES");
+                   automatic && automatic[0] == '1') {
             Hint(BbSettings::MenuText(
                 "When output is not 1080p, the entire game renders at the preset resolution "
                 "(startup patch): this is fastest on Steam Deck and weaker GPUs. Preset or output "
@@ -353,6 +359,10 @@ void Menu() {
                 "BB_RENDER_RES фиксирует размер сцены при запуске. Уберите эту явную переменную "
                 "для смены разрешения и пресетов без перезапуска игры."));
         }
+    } else if (BbSettings::ResolutionNeedsRestart()) {
+        Hint(BbSettings::MenuText(
+            "Switching to 1280x800 (16:10) needs a restart to apply the game's aspect-ratio patch.",
+            "Для смены на 1280x800 (16:10) нужен перезапуск, чтобы применить патч соотношения сторон."));
     } else {
         Hint(BbSettings::MenuText(
             "Native AA: the upscaler acts as anti-aliasing. Other presets reduce the scene render "
@@ -434,7 +444,8 @@ void Menu() {
     ImGui::EndDisabled(); // upscaler off
 
     ImGui::SeparatorText(BbSettings::MenuText("Output resolution", "Разрешение вывода"));
-    static const char* outputs[] = {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160"};
+    static const char* outputs[] = {"1280 x 720 (16:9)", "1280 x 800 (16:10)", "1920 x 1080",
+                                    "2560 x 1440", "3840 x 2160"};
     int output = s.output_res;
     if (ImGui::BeginCombo(BbSettings::MenuText("Output resolution", "Разрешение вывода"),
                           outputs[output])) {
@@ -451,6 +462,10 @@ void Menu() {
             "the output: 4K Performance = 1920x1080. Applies after restarting the game.",
             "Размер готового кадра и интерфейса. Пресет задаёт размер сцены относительно "
             "вывода: 4K Performance = 1920x1080. Применяется после перезапуска игры."));
+    } else if (BbSettings::ResolutionNeedsRestart()) {
+        Hint(BbSettings::MenuText(
+            "1280x800 (16:10) applies after restarting the game; the current output stays active until then.",
+            "1280x800 (16:10) применяется после перезапуска; до этого остаётся текущее разрешение."));
     } else {
         Hint(BbSettings::MenuText(
             "The final frame and UI size changes at the next frame boundary. "
@@ -474,15 +489,23 @@ void Menu() {
         }
         ImGui::EndCombo();
     }
-    Hint(BbSettings::MenuText(
-        "On: output resolution and preset change without restarting, but game post-processing "
-        "stays at 1080p, which is noticeably slower on Steam Deck and older GPUs. "
-        "Off: everything renders at the preset resolution, and changes require a restart. Auto "
-        "enables this on powerful discrete GPUs. Applies after restarting the game.",
-        "Включена: разрешение вывода и пресет меняются без перезапуска, но постобработка игры "
-        "остаётся в 1080p — на Steam Deck и старых видеокартах это заметно медленнее. "
-        "Выключена: всё рисуется в разрешении пресета, смена — через перезапуск. Авто включает "
-        "её на мощных дискретных видеокартах. Применяется после перезапуска игры."));
+    if (BbSettings::Is16x10Output(s.output_res)) {
+        Hint(BbSettings::MenuText(
+            "The 1280x800 (16:10) mode always uses the startup patch; live resolution is unavailable "
+            "for this aspect ratio. This setting applies when using a 16:9 output.",
+            "Режим 1280x800 (16:10) всегда использует патч при запуске; смена на лету для него "
+            "недоступна. Эта настройка применяется при выводе 16:9."));
+    } else {
+        Hint(BbSettings::MenuText(
+            "On: output resolution and preset change without restarting, but game post-processing "
+            "stays at 1080p, which is noticeably slower on Steam Deck and older GPUs. "
+            "Off: everything renders at the preset resolution, and changes require a restart. Auto "
+            "enables this on powerful discrete GPUs. Applies after restarting the game.",
+            "Включена: разрешение вывода и пресет меняются без перезапуска, но постобработка игры "
+            "остаётся в 1080p — на Steam Deck и старых видеокартах это заметно медленнее. "
+            "Выключена: всё рисуется в разрешении пресета, смена — через перезапуск. Авто включает "
+            "её на мощных дискретных видеокартах. Применяется после перезапуска игры."));
+    }
     ImGui::SeparatorText(BbSettings::MenuText("Game effects (restart required)",
                                               "Эффекты игры (после перезапуска)"));
     const char* lods[] = {BbSettings::MenuText("Highest (-2)", "Максимальная (-2)"),

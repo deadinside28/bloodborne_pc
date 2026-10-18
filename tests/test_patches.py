@@ -7,8 +7,8 @@ from pathlib import Path
 
 import patches
 
-from patches import (EBOOT_BASE, OUTPUT_SIZE, RESOLUTION_TEMPLATE, SCENE_HEIGHT,
-                     SCENE_WIDTH, UI_HEIGHT, UI_WIDTH, compile_patches,
+from patches import (EBOOT_BASE, OUTPUT_SIZE, RESOLUTION_TEMPLATE, RESOLUTION_TEMPLATE_16_10,
+                     SCENE_HEIGHT, SCENE_WIDTH, UI_HEIGHT, UI_WIDTH, compile_patches,
                      render_size, resolution_writes, scaled_sizes, effect_patches,
                      validate_patch_requirements, external_patches, external_selection,
                      compile_external)
@@ -54,6 +54,21 @@ class NativeUiTests(unittest.TestCase):
         self.assertEqual([w for w in original if w[0] not in changed],
                          [w for w in modified if w[0] not in changed])
 
+    def test_16_10_patch_uses_aspect_correction_and_matching_ui_coordinates(self):
+        output = (1280, 800)
+        ui = (1920, 1200)
+        original = compile_patches(XML, [RESOLUTION_TEMPLATE_16_10], '01.09', SEGMENTS)
+        modified = resolution_writes(XML, (854, 534), '01.09', SEGMENTS, ui, output)
+        self.assertEqual(immediate(modified, SCENE_WIDTH)[1], 854)
+        self.assertEqual(immediate(modified, SCENE_HEIGHT)[1], 534)
+        self.assertEqual(immediate(modified, UI_WIDTH)[1], 1920)
+        self.assertEqual(immediate(modified, UI_HEIGHT)[1], 1200)
+        self.assertIn((0x0183A35D - EBOOT_BASE, bytes.fromhex('CDCCCC3F')), modified)
+        self.assertIn((0x01FFD473 - EBOOT_BASE, bytes.fromhex('6690')), modified)
+        changed = {SCENE_WIDTH, SCENE_HEIGHT, UI_WIDTH, UI_HEIGHT}
+        self.assertEqual([w for w in original if w[0] not in changed],
+                         [w for w in modified if w[0] not in changed])
+
     def test_unexpected_or_missing_ui_instruction_is_rejected(self):
         for remove in (False, True):
             tree = ET.parse(XML)
@@ -78,14 +93,22 @@ class NativeUiTests(unittest.TestCase):
 
     def test_output_other_than_1080p_scales_the_scene(self):
         self.assertIsNone(scaled_sizes({'output_res': '1920x1080', 'preset': '2'}))
-        # Steam Deck: below 1080p the scene is still the preset's fraction of the output.
+        # Steam Deck 16:9: output is still the preset's fraction of the selected resolution.
         for preset, expected in [(0, (1280, 720)), (2, (752, 424)), (4, (426, 240))]:
             with self.subTest(preset=preset):
                 self.assertEqual(scaled_sizes({'output_res': '1280x720', 'preset': str(preset)}),
                                  (expected, (1280, 720)))
+        # 16:10 uses the guest patch even when TAA/live-resolution would otherwise use host targets.
+        for preset, expected in [(0, (1280, 800)), (1, (854, 534)),
+                                 (2, (752, 470)), (3, (640, 400)), (4, (426, 266))]:
+            with self.subTest(preset=preset):
+                settings = {'output_res': '1280x800', 'preset': str(preset)}
+                self.assertEqual(scaled_sizes(settings), (expected, (1280, 800)))
+        self.assertEqual(scaled_sizes({'output_res': '1280x800', 'upscaler': 'taa', 'preset': '3'}),
+                         ((1280, 800), (1280, 800)))
         self.assertEqual(scaled_sizes({'output_res': '3840x2160', 'preset': '3'}),
                          ((1916, 1078), (3840, 2160)))
-        # TAA is native-only and uses the live host targets.
+        # TAA keeps the native guest targets on 16:9 outputs.
         self.assertIsNone(scaled_sizes({'output_res': '1280x720', 'upscaler': 'taa', 'preset': '3'}))
 
 

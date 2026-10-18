@@ -12,7 +12,8 @@ import unittest
 
 
 class RestartResolutionTests(unittest.TestCase):
-    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False):
+    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
+                     initial_output='1280x720', upscaler='fsr3'):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
             # Preparation is unrelated to this test; allow the real patch compiler to
@@ -26,7 +27,7 @@ class RestartResolutionTests(unittest.TestCase):
             (out / 'eboot.elf').write_bytes(elf)
             (data / 'eboot.bin').touch()
             config = data / 'bbport.ini'
-            config.write_text('upscaler=fsr3\npreset=1\noutput_res=1280x720\n' + ini_extra)
+            config.write_text(f'upscaler={upscaler}\npreset=1\noutput_res={initial_output}\n' + ini_extra)
             if caps is not None:  # the GPU check next to the probe (live_resolution=auto)
                 tool = data / 'bb-gpu-capabilities'
                 tool.write_text(f'#!/bin/sh\necho {caps}\n')
@@ -83,6 +84,18 @@ class RestartResolutionTests(unittest.TestCase):
         self.assertTrue(all(row['BB_RENDER_RES'] is None for row in rows))
         self.assertTrue(all(row['BB_OUTPUT_RES'] is None for row in rows))
         self.assertTrue(all(row['BB_AUTO_RENDER_RES'] is None for row in rows))
+
+    def test_16_10_uses_startup_patch_even_when_live_resolution_is_requested(self):
+        first = self.run_restarts(live=True, initial_output='1280x800')[0]
+        self.assertEqual(first['BB_RENDER_RES'], '854x534')
+        self.assertEqual(first['BB_OUTPUT_RES'], '1280x800')
+        self.assertEqual(first['BB_AUTO_RENDER_RES'], '1')
+
+    def test_16_10_taa_still_gets_the_guest_aspect_patch(self):
+        first = self.run_restarts(live=True, initial_output='1280x800', upscaler='taa')[0]
+        self.assertEqual(first['BB_RENDER_RES'], '1280x800')
+        self.assertEqual(first['BB_OUTPUT_RES'], '1280x800')
+        self.assertEqual(first['BB_AUTO_RENDER_RES'], '1')
 
     def test_live_resolution_setting_and_gpu_check(self):
         # Only the first launch matters here: the probe rewrites bbport.ini for the restarts.
