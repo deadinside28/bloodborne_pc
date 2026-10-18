@@ -32,7 +32,7 @@ bool Visible();
 /// A line of text over the game until called with null (bbgpu_overlay_banner).
 void SetBanner(const char* text);
 /// A trophy unlocked (bbport_trophies.cpp): announced at the top right for a few seconds, one
-/// after another. grade: P G S B, '?' unknown. The icon is not drawn yet (no PNG decoder here).
+/// after another. grade: P G S B, '?' unknown; icon: the trophy's PNG (empty: the grade's badge).
 /// delay: seconds of drawn frames before it shows (BB_TROPHY_TEST: past the game's start).
 void ShowTrophy(char grade, const std::string& name, const std::filesystem::path& icon, float delay = 0.0f);
 

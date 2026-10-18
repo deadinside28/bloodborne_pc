@@ -132,6 +132,13 @@ fs::path LanguageFile() {
     return fs::exists(lang) ? lang : folder / "TROP.XML";
 }
 
+fs::path IconPath(int id) {
+    char name[32];
+    std::snprintf(name, sizeof(name), "TROP%03d.PNG", id);
+    const fs::path path = folder / name;
+    return fs::exists(path) ? path : fs::path{};
+}
+
 void Save() {
     std::ofstream file(folder / "unlocked.txt");
     file << "# the trophies unlocked here, one id a line\n";
@@ -179,7 +186,7 @@ void SetUp(const char* sce_sys, const char* user_dir) {
         const int id = std::atoi(test);
         const auto it = std::find_if(trophies.begin(), trophies.end(), [id](const auto& t) { return t.id == id; });
         BbOverlay::ShowTrophy(it != trophies.end() ? it->grade : '?',
-                              it != trophies.end() ? it->name : "#" + std::to_string(id), {}, 40.0f);
+                              it != trophies.end() ? it->name : "#" + std::to_string(id), IconPath(id), 40.0f);
     }
 }
 
@@ -212,8 +219,7 @@ extern "C" int bbgpu_trophy_unlock(int id) {
         const char grade = it != trophies.end() ? it->grade : '?';
         const std::string name = it != trophies.end() && !it->name.empty() ? it->name : "#" + std::to_string(t);
         std::printf("Trophies: unlocked %d (%c) %s\n", t, grade, name.c_str());
-        BbOverlay::ShowTrophy(grade, name, folder / ("TROP" + std::string(t < 10 ? "00" : t < 100 ? "0" : "") +
-                                                     std::to_string(t) + ".PNG"));
+        BbOverlay::ShowTrophy(grade, name, IconPath(t));
         if (t != id) {
             platinum = t;
         }

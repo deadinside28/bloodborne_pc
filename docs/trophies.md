@@ -6,8 +6,10 @@ The game's trophy calls (`sceNpTrophy*`, `src/runtime_services.c`) are kept and 
 - Every unlock is kept in `user/trophy/<NP communication ID>/unlocked.txt` (Bloodborne:
   `NPWR05818_00`). Only the first unlock of a trophy is announced; the platinum follows once
   every trophy counting towards it is in.
-- The announcement: a panel at the top centre for 6 s (the game's HUD keeps the corners), with a
-  badge in the grade's colour (platinum, gold, silver, bronze), "Trophy earned" and the name.
+- The announcement: a panel at the top centre for 6 s (the game's HUD keeps the corners) with the
+  trophy's icon and a dot in the grade's colour (platinum, gold, silver, bronze), "Trophy earned"
+  and the name. The icons are decoded with SDL 3.4's PNG loader and handed to ImGui as user
+  textures; with an older SDL, or no icon, a badge in the grade's colour stands in.
 - Names and grades come from the game's `sce_sys/trophy/trophy00.trp`. Its XML is encrypted;
   the port decrypts it once into the same folder (with the trophy icons) when a trophy key is
   given: `BB_TROPHY_KEY=<32 hex digits>` in the environment or in a `.env` file in the port's
@@ -18,5 +20,4 @@ The game's trophy calls (`sceNpTrophy*`, `src/runtime_services.c`) are kept and 
 - `BB_TROPHY_TEST=<id>`: shows that trophy once, about 40 s after the start, nothing kept (to
   see the look).
 
-Not yet: the trophy icons in the panel (the files are extracted; the overlay has no PNG decoder)
-and a sound.
+Not yet: a sound.

@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <unordered_map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -21,6 +23,7 @@
 #include "bbport_settings.h"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
+#include "imgui_internal.h" // RegisterUserTexture: the trophy icons
 #include "vulkan/instance.h"
 #include "render/scheduler.h"
 
@@ -76,7 +79,11 @@ struct TrophyToast {
     char grade;
     std::string name;
     float elapsed = 0.0f;
+    std::filesystem::path icon;
 };
+// The trophy icons (TROPnnn.PNG, 240x240), decoded once and handed to the Vulkan backend as user
+// textures (it uploads them with the font atlas); kept for the session (40 at most). null: none.
+std::unordered_map<std::string, ImTextureData*> trophy_icons;
 std::mutex trophy_mutex;
 std::deque<TrophyToast> trophy_queue;
 std::atomic<bool> trophy_active{false};
@@ -882,6 +889,37 @@ void FpsCounter() {
     ImGui::End();
 }
 
+// A trophy icon as an ImGui texture (present thread, under imgui_mutex); null when it cannot be
+// read or SDL is older than 3.4 (no PNG loader).
+ImTextureData* TrophyIcon(const std::filesystem::path& path) {
+    if (path.empty()) {
+        return nullptr;
+    }
+    const auto [it, added] = trophy_icons.try_emplace(path.string(), nullptr);
+    if (!added) {
+        return it->second;
+    }
+#if SDL_VERSION_ATLEAST(3, 4, 0)
+    SDL_Surface* loaded = SDL_LoadPNG(path.c_str());
+    SDL_Surface* rgba = loaded ? SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32) : nullptr;
+    SDL_DestroySurface(loaded);
+    if (!rgba) {
+        std::printf("Overlay: trophy icon %s not loaded: %s\n", path.c_str(), SDL_GetError());
+        return nullptr;
+    }
+    auto* tex = IM_NEW(ImTextureData)();
+    tex->Create(ImTextureFormat_RGBA32, rgba->w, rgba->h);
+    for (int y = 0; y < rgba->h; ++y) {
+        std::memcpy(tex->GetPixelsAt(0, y), static_cast<const unsigned char*>(rgba->pixels) + y * rgba->pitch,
+                    std::size_t(rgba->w) * 4);
+    }
+    SDL_DestroySurface(rgba);
+    ImGui::RegisterUserTexture(tex);
+    it->second = tex;
+#endif
+    return it->second;
+}
+
 // The front trophy of the queue: a dark panel at the top centre (the game's HUD has its health at
 // the top left, its echoes and insight at the top right), sliding down, with a badge in the
 // grade's colour, "Trophy earned" and the name.
@@ -927,11 +965,21 @@ void TrophyWindow(float dt) {
                         : toast.grade == 'B' ? a(176, 112, 64, 255)
                                              : a(120, 120, 120, 255);
     const ImVec2 centre{x + 38.0f * s, y + size.y * 0.5f};
-    draw->AddCircleFilled(centre, 24.0f * s, badge);
-    draw->AddCircle(centre, 24.0f * s, a(30, 25, 20, 255), 0, 2.0f * s);
     const char letter[2] = {toast.grade == '?' ? 'T' : toast.grade, 0};
     const ImVec2 letter_size = ImGui::CalcTextSize(letter);
-    draw->AddText({centre.x - letter_size.x * 0.5f, centre.y - letter_size.y * 0.5f}, a(30, 25, 20, 255), letter);
+    if (ImTextureData* icon = TrophyIcon(toast.icon)) {
+        // The game's icon, the grade as a small badge on its corner.
+        const float half = 26.0f * s;
+        draw->AddImageRounded(icon->GetTexRef(), {centre.x - half, centre.y - half}, {centre.x + half, centre.y + half},
+                              {0, 0}, {1, 1}, a(255, 255, 255, 255), 4.0f * s);
+        const ImVec2 dot{centre.x + half - 2.0f * s, centre.y + half - 2.0f * s};
+        draw->AddCircleFilled(dot, 9.0f * s, badge);
+        draw->AddCircle(dot, 9.0f * s, a(30, 25, 20, 255), 0, 1.5f * s);
+    } else {
+        draw->AddCircleFilled(centre, 24.0f * s, badge);
+        draw->AddCircle(centre, 24.0f * s, a(30, 25, 20, 255), 0, 2.0f * s);
+        draw->AddText({centre.x - letter_size.x * 0.5f, centre.y - letter_size.y * 0.5f}, a(30, 25, 20, 255), letter);
+    }
     const float text_x = x + 76.0f * s, wrap = size.x - 88.0f * s;
     // In the game's language, as the name (BB_LANGUAGE, the PS4 number: 8 Russian).
     static const bool russian = [] {
@@ -1205,9 +1253,8 @@ void SetBanner(const char* text) {
 }
 
 void ShowTrophy(char grade, const std::string& name, const std::filesystem::path& icon, float delay) {
-    (void)icon;
     std::scoped_lock lock{trophy_mutex};
-    trophy_queue.push_back({grade, name, -delay});
+    trophy_queue.push_back({grade, name, -delay, icon});
     trophy_active = true;
 }
 
