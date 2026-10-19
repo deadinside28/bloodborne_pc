@@ -22,7 +22,7 @@ let
   # NVIDIA's RTX SDK license allows in an application. Without them the launcher lets the player
   # choose NVIDIA's library (the bridge is still needed).
   dlssFiles = [ "out/libbbport_dlss.so" "out/NVIDIA-DLSS-LICENSE.txt" "out/gpu/libbbnet.so" "out/gpu/libbbnet20.so" ];
-  isNgx = rel: lib.hasPrefix "out/libnvidia-ngx-dlss.so." rel;
+  isNgx = rel: lib.hasPrefix "out/libnvidia-ngx-dlss.so." rel || lib.hasPrefix "out/libnvidia-ngx-dlssg.so." rel;
   src = builtins.path {
     name = "bbport-src";
     path = root;
@@ -195,7 +195,7 @@ pkgs.stdenv.mkDerivation {
     fi
     if [ -f out/libbbport_dlss.so ]; then
       install -m755 out/libbbport_dlss.so $d/bin/libbbport_dlss.so
-      for ngx in out/libnvidia-ngx-dlss.so.*; do
+      for ngx in out/libnvidia-ngx-dlss.so.* out/libnvidia-ngx-dlssg.so.*; do
         [ -f "$ngx" ] && install -m755 "$ngx" $d/bin/
       done
       [ -f out/NVIDIA-DLSS-LICENSE.txt ] && install -m644 out/NVIDIA-DLSS-LICENSE.txt $d/NVIDIA-DLSS-LICENSE.txt

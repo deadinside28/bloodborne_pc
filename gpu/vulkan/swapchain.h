@@ -28,8 +28,9 @@ public:
     void Recreate(u32 width, u32 height);
     /// Acquires the next image; false when the swapchain has to be recreated first.
     bool AcquireNextImage();
-    /// Presents the acquired image; false when the swapchain has to be recreated.
-    bool Present();
+    /// Presents the acquired image; false when the swapchain has to be recreated. `present_id`:
+    /// the frame's ID for the driver (VK_KHR_present_id, low latency), 0 for none; increasing.
+    bool Present(u64 present_id = 0);
 
     /// Switches the images to HDR10 (PQ) or back, when the surface supports it.
     void SetHDR(bool hdr);

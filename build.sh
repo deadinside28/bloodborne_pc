@@ -60,13 +60,21 @@ if ! ninja -C out/gpu bbgpu $(grep -q "^build bbnet:" out/gpu/build.ninja && ech
 fi
 # Optional DLSS (NVIDIA RTX): DLSS_SDK_ROOT=<github.com/NVIDIA/DLSS checkout> builds the bridge
 # (gpu/dlss_bridge, the only code using NVIDIA's SDK) and puts it next to bb-probe with NVIDIA's
-# libnvidia-ngx-dlss.so. Without them the DLSS upscaler is listed as unavailable.
+# libnvidia-ngx-dlss.so (Super Resolution) and libnvidia-ngx-dlssg.so (Frame Generation, GeForce
+# RTX 40 and newer; SDK 310.7 or newer has it). Without them the DLSS upscaler and DLSS Frame
+# Generation are listed as unavailable.
 if [[ -n ${DLSS_SDK_ROOT:-} ]]; then
     cmake -S gpu/dlss_bridge -B out/dlss-bridge -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DDLSS_SDK_ROOT="$DLSS_SDK_ROOT" >/dev/null
     ninja -C out/dlss-bridge >/dev/null
-    rm -f out/libnvidia-ngx-dlss.so.*
+    rm -f out/libnvidia-ngx-dlss.so.* out/libnvidia-ngx-dlssg.so.*
     cp out/dlss-bridge/libbbport_dlss.so "$DLSS_SDK_ROOT"/lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.* out/
+    if ls "$DLSS_SDK_ROOT"/lib/Linux_x86_64/rel/libnvidia-ngx-dlssg.so.* >/dev/null 2>&1; then
+        cp "$DLSS_SDK_ROOT"/lib/Linux_x86_64/rel/libnvidia-ngx-dlssg.so.* out/
+        echo "DLSS Frame Generation library: $(ls out/libnvidia-ngx-dlssg.so.*)"
+    else
+        echo "DLSS Frame Generation library not in this SDK (lib/Linux_x86_64/rel/libnvidia-ngx-dlssg.so.*): DLSS Super Resolution only"
+    fi
     cp "$DLSS_SDK_ROOT/LICENSE.txt" out/NVIDIA-DLSS-LICENSE.txt
     echo "DLSS bridge: out/libbbport_dlss.so"
 fi

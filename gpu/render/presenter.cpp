@@ -18,6 +18,8 @@
 #include "sdl_window.h"
 #include "textures/image.h"
 #include "textures/texture_cache.h"
+#include "bbport_settings.h"
+#include "render/vk_low_latency.h"
 #include "upscale/vk_frame_generation.h"
 #include "upscale/vk_temporal_upscaler.h"
 #include "render/rasterizer.h"
@@ -105,6 +107,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, BbCp::CommandProcessor* cp_)
         free_frames.push_back(&frames[i]);
     }
     BbOverlay::Init(instance, swapchain.GetSurfaceFormat().format, count);
+    // Low latency (NVIDIA Reflex): the draw scheduler's submissions are the game's frames.
+    LowLatency::Get().Initialize(instance);
+    draw_scheduler.SetRendersFrames(true);
 }
 
 Presenter::~Presenter() {
@@ -116,8 +121,23 @@ Presenter::~Presenter() {
         if (frame.image) {
             vmaDestroyImage(instance.GetAllocator(), frame.image, frame.allocation);
         }
+        DestroyInterpolated(frame);
         device.destroyFence(frame.present_done);
     }
+}
+
+void Presenter::DestroyInterpolated(Frame& frame) {
+    const vk::Device device = instance.GetDevice();
+    for (u32 i = 0; i < Frame::MaxInterp; ++i) {
+        device.destroyImageView(frame.interp_view[i]);
+        if (frame.interp_image[i]) {
+            vmaDestroyImage(instance.GetAllocator(), frame.interp_image[i], frame.interp_allocation[i]);
+        }
+        frame.interp_image[i] = vk::Image{};
+        frame.interp_view[i] = vk::ImageView{};
+        frame.interp_allocation[i] = {};
+    }
+    frame.interp_count = 0;
 }
 
 void Presenter::SetHDR(bool enable) {
@@ -173,14 +193,9 @@ void Presenter::RecreateFrame(Frame& frame, u32 width, u32 height) {
         .subresourceRange = ColorRange,
     }));
     SetObjectName(device, frame.image, "frame {}", frame.id);
-    // Frame generation's frame (made with the first one generated: most sessions never need it).
-    device.destroyImageView(frame.interp_view);
-    if (frame.interp_image) {
-        vmaDestroyImage(instance.GetAllocator(), frame.interp_image, frame.interp_allocation);
-    }
-    frame.interp_image = vk::Image{};
-    frame.interp_view = vk::ImageView{};
-    frame.has_interp = false;
+    // Frame generation's frames (made with the first ones generated: most sessions never need
+    // them).
+    DestroyInterpolated(frame);
     frame.width = width;
     frame.height = height;
     frame.is_hdr = swapchain.GetHDR();
@@ -333,14 +348,18 @@ Frame* Presenter::PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute
         }
     });
 
-    // Frame generation: the frame interpolated before this one, encoded the same way.
-    frame->has_interp = false;
-    FrameGeneration::Output interp{};
-    if (upscaled && upscaler.GetFrameGeneration() &&
-        upscaler.GetFrameGeneration()->TakeOutput(cpu_address, interp) &&
-        interp.width == display.width && interp.height == display.height) {
-        EncodeInterpolated(frame, interp.image, interp.format, interp.width, interp.height,
-                           view_info.format, encode);
+    // Frame generation: the frames generated before this one, encoded the same way.
+    frame->interp_count = 0;
+    if (upscaled && upscaler.GetFrameGeneration()) {
+        std::array<FrameGeneration::Output, FrameGeneration::MaxGenerated> interp{};
+        const u32 generated = upscaler.GetFrameGeneration()->TakeOutputs(cpu_address, interp);
+        static_assert(FrameGeneration::MaxGenerated <= Frame::MaxInterp);
+        for (u32 i = 0; i < generated; ++i) {
+            if (interp[i].width == display.width && interp[i].height == display.height) {
+                EncodeInterpolated(frame, frame->interp_count, interp[i].image, interp[i].format,
+                                   interp[i].width, interp[i].height, view_info.format, encode);
+            }
+        }
     }
 
     BbStats::frame_number.fetch_add(1, std::memory_order_relaxed);
@@ -349,6 +368,7 @@ Frame* Presenter::PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute
     SubmitInfo info{};
     draw_scheduler.NoteFrameEndSubmission();
     draw_scheduler.Flush(info);
+    frame->present_id = LowLatency::Get().RenderSubmitEnd(); // the frame's last submission
     BbTimeline::Note(BbTimeline::PipeTask, 5, frame->ready_tick);
 
     // The command processor thread runs at most FramesAhead() guest frames ahead of the GPU: it
@@ -406,11 +426,16 @@ void Presenter::SetExpectedSize(u32 width, u32 height) {
     expected_height.store(height, std::memory_order_relaxed);
 }
 
-void Presenter::EncodeInterpolated(Frame* frame, vk::Image image, vk::Format format, u32 width,
-                                   u32 height, vk::Format display_view_format,
+void Presenter::EncodeInterpolated(Frame* frame, u32 index, vk::Image image, vk::Format format,
+                                   u32 width, u32 height, vk::Format display_view_format,
                                    const EncodePass::Settings& encode) {
     const vk::Device device = instance.GetDevice();
-    if (!frame->interp_image) {
+    if (index >= Frame::MaxInterp) {
+        return;
+    }
+    vk::Image& interp_image = frame->interp_image[index];
+    vk::ImageView& interp_view = frame->interp_view[index];
+    if (!interp_image) {
         const VkImageCreateInfo image_info = vk::ImageCreateInfo{
             .imageType = vk::ImageType::e2D,
             .format = swapchain.GetSurfaceFormat().format,
@@ -426,12 +451,12 @@ void Presenter::EncodeInterpolated(Frame* frame, vk::Image image, vk::Format for
         };
         VkImage created{};
         if (vmaCreateImage(instance.GetAllocator(), &image_info, &alloc_info, &created,
-                           &frame->interp_allocation, nullptr) != VK_SUCCESS) {
+                           &frame->interp_allocation[index], nullptr) != VK_SUCCESS) {
             return;
         }
-        frame->interp_image = created;
-        frame->interp_view = Check<"create a frame view">(device.createImageView({
-            .image = frame->interp_image,
+        interp_image = created;
+        interp_view = Check<"create a frame view">(device.createImageView({
+            .image = interp_image,
             .viewType = vk::ImageViewType::e2D,
             .format = swapchain.GetSurfaceFormat().format,
             .subresourceRange = ColorRange,
@@ -455,7 +480,8 @@ void Presenter::EncodeInterpolated(Frame* frame, vk::Image image, vk::Format for
         .subresourceRange = ColorRange,
     }));
     draw_scheduler.DeferOperation([device, source] { device.destroyImageView(source); });
-    draw_scheduler.Record([this, frame, image, source, encode](vk::CommandBuffer cmdbuf) {
+    draw_scheduler.Record([this, frame, image, source, encode, interp_image,
+                           interp_view](vk::CommandBuffer cmdbuf) {
         const std::array<vk::ImageMemoryBarrier2, 2> before{{
             {
                 .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
@@ -473,12 +499,12 @@ void Presenter::EncodeInterpolated(Frame* frame, vk::Image image, vk::Format for
                 .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
                 .oldLayout = vk::ImageLayout::eUndefined,
                 .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                .image = frame->interp_image,
+                .image = interp_image,
                 .subresourceRange = ColorRange,
             },
         }};
         cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 2, .pImageMemoryBarriers = before.data()});
-        encode_pass.Render(cmdbuf, source, frame->interp_view, {frame->width, frame->height}, encode);
+        encode_pass.Render(cmdbuf, source, interp_view, {frame->width, frame->height}, encode);
         const std::array<vk::ImageMemoryBarrier2, 2> after{{
             {
                 .srcStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
@@ -494,13 +520,13 @@ void Presenter::EncodeInterpolated(Frame* frame, vk::Image image, vk::Format for
                 .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
                 .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
                 .newLayout = vk::ImageLayout::eGeneral,
-                .image = frame->interp_image,
+                .image = interp_image,
                 .subresourceRange = ColorRange,
             },
         }};
         cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 2, .pImageMemoryBarriers = after.data()});
     });
-    frame->has_interp = true;
+    frame->interp_count = index + 1;
 }
 
 void Presenter::RecordPresent(vk::CommandBuffer cmdbuf, const Frame* frame, vk::Image target,
@@ -585,8 +611,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool) {
         }
     };
     const bool blank = frame == &blank_frame;
-    // Frame generation: the interpolated frame first, the real one half a frame later (the
-    // interval between real frames, smoothed).
+    LowLatency::Get().ApplySettings(); // the menu's mode to the driver (cheap when unchanged)
+    // Frame generation: the generated frames first, evenly spaced over the interval between
+    // real frames (smoothed), the real one last.
     using Clock = std::chrono::steady_clock;
     static Clock::time_point last_real{};
     static double interval_ms = 16.667;
@@ -598,27 +625,42 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool) {
         }
     }
     last_real = now;
-    // BB_FRAME_GEN_ONLY=1 (diagnostics): only the interpolated frames are shown.
+    // BB_FRAME_GEN_ONLY=1 (diagnostics): only the generated frames are shown.
     static const bool only_interp = std::getenv("BB_FRAME_GEN_ONLY") != nullptr;
-    if (only_interp && !blank && frame->has_interp && frame->interp_image) {
-        frame->has_interp = false;
-        PresentImage(frame, frame->interp_image, true);
+    const u32 generated = blank ? 0 : std::min(frame->interp_count, Frame::MaxInterp);
+    if (!blank) {
+        frame->interp_count = 0;
+        // The FPS counter: the game's own rate and the frames generated for each of its frames.
+        auto& settings = BbSettings::Get();
+        settings.game_fps.store(float(1000.0 / interval_ms), std::memory_order_relaxed);
+        settings.frame_gen_now.store(int(generated), std::memory_order_relaxed);
+    }
+    if (only_interp && generated && frame->interp_image[0]) {
+        PresentImage(frame, frame->interp_image[0], true);
         release();
         return;
     }
-    if (!blank && frame->has_interp && frame->interp_image) {
-        frame->has_interp = false;
+    for (u32 i = 0; i < generated; ++i) {
+        if (!frame->interp_image[i]) {
+            break;
+        }
         static std::atomic<u64> shown{0};
         if (const u64 n = ++shown; n == 1 || n % 1000 == 0) {
-            std::printf("Frame generation: %llu interpolated frames shown\n", (unsigned long long)n);
+            std::printf("Frame generation: %llu generated frames shown\n", (unsigned long long)n);
         }
-        if (PresentImage(frame, frame->interp_image, false)) {
+        LowLatency::Get().PresentStart(frame->present_id, true);
+        const bool presented = PresentImage(frame, frame->interp_image[i], false);
+        LowLatency::Get().PresentEnd(frame->present_id, true);
+        if (presented) {
+            const double at_ms = interval_ms * double(i + 1) / double(generated + 1);
             std::this_thread::sleep_until(now + std::chrono::duration_cast<Clock::duration>(
                                                     std::chrono::duration<double, std::milli>(
-                                                        std::clamp(interval_ms * 0.5, 1.0, 50.0))));
+                                                        std::clamp(at_ms, 1.0, 50.0))));
         }
     }
+    LowLatency::Get().PresentStart(blank ? 0 : frame->present_id, false);
     PresentImage(frame, {}, true);
+    LowLatency::Get().PresentEnd(blank ? 0 : frame->present_id, false);
     release();
 }
 
@@ -697,10 +739,12 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last) {
         }
     }
     info.AddSignal(swapchain.GetPresentReadySemaphore());
+    const u64 present_id = !blank && last && !source ? frame->present_id : 0;
+    info.present_id = present_id; // low latency: the frame's own present
     present_scheduler.Flush(info);
     {
         std::scoped_lock lock{Scheduler::submit_mutex};
-        if (!swapchain.Present()) {
+        if (!swapchain.Present(present_id)) {
             swapchain.Recreate(width, height);
             return false;
         }

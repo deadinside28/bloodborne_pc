@@ -66,6 +66,11 @@ public:
     void CameraVectors(float position[3], float up[3], float right[3], float forward[3]) const noexcept;
     // Current projection, previous projection, and row Z of previous-view * inverse-view.
     [[nodiscard]] std::array<std::array<float, 4>, 3> TaaDepthParameters() const noexcept;
+    /// Frame generation (DLSS): row-vector matrices of D3D clip space (upscale/camera_matrices.h):
+    /// the projection, current clip to previous clip, and back. False before two cameras.
+    bool ClipTransforms(std::array<float, 16>& view_to_clip,
+                        std::array<float, 16>& clip_to_prev_clip,
+                        std::array<float, 16>& prev_clip_to_clip) const noexcept;
     /// bbport: the matrices and jitter of the motion of this frame, printed with an upscaler dump
     /// (BB_DUMP_TRIGGER) for offline checks of the vectors.
     void PrintState(int frame) const;

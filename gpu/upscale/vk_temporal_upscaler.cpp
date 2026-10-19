@@ -2306,6 +2306,7 @@ void TemporalUpscaler::CaptureFrameGenScene(vk::Image depth_image, vk::Format de
         .depth = depth_image,
         .depth_format = depth_format,
         .motion = vk::Image(motion_image),
+        .motion_view = *motion_view,
         .render_width = w,
         .render_height = h,
         .jitter_x = sign * jitter[0],
@@ -2322,6 +2323,10 @@ void TemporalUpscaler::CaptureFrameGenScene(vk::Image depth_image, vk::Format de
     };
     camera_motion.CameraVectors(scene.camera_position, scene.camera_up, scene.camera_right,
                                 scene.camera_forward);
+    // The cameras as clip-space matrices (DLSS Frame Generation separates the camera's motion
+    // from the objects' with them; a camera that stood still smeared the generated frames).
+    scene.has_matrices = camera_motion.ClipTransforms(scene.view_to_clip, scene.clip_to_prev_clip,
+                                                      scene.prev_clip_to_clip);
     frame_generation->CaptureScene(scene);
 }
 

@@ -234,6 +234,9 @@ INI_DEFAULTS = {
     "output_res": "1920x1080",
     "model_lod": "0",
     "live_resolution": "0",
+    "frame_generation": "off",
+    "frame_generation_multiplier": "2",
+    "low_latency": "on",
     "mouse_look": "1",
     "mouse_sensitivity": "1.00",
     "mouse_invert_y": "0",
@@ -311,21 +314,58 @@ def patches_dir(settings):
 # player's own in <user>/dlss, which the game prefers. Linux needs the .so from NVIDIA's DLSS SDK
 # (github.com/NVIDIA/DLSS, lib/Linux_x86_64/rel); a game's nvngx_dlss.dll is Windows-only.
 NGX_PREFIX = "libnvidia-ngx-dlss.so."
+# DLSS Frame Generation (vk_frame_generation.cpp): NVIDIA's libnvidia-ngx-dlssg.so.<version> from
+# the same SDK folder (310.7 or newer), beside the Super Resolution library; GeForce RTX 40+.
+NGX_FG_PREFIX = "libnvidia-ngx-dlssg.so."
 DLSS_SDK_URL = "https://github.com/NVIDIA/DLSS/tree/main/lib/Linux_x86_64/rel"
+# Frame generation (bbport.ini frame_generation + frame_generation_multiplier): the launcher
+# offers DLSS; FSR 3.1 stays hidden until its artifacts are fixed (BB_FRAME_GEN=1 in the game).
+FRAME_GENS = [("Выключена", "off"), ("DLSS 2x (NVIDIA RTX 40/50)", "dlss2"),
+              ("DLSS 3x (NVIDIA RTX 50)", "dlss3"), ("DLSS 4x (NVIDIA RTX 50)", "dlss4")]
+# Low latency (bbport.ini low_latency): NVIDIA Reflex through VK_NV_low_latency2 (NVIDIA driver
+# 550+; nothing changes elsewhere). With DLSS frame generation the game keeps it at least on.
+LOW_LATENCIES = [("Включена", "on"), ("Включена + Boost", "boost"), ("Выключена", "off")]
+
+
+def frame_gen_choice(ini):
+    """The FRAME_GENS value for the ini's frame_generation and multiplier."""
+    if ini.get("frame_generation") == "dlss":
+        try:
+            multiplier = min(max(int(ini.get("frame_generation_multiplier", "2")), 2), 4)
+        except ValueError:
+            multiplier = 2
+        return f"dlss{multiplier}"
+    return "off"
+
+
+def frame_gen_ini(choice):
+    """The ini values (frame_generation, frame_generation_multiplier) of a FRAME_GENS value."""
+    if choice.startswith("dlss"):
+        return "dlss", choice[len("dlss"):]
+    return "off", "2"
 
 
 def binaries_dir():
     return PORT_DIR / ("bin" if PACKAGED else "out")
 
 
-def ngx_libraries(directory):
-    """NVIDIA's DLSS runtime libraries in directory, newest version last."""
+def ngx_libraries(directory, prefix=NGX_PREFIX):
+    """NVIDIA's DLSS runtime libraries (prefix: Super Resolution's, NGX_FG_PREFIX for Frame
+    Generation's) in directory, newest version last."""
     def version(path):
-        return tuple(int(p) if p.isdigit() else 0 for p in path.name[len(NGX_PREFIX):].split("."))
+        return tuple(int(p) if p.isdigit() else 0 for p in path.name[len(prefix):].split("."))
     try:
-        return sorted((p for p in Path(directory).iterdir() if p.name.startswith(NGX_PREFIX)), key=version)
+        return sorted((p for p in Path(directory).iterdir() if p.name.startswith(prefix)), key=version)
     except OSError:
         return []
+
+
+def ngx_prefix_of(name):
+    """Which of NVIDIA's libraries a file name is: NGX_PREFIX, NGX_FG_PREFIX or None."""
+    for prefix in (NGX_FG_PREFIX, NGX_PREFIX):  # the longer first: "dlss.so." is not "dlssg.so."
+        if name.startswith(prefix):
+            return prefix
+    return None
 
 
 def fsr411_dir():
@@ -848,6 +888,33 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.dlss_row.add_suffix(self.dlss_reset_button)
         upscaler.add(self.dlss_row)
         self.update_dlss_row()
+        # Frame generation (the game's menu has it too): DLSS here; FSR 3.1 is hidden (BB_FRAME_GEN).
+        frame_gens = list(FRAME_GENS)
+        if self.ini.get("frame_generation") == "fsr3":
+            frame_gens.append(("FSR 3.1 (скрыто: нужен BB_FRAME_GEN=1)", "fsr3"))
+        self.frame_gen_row = combo_row(
+            tr("Генерация кадров"),
+            tr("Кадры между кадрами игры. DLSS: нужны мост DLSS, libnvidia-ngx-dlssg.so от NVIDIA "
+               "(выбирается выше, как библиотека DLSS) и GeForce RTX 40 или новее; 3x и 4x — RTX 50"),
+            frame_gens, "fsr3" if self.ini.get("frame_generation") == "fsr3" else frame_gen_choice(self.ini))
+        upscaler.add(self.frame_gen_row)
+        # Low latency (NVIDIA Reflex): with DLSS frame generation at least on (the game enforces
+        # it; the row follows so that what is shown is what runs).
+        low_latency = self.ini.get("low_latency", "on")
+        self.low_latency_row = combo_row(
+            tr("Низкая задержка (NVIDIA Reflex)"),
+            tr("Поток игры ждёт драйвер перед каждым кадром, чтобы кадры не копились перед "
+               "видеокартой: меньше задержка ввода. Драйвер NVIDIA 550 и новее; на других видеокартах "
+               "ничего не меняется. С генерацией кадров DLSS всегда не ниже «Включена»"),
+            LOW_LATENCIES, low_latency if low_latency in ("on", "boost", "off") else "on")
+        upscaler.add(self.low_latency_row)
+
+        def enforce_low_latency(*_):
+            if combo_value(self.frame_gen_row).startswith("dlss") and combo_value(self.low_latency_row) == "off":
+                self.low_latency_row.set_selected(0)  # "on"
+        self.frame_gen_row.connect("notify::selected", enforce_low_latency)
+        self.low_latency_row.connect("notify::selected", enforce_low_latency)
+        enforce_low_latency()
         self.preset_row = combo_row(tr("Пресет"), None, PRESETS, int(self.ini.get("preset", "4")))
         self.preset_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
         self.output_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
@@ -1244,8 +1311,16 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.save_mod_profile()
         self.save_patch_profile()
         save_settings(s)
+        frame_gen_choice_now = combo_value(self.frame_gen_row)
+        if frame_gen_choice_now == "fsr3":
+            frame_generation, frame_generation_multiplier = "fsr3", self.ini.get("frame_generation_multiplier", "2")
+        else:
+            frame_generation, frame_generation_multiplier = frame_gen_ini(frame_gen_choice_now)
         self.ini.update({
             "upscaler": combo_value(self.upscaler_row),
+            "frame_generation": frame_generation,
+            "frame_generation_multiplier": frame_generation_multiplier,
+            "low_latency": combo_value(self.low_latency_row),
             "preset": str(combo_value(self.preset_row)),
             "sharpen": "1" if self.sharpen_row.get_active() else "0",
             "sharpness": f"{self.sharpness_row.get_value():.2f}",
@@ -1813,6 +1888,8 @@ class LauncherWindow(Adw.ApplicationWindow):
     def update_dlss_row(self):
         own = ngx_libraries(self.user_dir() / "dlss")
         bundled = ngx_libraries(binaries_dir())
+        own_fg = ngx_libraries(self.user_dir() / "dlss", NGX_FG_PREFIX)
+        bundled_fg = ngx_libraries(binaries_dir(), NGX_FG_PREFIX)
         bridge = (binaries_dir() / "libbbport_dlss.so").is_file()
         if own:
             text = tr("Своя: {}").format(own[-1].name[len(NGX_PREFIX):])
@@ -1820,18 +1897,25 @@ class LauncherWindow(Adw.ApplicationWindow):
             text = tr("Из сборки: {}").format(bundled[-1].name[len(NGX_PREFIX):])
         else:
             text = tr("Нет: выберите libnvidia-ngx-dlss.so.* из DLSS SDK NVIDIA ({})").format(DLSS_SDK_URL)
+        # The Frame Generation library (the same SDK folder): the game searches both places.
+        if own_fg:
+            text += "\n" + tr("Генерация кадров: своя {}").format(own_fg[-1].name[len(NGX_FG_PREFIX):])
+        elif bundled_fg:
+            text += "\n" + tr("Генерация кадров: из сборки {}").format(bundled_fg[-1].name[len(NGX_FG_PREFIX):])
+        else:
+            text += "\n" + tr("Генерация кадров: нет libnvidia-ngx-dlssg.so.* (выберите её так же; DLSS SDK 310.7 или новее)")
         if not bridge:
             text += "\n" + tr("Эта сборка без моста DLSS (libbbport_dlss.so): DLSS работать не будет")
         self.dlss_row.set_subtitle(text)
-        self.dlss_reset_button.set_sensitive(bool(own))
+        self.dlss_reset_button.set_sensitive(bool(own or own_fg))
         if hasattr(self, "sharpness_row"):  # built after this row
             self.update_upscaler_status()
 
     def choose_ngx(self):
-        dialog = Gtk.FileDialog(title=tr("Библиотека DLSS NVIDIA (libnvidia-ngx-dlss.so.*)"))
+        dialog = Gtk.FileDialog(title=tr("Библиотека DLSS NVIDIA (libnvidia-ngx-dlss.so.*, libnvidia-ngx-dlssg.so.*)"))
         files = Gtk.FileFilter()
-        files.set_name("libnvidia-ngx-dlss.so.*, nvngx_dlss.dll")
-        for pattern in ("libnvidia-ngx-dlss.so*", "*.dll", "*.DLL"):
+        files.set_name("libnvidia-ngx-dlss*.so.*, nvngx_dlss*.dll")
+        for pattern in ("libnvidia-ngx-dlss.so*", "libnvidia-ngx-dlssg.so*", "*.dll", "*.DLL"):
             files.add_pattern(pattern)
         filters = Gio.ListStore.new(Gtk.FileFilter)
         filters.append(files)
@@ -1859,28 +1943,34 @@ class LauncherWindow(Adw.ApplicationWindow):
         except OSError as error:
             self.alert(tr("Не удалось прочитать файл"), str(error))
             return
-        if not path.name.startswith(NGX_PREFIX) or not elf:
+        prefix = ngx_prefix_of(path.name)
+        if prefix is None or not elf:
             self.alert(tr("Это не библиотека DLSS"), tr(
-                "Нужен файл libnvidia-ngx-dlss.so.<версия> из DLSS SDK NVIDIA: {}").format(DLSS_SDK_URL))
+                "Нужен файл libnvidia-ngx-dlss.so.<версия> (DLSS) или libnvidia-ngx-dlssg.so.<версия> "
+                "(генерация кадров) из DLSS SDK NVIDIA: {}").format(DLSS_SDK_URL))
             return
         target = self.user_dir() / "dlss"
         try:
             target.mkdir(parents=True, exist_ok=True)
-            for old in ngx_libraries(target):
+            for old in ngx_libraries(target, prefix):  # one of each kind
                 old.unlink()
             shutil.copy2(path, target / path.name)
         except OSError as error:
             self.alert(tr("Не удалось скопировать библиотеку"), str(error))
             return
-        self.toasts.add_toast(Adw.Toast(title=tr("DLSS {}: готово").format(path.name[len(NGX_PREFIX):])))
+        version = path.name[len(prefix):]
+        self.toasts.add_toast(Adw.Toast(title=(
+            tr("DLSS Frame Generation {}: готово") if prefix == NGX_FG_PREFIX else tr("DLSS {}: готово")
+        ).format(version)))
         self.update_dlss_row()
 
     def reset_ngx(self):
-        for old in ngx_libraries(self.user_dir() / "dlss"):
-            try:
-                old.unlink()
-            except OSError:
-                pass
+        for prefix in (NGX_PREFIX, NGX_FG_PREFIX):
+            for old in ngx_libraries(self.user_dir() / "dlss", prefix):
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
         self.update_dlss_row()
 
     def choose_dll(self, title, done):

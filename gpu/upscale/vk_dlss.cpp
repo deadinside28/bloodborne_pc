@@ -36,6 +36,7 @@ namespace {
 #ifdef _WIN32
 constexpr wchar_t BridgeName[] = L"bbport_dlss.dll";
 constexpr wchar_t NgxName[] = L"nvngx_dlss.dll";
+constexpr wchar_t NgxFrameGenName[] = L"nvngx_dlssg.dll";
 using Module = HMODULE;
 
 std::filesystem::path ExecutableDirectory() {
@@ -46,7 +47,13 @@ std::filesystem::path ExecutableDirectory() {
 }
 
 bool HasNgx(const std::filesystem::path& directory) {
-    return std::filesystem::is_regular_file(directory / NgxName);
+    std::error_code error;
+    return std::filesystem::is_regular_file(directory / NgxName, error);
+}
+
+bool HasNgxFrameGen(const std::filesystem::path& directory) {
+    std::error_code error;
+    return std::filesystem::is_regular_file(directory / NgxFrameGenName, error);
 }
 
 Module LoadModule(const std::filesystem::path& path) {
@@ -58,8 +65,11 @@ void* FindSymbol(Module module, const char* name) {
 }
 #else
 // bbport (Linux): libbbport_dlss.so (gpu/dlss_bridge) and NVIDIA's libnvidia-ngx-dlss.so.<version>
-// next to bb-probe; NGX finds the latter through the bridge's path list.
+// (and libnvidia-ngx-dlssg.so.<version> for Frame Generation) next to bb-probe or in the player's
+// DLSS folder; NGX finds them through the bridge's path list.
 constexpr char BridgeName[] = "libbbport_dlss.so";
+constexpr std::string_view NgxPrefix = "libnvidia-ngx-dlss.so.";
+constexpr std::string_view NgxFrameGenPrefix = "libnvidia-ngx-dlssg.so.";
 using Module = void*;
 
 std::filesystem::path ExecutableDirectory() {
@@ -67,14 +77,22 @@ std::filesystem::path ExecutableDirectory() {
     return std::filesystem::read_symlink("/proc/self/exe", error).parent_path();
 }
 
-bool HasNgx(const std::filesystem::path& directory) {
+bool HasLibrary(const std::filesystem::path& directory, std::string_view prefix) {
     std::error_code error;
     for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
-        if (entry.path().filename().string().starts_with("libnvidia-ngx-dlss.so.")) {
+        if (entry.path().filename().string().starts_with(prefix)) {
             return true;
         }
     }
     return false;
+}
+
+bool HasNgx(const std::filesystem::path& directory) {
+    return HasLibrary(directory, NgxPrefix);
+}
+
+bool HasNgxFrameGen(const std::filesystem::path& directory) {
+    return HasLibrary(directory, NgxFrameGenPrefix);
 }
 
 Module LoadModule(const std::filesystem::path& path) {
@@ -110,6 +128,28 @@ std::filesystem::path NgxDirectory() {
         }
     }
     return {};
+}
+
+/// The directories NGX searches for NVIDIA's libraries, in order: the player's own folder (a
+/// newer Super Resolution library, or the Frame Generation one added to a package without it),
+/// then beside bb-probe. Only those holding one of the libraries.
+std::vector<std::filesystem::path> NgxDirectories() {
+    std::vector<std::filesystem::path> found;
+    for (const auto& directory : {UserDlssDirectory(), ExecutableDirectory()}) {
+        if (HasNgx(directory) || HasNgxFrameGen(directory)) {
+            found.push_back(directory);
+        }
+    }
+    return found;
+}
+
+bool HasNgxFrameGenAnywhere() {
+    for (const auto& directory : {UserDlssDirectory(), ExecutableDirectory()}) {
+        if (HasNgxFrameGen(directory)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Where the bridge is: beside bb-probe (the package, a build with DLSS_SDK_ROOT), else the
@@ -158,7 +198,9 @@ struct Dlss::Impl {
     const BbDlssApi* api{};
     std::vector<std::string> instance_extensions, device_extensions;
     std::optional<FeatureDesc> feature;
-    std::string problem;
+    std::optional<FrameGenDesc> frame_gen;
+    int frame_gen_max{};
+    std::string problem, frame_gen_problem;
     bool eligible{true}, instance_ready{}, device_ready{}, initialized{}, available{};
 
     void Disable(std::string_view reason) {
@@ -195,7 +237,8 @@ Dlss::Dlss() : impl{std::make_unique<Impl>()} {
         impl->module ? reinterpret_cast<BbDlssGetApiFn>(FindSymbol(impl->module, "BbDlssGetApi"))
                      : nullptr;
     impl->api = get_api ? get_api() : nullptr;
-    if (!impl->api || impl->api->abi != BBPORT_DLSS_BRIDGE_ABI) {
+    // ABI 1 bridges (Super Resolution only) still work; Frame Generation needs ABI 2.
+    if (!impl->api || impl->api->abi < 1 || impl->api->abi > BBPORT_DLSS_BRIDGE_ABI) {
         impl->Disable("the DLSS bridge library is missing or from another version");
         return;
     }
@@ -209,7 +252,26 @@ Dlss::Dlss() : impl{std::make_unique<Impl>()} {
     std::error_code error;
     std::filesystem::create_directories(data, error);
     std::printf("DLSS: NVIDIA's library from %s\n", ngx.string().c_str());
-    if (!impl->api->Configure(ngx.wstring().c_str(), data.wstring().c_str(), BridgeLog)) {
+    bool configured = false;
+    if (impl->api->abi >= 2) {
+        // Every folder with one of NVIDIA's libraries: the Frame Generation library may be in
+        // the player's folder while the package brought Super Resolution's.
+        const auto directories = NgxDirectories();
+        std::vector<std::wstring> storage;
+        std::vector<const wchar_t*> pointers;
+        for (const auto& directory : directories) {
+            storage.push_back(directory.wstring());
+        }
+        for (const auto& text : storage) {
+            pointers.push_back(text.c_str());
+        }
+        configured = impl->api->ConfigureDirectories(pointers.data(), u32(pointers.size()),
+                                                     data.wstring().c_str(), BridgeLog) != 0;
+    } else {
+        configured =
+            impl->api->Configure(ngx.wstring().c_str(), data.wstring().c_str(), BridgeLog) != 0;
+    }
+    if (!configured) {
         impl->Disable("bridge configuration failed");
     }
 }
@@ -273,6 +335,23 @@ void Dlss::Initialize(vk::Instance instance, vk::PhysicalDevice physical, vk::De
     }
     impl->available = true;
     std::printf("DLSS: ready\n");
+    if (impl->api->abi >= 2) {
+        impl->frame_gen_max = std::max(0, impl->api->FrameGenMaxCount());
+        if (impl->frame_gen_max < 1) {
+            impl->frame_gen_problem =
+                HasNgxFrameGenAnywhere()
+                    ? "this GPU or driver has no DLSS Frame Generation (a GeForce RTX 40 or "
+                      "newer and a current driver are needed)"
+                    : "NVIDIA's Frame Generation library (libnvidia-ngx-dlssg.so) is missing: "
+                      "choose it in the launcher (Upscaler)";
+        }
+    } else {
+        impl->frame_gen_problem = "the DLSS bridge predates Frame Generation: rebuild it "
+                                  "(DLSS_SDK_ROOT=... bash build.sh)";
+    }
+    std::printf("DLSS: Frame Generation %s\n",
+                impl->frame_gen_max > 0 ? (impl->frame_gen_max > 1 ? "up to 4x" : "2x")
+                                        : impl->frame_gen_problem.c_str());
 }
 
 bool Dlss::Available() const {
@@ -328,9 +407,90 @@ void Dlss::ReleaseFeature() {
     }
 }
 
+int Dlss::FrameGenMaxCount() const {
+    return impl->available ? impl->frame_gen_max : 0;
+}
+
+std::string Dlss::FrameGenProblem() const {
+    if (!impl->problem.empty()) {
+        return impl->problem;
+    }
+    return impl->available ? impl->frame_gen_problem : std::string{};
+}
+
+bool Dlss::HasFrameGen(const FrameGenDesc& desc) const {
+    return impl->frame_gen && *impl->frame_gen == desc;
+}
+
+bool Dlss::CreateFrameGen(vk::CommandBuffer command, const FrameGenDesc& desc) {
+    if (FrameGenMaxCount() < 1 || impl->api->abi < 2) {
+        return false;
+    }
+    impl->frame_gen.reset();
+    const BbDlssgFeature feature{desc.width, desc.height, static_cast<VkFormat>(desc.format),
+                                 desc.render_width, desc.render_height};
+    if (!impl->api->FrameGenCreate(command, &feature)) {
+        return false;
+    }
+    impl->frame_gen = desc;
+    return true;
+}
+
+bool Dlss::EvaluateFrameGen(vk::CommandBuffer command, const FrameGenFrame& frame) {
+    if (!impl->frame_gen) {
+        return false;
+    }
+    const auto image = [](const Resource& r) {
+        const vk::ImageSubresourceRange range{r.aspect, 0, 1, 0, 1};
+        return BbDlssImage{r.image,
+                           r.view,
+                           static_cast<VkImageSubresourceRange>(range),
+                           static_cast<VkFormat>(r.format),
+                           r.width,
+                           r.height};
+    };
+    BbDlssgEvaluate parameters{};
+    parameters.backbuffer = image(frame.backbuffer);
+    parameters.depth = image(frame.depth);
+    parameters.motion = image(frame.motion);
+    parameters.output = image(frame.output);
+    parameters.hudless = frame.hudless.image ? image(frame.hudless) : BbDlssImage{};
+    parameters.jitter_x = frame.jitter_x;
+    parameters.jitter_y = frame.jitter_y;
+    parameters.camera_near = frame.camera_near;
+    parameters.camera_far = frame.camera_far;
+    parameters.camera_fov = frame.camera_fov;
+    for (int i = 0; i < 3; ++i) {
+        parameters.camera_position[i] = frame.camera_position[i];
+        parameters.camera_up[i] = frame.camera_up[i];
+        parameters.camera_right[i] = frame.camera_right[i];
+        parameters.camera_forward[i] = frame.camera_forward[i];
+    }
+    parameters.depth_inverted = frame.depth_inverted ? 1 : 0;
+    parameters.reset = frame.reset ? 1 : 0;
+    parameters.multi_frame_count = frame.count;
+    parameters.multi_frame_index = frame.index;
+    parameters.has_matrices = frame.has_matrices ? 1 : 0;
+    std::memcpy(parameters.view_to_clip, frame.view_to_clip.data(), sizeof(parameters.view_to_clip));
+    std::memcpy(parameters.clip_to_prev_clip, frame.clip_to_prev_clip.data(),
+                sizeof(parameters.clip_to_prev_clip));
+    std::memcpy(parameters.prev_clip_to_clip, frame.prev_clip_to_clip.data(),
+                sizeof(parameters.prev_clip_to_clip));
+    return impl->api->FrameGenEvaluate(command, &parameters) != 0;
+}
+
+void Dlss::ReleaseFrameGen() {
+    impl->frame_gen.reset();
+    if (impl->api && impl->api->abi >= 2 && impl->initialized) {
+        impl->api->FrameGenRelease();
+    }
+}
+
 void Dlss::Shutdown() {
     impl->available = false;
     impl->feature.reset();
+    impl->frame_gen.reset();
+    impl->frame_gen_max = 0;
     if (impl->api && impl->initialized) {
         impl->api->Shutdown();
         impl->initialized = false;
@@ -366,6 +526,22 @@ bool Dlss::Evaluate(vk::CommandBuffer, const Frame&) {
     return false;
 }
 void Dlss::ReleaseFeature() {}
+int Dlss::FrameGenMaxCount() const {
+    return 0;
+}
+std::string Dlss::FrameGenProblem() const {
+    return {};
+}
+bool Dlss::HasFrameGen(const FrameGenDesc&) const {
+    return false;
+}
+bool Dlss::CreateFrameGen(vk::CommandBuffer, const FrameGenDesc&) {
+    return false;
+}
+bool Dlss::EvaluateFrameGen(vk::CommandBuffer, const FrameGenFrame&) {
+    return false;
+}
+void Dlss::ReleaseFrameGen() {}
 
 #endif
 

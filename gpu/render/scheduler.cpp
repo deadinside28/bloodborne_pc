@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_timeline.h"
 #include "render/scheduler.h"
+#include "render/vk_low_latency.h"
 
 #include <algorithm>
 #include <chrono>
@@ -882,7 +883,15 @@ void Scheduler::QueueSubmit(std::span<const vk::CommandBuffer> cmdbufs, SubmitIn
     static constexpr std::array<vk::PipelineStageFlags, SubmitInfo::MaxSemaphores> wait_stages{
         vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
         vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands};
+    // Low latency (NVIDIA Reflex): the frame this submission belongs to, for the driver.
+    auto& low_latency = LowLatency::Get();
+    if (renders_frames && info.present_id == 0 && low_latency.Available()) {
+        info.present_id = low_latency.RenderPresentId();
+        low_latency.RenderSubmitStart();
+    }
+    const vk::LatencySubmissionPresentIdNV latency_id{.presentID = info.present_id};
     const vk::TimelineSemaphoreSubmitInfo timeline{
+        .pNext = info.present_id != 0 && low_latency.Available() ? &latency_id : nullptr,
         .waitSemaphoreValueCount = info.num_wait_semas,
         .pWaitSemaphoreValues = info.wait_ticks.data(),
         .signalSemaphoreValueCount = info.num_signal_semas,

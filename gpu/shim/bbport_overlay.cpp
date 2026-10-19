@@ -166,6 +166,26 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     Store(value, v, ImGui::SliderFloat(label, &v, lo, hi, "%.2f"));
 }
 
+/// The FPS readout: the frames shown and their interval; with frame generation the multiplier
+/// in between ("240 FPS  FG 4x  4.2 ms"), from the generated frames shown per game frame.
+std::string FpsText() {
+    const auto& s = BbSettings::Get();
+    const float shown = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
+    const int generated = s.frame_generation.load(std::memory_order_relaxed) != BbSettings::FrameGenOff
+                              ? s.frame_gen_now.load(std::memory_order_relaxed)
+                              : 0;
+    char text[96];
+    if (generated > 0) {
+        std::snprintf(text, sizeof(text),
+                      BbSettings::MenuText("%.0f FPS  FG %dx  %.1f ms", "%.0f FPS  FG %dx  %.1f мс"),
+                      shown, generated + 1, frame_ms_avg);
+    } else {
+        std::snprintf(text, sizeof(text), BbSettings::MenuText("%.0f FPS  %.1f ms", "%.0f FPS  %.1f мс"),
+                      shown, frame_ms_avg);
+    }
+    return text;
+}
+
 void Hint(const char* text) {
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
@@ -403,8 +423,7 @@ void Menu() {
         s.menu_language_chosen = true;
         BbSettings::Save();
     }
-    ImGui::Text(BbSettings::MenuText("%.0f FPS  (%.1f ms)", "%.0f FPS  (%.1f мс)"),
-                frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f, frame_ms_avg);
+    ImGui::TextUnformatted(FpsText().c_str());
     ToyPadSection();
 
     ImGui::SeparatorText(BbSettings::MenuText("Temporal upscaler", "Временной апскейлер"));
@@ -573,21 +592,78 @@ void Menu() {
         "До 1 — резкость самого апскейлера (RCAS). Выше 1 добавляется ещё один проход RCAS. "
         "Ctrl+клик по ползунку — ввести точное значение."));
     ImGui::EndDisabled();
-    // Frame generation: hidden until its artifacts are fixed (BB_FRAME_GEN=1 for tests).
-    if (std::getenv("BB_FRAME_GEN")) {
-        ImGui::BeginDisabled(!s.frame_generation_supported.load(std::memory_order_relaxed));
-        Checkbox(BbSettings::MenuText("Frame generation (FSR 3)", "Генерация кадров (FSR 3)"),
-                 s.frame_generation);
-        ImGui::EndDisabled();
-        if (const char* problem = s.frame_generation_problem.load(std::memory_order_relaxed)) {
-            Hint(problem);
-        } else {
+    // Frame generation. FSR 3 is hidden until its artifacts are fixed (BB_FRAME_GEN=1 shows it);
+    // DLSS Frame Generation is offered where it can run (GeForce RTX 40 and newer with NVIDIA's
+    // library), and on any RTX GPU the entry says why it cannot.
+    {
+        const int current = std::clamp(s.frame_generation.load(), 0, BbSettings::FrameGenCount - 1);
+        const bool fsr3_shown = std::getenv("BB_FRAME_GEN") != nullptr ||
+                                current == BbSettings::FrameGenFsr3;
+        const int dlss_max = s.dlssg_max_multiplier.load(std::memory_order_relaxed);
+        const bool dlss_available = dlss_max > 1;
+        const bool shown = fsr3_shown || dlss_available || s.dlss_supported.load() ||
+                           current != BbSettings::FrameGenOff;
+        if (shown) {
+            const char* names[BbSettings::FrameGenCount] = {
+                BbSettings::MenuText("Off", "Выкл"), "FSR 3.1", "DLSS (NVIDIA RTX 40/50)"};
+            if (ImGui::BeginCombo(BbSettings::MenuText("Frame generation", "Генерация кадров"),
+                                  names[current])) {
+                for (int i = 0; i < BbSettings::FrameGenCount; ++i) {
+                    if (i == BbSettings::FrameGenFsr3 && !fsr3_shown) {
+                        continue;
+                    }
+                    const bool supported =
+                        i == BbSettings::FrameGenOff ||
+                        (i == BbSettings::FrameGenFsr3
+                             ? s.frame_generation_supported.load(std::memory_order_relaxed)
+                             : dlss_available);
+                    ImGui::BeginDisabled(!supported);
+                    if (ImGui::Selectable(names[i], i == current)) {
+                        Store(s.frame_generation, i, true);
+                    }
+                    ImGui::EndDisabled();
+                    if (!supported) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("%s", BbSettings::MenuText("— not available here",
+                                                                 "— здесь недоступно"));
+                    }
+                }
+                ImGui::EndCombo();
+            }
             Hint(BbSettings::MenuText(
-                "Shows a frame interpolated by FSR 3 between each two of the game's: twice the frames "
-                "on screen, a little more input lag. Works with every upscaler preset except Off.",
-                "Между каждыми двумя кадрами игры показывается кадр, интерполированный FSR 3: на "
-                "экране вдвое больше кадров, задержка ввода чуть выше. Работает со всеми пресетами "
-                "апскейлера, кроме «Выкл»."));
+                "Frames generated between each two of the game's: twice the frames on screen "
+                "(DLSS on GeForce RTX 50: up to four times), a little more input lag. DLSS Frame "
+                "Generation needs the DLSS bridge, NVIDIA's libnvidia-ngx-dlssg.so next to the "
+                "game or in the launcher's DLSS folder and a GeForce RTX 40 or newer. Works with "
+                "every upscaler preset except Off; menus and movies are not generated.",
+                "Между каждыми двумя кадрами игры показываются сгенерированные: на экране вдвое "
+                "больше кадров (DLSS на GeForce RTX 50 — до четырёх раз), задержка ввода чуть "
+                "выше. DLSS Frame Generation нужны мост DLSS, libnvidia-ngx-dlssg.so от NVIDIA "
+                "рядом с игрой или в папке DLSS лаунчера и GeForce RTX 40 или новее. Работает со "
+                "всеми пресетами апскейлера, кроме «Выкл»; меню и ролики не генерируются."));
+            if (current == BbSettings::FrameGenDlss && dlss_max > 2) {
+                int multiplier = std::clamp(s.frame_generation_multiplier.load(), 2, dlss_max);
+                const bool changed = ImGui::SliderInt(
+                    BbSettings::MenuText("Multiplier", "Множитель"), &multiplier, 2, dlss_max, "%dx");
+                Store(s.frame_generation_multiplier, multiplier, changed);
+                Hint(BbSettings::MenuText(
+                    "Frames on screen per game frame: 2x one generated, 4x three. The display "
+                    "needs that refresh rate for them to be seen.",
+                    "Кадров на экране на один кадр игры: 2x — один сгенерированный, 4x — три. "
+                    "Чтобы их было видно, нужна такая частота обновления дисплея."));
+            }
+            const char* problem = current == BbSettings::FrameGenDlss
+                                      ? s.dlssg_problem.load(std::memory_order_relaxed)
+                                  : current == BbSettings::FrameGenFsr3
+                                      ? s.frame_generation_problem.load(std::memory_order_relaxed)
+                                      : nullptr;
+            if (problem) {
+                char line[256];
+                std::snprintf(line, sizeof(line), BbSettings::MenuText("Frame generation: %s",
+                                                                       "Генерация кадров: %s"),
+                              problem);
+                problem_text(line);
+            }
         }
     }
     Checkbox(BbSettings::MenuText("Subpixel jitter", "Субпиксельный сдвиг (jitter)"), s.jitter);
@@ -701,6 +777,55 @@ void Menu() {
             "Пресет задаёт размер сцены относительно вывода: 4K Performance = 1920x1080. "
             "Другое соотношение сторон расширяет обзор (интерфейс у краёв экрана). "
             "Смена размера сбрасывает историю апскейлера и может вызвать короткую паузу."));
+    }
+    // Low latency (NVIDIA Reflex through VK_NV_low_latency2): shown where the driver has it,
+    // and on any NVIDIA GPU so that the entry says when the driver is too old.
+    if (s.low_latency_supported.load(std::memory_order_relaxed) || s.dlss_supported.load()) {
+        const char* latency_modes[BbSettings::LowLatencyCount] = {
+            BbSettings::MenuText("Off", "Выкл"), BbSettings::MenuText("On", "Вкл"),
+            BbSettings::MenuText("On + Boost", "Вкл + Boost")};
+        const int latency = std::clamp(s.low_latency.load(), 0, BbSettings::LowLatencyCount - 1);
+        const bool supported = s.low_latency_supported.load(std::memory_order_relaxed);
+        // With DLSS Frame Generation at least On (BbSettings::EffectiveLowLatency): Off is shown
+        // as what runs and cannot be chosen.
+        const int effective = std::clamp(BbSettings::EffectiveLowLatency(), 0, BbSettings::LowLatencyCount - 1);
+        const bool forced = effective != latency;
+        ImGui::BeginDisabled(!supported);
+        if (ImGui::BeginCombo(BbSettings::MenuText("Low latency (NVIDIA Reflex)",
+                                                   "Низкая задержка (NVIDIA Reflex)"),
+                              latency_modes[effective])) {
+            for (int i = 0; i < BbSettings::LowLatencyCount; ++i) {
+                const bool allowed = i != BbSettings::LowLatencyOff || !forced;
+                ImGui::BeginDisabled(!allowed);
+                if (ImGui::Selectable(latency_modes[i], i == effective)) {
+                    Store(s.low_latency, i, true);
+                }
+                ImGui::EndDisabled();
+                if (!allowed) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%s", BbSettings::MenuText("— on with DLSS frame generation",
+                                                             "— вкл с генерацией кадров DLSS"));
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        Hint(BbSettings::MenuText(
+            "NVIDIA Reflex through the driver's Vulkan low-latency mode: the game's thread waits "
+            "for the driver before each frame so that frames do not queue up in front of the GPU; "
+            "less input lag, a little less throughput when GPU-bound. Boost keeps the GPU clocks "
+            "up. Recommended with frame generation. Needs NVIDIA's driver 550 or newer; off "
+            "elsewhere.",
+            "NVIDIA Reflex через режим низкой задержки драйвера (Vulkan): поток игры ждёт "
+            "драйвер перед каждым кадром, чтобы кадры не копились перед видеокартой; меньше "
+            "задержка ввода, чуть меньше пропускная способность при упоре в GPU. Boost держит "
+            "частоты GPU. Рекомендуется с генерацией кадров. Нужен драйвер NVIDIA 550 или новее; "
+            "иначе выключено."));
+        if (!supported) {
+            problem_text(BbSettings::MenuText(
+                "Low latency: the driver has no VK_NV_low_latency2 (NVIDIA 550 or newer)",
+                "Низкая задержка: в драйвере нет VK_NV_low_latency2 (NVIDIA 550 или новее)"));
+        }
     }
     const char* live_modes[] = {BbSettings::MenuText("Auto (based on GPU)", "Авто (по видеокарте)"),
                                 BbSettings::MenuText("Off (faster)", "Выключена (быстрее)"),
@@ -859,8 +984,7 @@ void FpsCounter() {
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
     const auto& s = BbSettings::Get();
-    ImGui::Text(BbSettings::MenuText("%.0f FPS  %.1f ms  %s", "%.0f FPS  %.1f мс  %s"),
-                frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f, frame_ms_avg,
+    ImGui::Text("%s  %s", FpsText().c_str(),
                 s.upscaler == BbSettings::UpscalerFsr3     ? "FSR 3.1"
                 : s.upscaler == BbSettings::UpscalerFsr4   ? "FSR 4"
                 : s.upscaler == BbSettings::UpscalerFsr411 ? "FSR 4.1.1"

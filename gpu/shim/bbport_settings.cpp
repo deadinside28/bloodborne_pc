@@ -74,7 +74,18 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
     } else if (key == "frame_generation") {
-        v.frame_generation = i != 0;
+        // "1" and "0" from earlier versions and scripts: FSR 3.1 and off.
+        v.frame_generation = i != 0 ? FrameGenFsr3 : FrameGenOff;
+        for (int g = 0; g < FrameGenCount; ++g) {
+            if (value == FrameGenName(g)) v.frame_generation = g;
+        }
+    } else if (key == "frame_generation_multiplier") {
+        v.frame_generation_multiplier = std::clamp(i, 2, 4);
+    } else if (key == "low_latency") {
+        v.low_latency = std::clamp(i, 0, LowLatencyCount - 1);
+        for (int m = 0; m < LowLatencyCount; ++m) {
+            if (value == LowLatencyName(m)) v.low_latency = m;
+        }
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
@@ -264,11 +275,14 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
-        {"BB_FRAME_GEN", "frame_generation"},
+        {"BB_FRAME_GEN", "frame_generation"},       {"BB_FRAME_GEN_MULTIPLIER", "frame_generation_multiplier"},
+        {"BB_LOW_LATENCY", "low_latency"},
     };
-    // Frame generation is hidden in the menu until its artifacts are fixed: only BB_FRAME_GEN turns
-    // it on, a saved setting does not.
-    v.frame_generation = false;
+    // FSR 3 frame generation is hidden in the menu until its artifacts are fixed: only
+    // BB_FRAME_GEN turns it on, a saved setting does not. A saved DLSS Frame Generation stays.
+    if (v.frame_generation == FrameGenFsr3 && !std::getenv("BB_FRAME_GEN")) {
+        v.frame_generation = FrameGenOff;
+    }
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
             Set(v, key, value);
@@ -374,7 +388,9 @@ void Save() {
     put("output_res", SizeText(CurrentOutput()));
     // Read by run.sh at start.
     put("live_resolution", v.live_resolution < 0 ? "auto" : flag(v.live_resolution != 0));
-    put("frame_generation", flag(v.frame_generation));
+    put("frame_generation", FrameGenName(v.frame_generation));
+    put("frame_generation_multiplier", std::to_string(v.frame_generation_multiplier.load()));
+    put("low_latency", LowLatencyName(v.low_latency));
     if (v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));
     }
@@ -437,6 +453,24 @@ const char* PresetName(int preset) {
 const char* UpscalerName(int upscaler) {
     static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
+}
+
+const char* LowLatencyName(int mode) {
+    static constexpr const char* names[LowLatencyCount] = {"off", "on", "boost"};
+    return names[std::clamp(mode, 0, LowLatencyCount - 1)];
+}
+
+int EffectiveLowLatency() {
+    const auto& v = Get();
+    const int mode = std::clamp(v.low_latency.load(std::memory_order_relaxed), 0, LowLatencyCount - 1);
+    const bool dlss_frame_gen = v.frame_generation.load(std::memory_order_relaxed) == FrameGenDlss &&
+                                v.dlssg_max_multiplier.load(std::memory_order_relaxed) > 1;
+    return dlss_frame_gen && mode == LowLatencyOff ? int(LowLatencyOn) : mode;
+}
+
+const char* FrameGenName(int frame_gen) {
+    static constexpr const char* names[FrameGenCount] = {"off", "fsr3", "dlss"};
+    return names[std::clamp(frame_gen, 0, FrameGenCount - 1)];
 }
 
 } // namespace BbSettings

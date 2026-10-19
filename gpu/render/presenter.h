@@ -6,6 +6,7 @@
 // the port's overlay over it).
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -48,11 +49,15 @@ struct Frame {
     u64 ready_tick = 0;
     bool is_hdr = false;
     u8 id = 0;
-    /// Frame generation: the frame interpolated before this one, encoded like it (shown first).
-    VmaAllocation interp_allocation{};
-    vk::Image interp_image{};
-    vk::ImageView interp_view{};
-    bool has_interp = false;
+    /// Frame generation: the frames generated before this one (oldest first), encoded like it
+    /// and shown first. Made with the first ones generated: most sessions never need them.
+    static constexpr u32 MaxInterp = 3;
+    std::array<VmaAllocation, MaxInterp> interp_allocation{};
+    std::array<vk::Image, MaxInterp> interp_image{};
+    std::array<vk::ImageView, MaxInterp> interp_view{};
+    u32 interp_count = 0;
+    /// Low latency: the frame's ID for the driver (0: a blank frame).
+    u64 present_id = 0;
 };
 
 class Presenter {
@@ -76,10 +81,11 @@ public:
 
     /// Command processor thread: the display buffer at `cpu_address` into a free frame.
     Frame* PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute, VAddr cpu_address);
-    /// Frame generation's frame interpolated before `frame` (PrepareFrame): encoded into the
-    /// frame's second image like the real one.
-    void EncodeInterpolated(Frame* frame, vk::Image image, vk::Format format, u32 width, u32 height,
-                            vk::Format display_view_format, const EncodePass::Settings& encode);
+    /// Frame generation's frame `index` generated before `frame` (PrepareFrame): encoded into
+    /// the frame's extra image like the real one.
+    void EncodeInterpolated(Frame* frame, u32 index, vk::Image image, vk::Format format, u32 width,
+                            u32 height, vk::Format display_view_format,
+                            const EncodePass::Settings& encode);
     /// A black frame (no GPU work until it is presented).
     Frame* PrepareBlankFrame(bool present_thread);
     /// Present thread: shows `frame` and frees it (unless `is_reusing_frame`).
@@ -92,6 +98,8 @@ private:
     Frame* GetRenderFrame();
     void ReleaseFrame(Frame* frame);
     void RecreateFrame(Frame& frame, u32 width, u32 height);
+    /// Frees the frame's generated-frame images (RecreateFrame, the destructor).
+    void DestroyInterpolated(Frame& frame);
     /// The frame size: the display buffer's aspect fitted into the swapchain.
     void SetExpectedSize(u32 width, u32 height);
     /// Records the swapchain image's contents: black bars and `frame` (if any) blitted in.

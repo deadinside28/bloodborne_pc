@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 #
 # bbport_dlss (libbbport_dlss.so / bbport_dlss.dll) links the NVIDIA DLSS SDK and is built
-# separately from the port. Linux: build.sh builds it when DLSS_SDK_ROOT is set. Windows (MSVC):
+# separately from the port. DLSS Super Resolution and DLSS Frame Generation: the SDK must have
+# the Frame Generation headers (nvsdk_ngx_helpers_dlssg_vk.h, DLSS SDK 310.7 or newer). Linux: build.sh builds it when DLSS_SDK_ROOT is set. Windows (MSVC):
 #   cmake -S gpu/dlss_bridge -B out/dlss-bridge -G "Visual Studio 17 2022" -A x64 \
 #         -DDLSS_SDK_ROOT=<github.com/NVIDIA/DLSS checkout> -DVULKAN_INCLUDE=<Vulkan-Headers include>
 #   cmake --build out/dlss-bridge --config Release
@@ -18,6 +19,9 @@ if (NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 if (NOT EXISTS "${DLSS_SDK_ROOT}/include/nvsdk_ngx_vk.h")
     message(FATAL_ERROR "Set DLSS_SDK_ROOT to the NVIDIA DLSS SDK (github.com/NVIDIA/DLSS)")
+endif()
+if (NOT EXISTS "${DLSS_SDK_ROOT}/include/nvsdk_ngx_helpers_dlssg_vk.h")
+    message(FATAL_ERROR "This DLSS SDK predates Frame Generation: check out github.com/NVIDIA/DLSS 310.7 or newer")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)

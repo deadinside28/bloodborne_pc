@@ -77,6 +77,9 @@ struct SubmitInfo {
     vk::Fence fence{};
     u32 num_wait_semas = 0;
     u32 num_signal_semas = 0;
+    /// Low latency (render/vk_low_latency): the frame this submission draws or presents, for
+    /// the driver (VK_NV_low_latency2); 0: none. The draw scheduler fills it in itself.
+    u64 present_id = 0;
     /// Queue operations that go out right before the submission, in queue order (sparse
     /// binds): with BB_ASYNC_SUBMIT the submission itself goes out later, on a recording thread.
     std::vector<std::function<void()>> before_submit;
@@ -104,6 +107,12 @@ public:
     /// `threaded_recording`: commands passed to Record() are recorded by recording threads.
     explicit Scheduler(const Instance& instance, bool threaded_recording = false);
     ~Scheduler();
+
+    /// Low latency: this scheduler's submissions draw the game's frames (the presenter's draw
+    /// scheduler): they carry the frame's ID and mark the frame's first submission.
+    void SetRendersFrames(bool on) {
+        renders_frames = on;
+    }
 
     /// Submits what was recorded (it signals the current tick, with `info`'s waits and
     /// signals); the next commands belong to the next tick.
@@ -548,6 +557,7 @@ private:
     CommandPool command_pool;
     DynamicState dynamic_state;
     SubmitFunc on_submit{};
+    bool renders_frames = false;
     vk::CommandBuffer current_cmdbuf;
     struct PendingOp {
         Common::UniqueFunction<void> callback;

@@ -17,6 +17,7 @@
 // what counts them down uses the real time.
 #include "common/types.h"
 #include "bbport_frame_rate.h"
+#include "render/vk_low_latency.h"
 #include "bbport_guest_code.h"
 
 #include <sys/mman.h>
@@ -66,6 +67,8 @@ std::atomic<int> live_limit{0};
 
 /// The pacer at the main loop's step (rdi: it): this frame's values.
 void PS4_SYSV_ABI FrameStep(u64 pacer) {
+    // Low latency (NVIDIA Reflex): the driver's sleep before the frame's simulation.
+    Vulkan::LowLatency::Get().GameFrameStart();
     const float measured = *reinterpret_cast<const float*>(pacer + 0x264);
     float dt = std::clamp(std::isfinite(measured) ? measured : Frame30, live->shortest, Frame30);
     // BB_FRAME_DT_SMOOTH=a (diagnostics, 0 < a < 1): the step follows the measured frame time by

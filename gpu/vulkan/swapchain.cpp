@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "vulkan/swapchain.h"
+#include "render/vk_low_latency.h"
 
 #include <algorithm>
 #include <array>
@@ -46,6 +47,7 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
 Swapchain::~Swapchain() {
     DestroyResources();
     if (swapchain) {
+        LowLatency::Get().SwapchainDestroying(swapchain);
         instance.GetDevice().destroySwapchainKHR(swapchain);
     }
     instance.GetInstance().destroySurfaceKHR(surface);
@@ -124,7 +126,11 @@ void Swapchain::Create(u32 width_, u32 height_) {
     const bool exclusive = families[0] == families[1];
     const auto format = use_hdr ? HdrFormat : sdr_format;
     const vk::SwapchainKHR old = swapchain;
+    // Low latency (NVIDIA Reflex, render/vk_low_latency): the swapchain takes the driver's
+    // latency mode when the device has VK_NV_low_latency2.
+    const vk::SwapchainLatencyCreateInfoNV latency{.latencyModeEnable = true};
     swapchain = Check<"create swapchain">(device.createSwapchainKHR({
+        .pNext = instance.HasLowLatency() ? &latency : nullptr,
         .surface = surface,
         .minImageCount = image_count,
         .imageFormat = format.format,
@@ -143,8 +149,10 @@ void Swapchain::Create(u32 width_, u32 height_) {
         .oldSwapchain = old,
     }));
     if (old) {
+        LowLatency::Get().SwapchainDestroying(old);
         device.destroySwapchainKHR(old);
     }
+    LowLatency::Get().SwapchainCreated(swapchain);
 
     images = Check<"get swapchain images">(device.getSwapchainImagesKHR(swapchain));
     image_count = u32(images.size());
@@ -221,8 +229,12 @@ bool Swapchain::AcquireNextImage() {
     return !needs_recreation;
 }
 
-bool Swapchain::Present() {
+bool Swapchain::Present(u64 present_id) {
+    // The frame's ID (VK_KHR_present_id): the driver pairs the present with the frame's
+    // submissions and markers (low latency). Zero: none (generated and blank frames).
+    const vk::PresentIdKHR id_info{.swapchainCount = 1, .pPresentIds = &present_id};
     const vk::PresentInfoKHR info{
+        .pNext = present_id != 0 && instance.HasPresentId() ? &id_info : nullptr,
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],
         .swapchainCount = 1,

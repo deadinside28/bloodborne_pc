@@ -13,7 +13,8 @@ directly on the PC:
   this one game replaces the PS4 system libraries;
 - **as in DXVK**, the game's graphics are translated to Vulkan — by the port's own renderer and
   shader translator (they started from [shadPS4](https://github.com/shadps4-emu/shadPS4)'s and were
-  rewritten), including temporal upscaling with AMD FSR 3.1, FSR 4, FSR 4.1.1 and NVIDIA DLSS;
+  rewritten), including temporal upscaling with AMD FSR 3.1, FSR 4, FSR 4.1.1 and NVIDIA DLSS,
+  and DLSS Frame Generation;
 - memory and the GPU's work follow the PC model on every GPU by default (the new memory and
   translation model, since 0.6); the old memory model of 0.3 stays as a launcher option
   (*Memory model → Old*).
@@ -89,6 +90,11 @@ Mesa/RADV) has been tested thoroughly.
     9000; picked automatically). The assets are built on your machine from one DLL of your own
     (4.1.x): the launcher's *FSR 4.1.1 from your own AMD DLL → Choose DLL…* button (2–5 minutes,
     twice that on RDNA4; needs a recent Proton), or `tools/fsr4cap`.
+  - **DLSS Super Resolution and DLSS Frame Generation** (NVIDIA GeForce RTX) through an
+    optional bridge built against NVIDIA's SDK (see Building). Frame generation makes the frames
+    between two of the game's (2x on RTX 40, up to 4x on RTX 50) from the finished frame, the
+    frame before its UI, the scene depth, the motion vectors and the game's camera matrices;
+    *Overlay menu → Frame generation*, or the launcher.
   - Faster than AMD's own shaders on RDNA3: the final passes of FSR 4 and 4.1.1 were rewritten
     to store through workgroup memory (3.5× and 2.3× faster, bit-exact); FSR 4 costs ~4 ms at
     4K on an RX 7800 XT instead of ~6 ms.
@@ -289,6 +295,29 @@ launcher: *Upscaler → DLSS: NVIDIA's library → Choose a file…*, as the FSR
 copied to `<user>/dlss/`, which the game prefers. A game's `nvngx_dlss.dll` is the Windows
 library: NVIDIA's Linux driver does not load it.
 
+**DLSS Frame Generation (GeForce RTX 40 and newer).** The same SDK (310.7 or newer) has NVIDIA's
+Linux frame generation library, `lib/Linux_x86_64/rel/libnvidia-ngx-dlssg.so.<version>`;
+`build.sh` copies it next to `bb-probe` with the Super Resolution one, and the launcher's
+*DLSS: NVIDIA's library → Choose a file…* takes it too (into `<user>/dlss/`, beside or instead of
+the package's). Then *Frame generation → DLSS* in the overlay menu (Insert or L3+R3) or the
+launcher: between each two of the game's frames one generated frame is shown (RTX 40), or up to
+three (*Multiplier*, RTX 50); the display needs the refresh rate for them. It works with any
+upscaler, DLSS or FSR; the inputs are the frame as shown, the frame before its UI, the scene depth,
+the motion vectors bbport computes and the game's cameras as clip-space matrices. Without the
+library, on an RTX 30 or older or with `BB_DLSS=0` the entry says why it is unavailable, and the
+game runs without generated frames. `BB_FRAME_GEN=dlss` and `BB_FRAME_GEN_MULTIPLIER=2..4` set it
+from the command line. FSR 3.1 frame generation stays hidden until its artifacts are fixed
+(`BB_FRAME_GEN=1` shows it).
+
+**Low latency (NVIDIA Reflex).** On NVIDIA's driver (550 or newer) the port uses the Vulkan
+form of Reflex, `VK_NV_low_latency2`, the same mechanism Proton gives Windows games: the game's
+thread waits for the driver before each frame so that frames do not queue up in front of the GPU,
+and the frame's simulation, submissions and present are marked for the driver. On by default where
+the driver has it: the overlay menu (*Output → Low latency (NVIDIA Reflex)*) and the launcher
+offer Off, On and On + Boost (`low_latency=off|on|boost` in `bbport.ini`, `BB_LOW_LATENCY`);
+nothing changes on other GPUs. With DLSS frame generation it is always at least On, as NVIDIA
+requires of games: the generated frames add latency that Reflex takes back.
+
 From source the script takes its tools from the system (MinGW GCC, CMake, Ninja, Python 3,
 SPIRV-Tools, Git) or from Nix; the AppImage has them prebuilt.
 
@@ -401,7 +430,7 @@ loaded; a build without it plays offline only.
 | `docs/` | Design notes and measurements ([upscaler](docs/upscaler.md), [parallel GPU](docs/parallel_gpu.md), [motion vectors](docs/motion_vectors.md), [roadmap](docs/ROADMAP.md)) |
 
 Tests: `bash build.sh --test`, `python3 -m unittest discover -s tests`, and
-`ninja -C out/gpu motion-history-test ui-composition-test scene-resolution-test motion-shader-test settings-test`.
+`ninja -C out/gpu motion-history-test ui-composition-test scene-resolution-test motion-shader-test settings-test camera-matrices-test`.
 
 ## Roadmap
 
@@ -415,8 +444,8 @@ Tests: `bash build.sh --test`, `python3 -m unittest discover -s tests`, and
 - Async compute for the upscaler (the frame is GPU-bound at 4K).
 - XeSS (super resolution) and XeFG frame generation through a Wine helper sharing Vulkan
   memory (a memory-bridge prototype is in `tools/bridge_helper`); inputs exposed so that OptiScaler-style mapping works.
-- Frame generation (FSR 3.1 FG: in the code, hidden until its artifacts with upscaling are
-  fixed), reactive and transparency masks for particles and fog.
+- FSR 3.1 frame generation (in the code, hidden until its artifacts with upscaling are fixed;
+  DLSS Frame Generation is in), reactive and transparency masks for particles and fog.
 - Fix the races in AMD's FSR 4.1.1 shaders at output widths that are not multiples of 64
   (e.g. 1600×900), as already done for the left-edge race in FSR 4 v07 at 1080p.
 - Steam Deck validation of the AppImage; HDR output.

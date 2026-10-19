@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "upscale/vk_camera_motion.h"
+#include "upscale/camera_matrices.h"
 
 #include <chrono>
 #include <cmath>
@@ -224,6 +225,17 @@ void CameraMotion::PrintState(int frame) const {
     print("jitter", jitter.data(), 2);
     print("prev_jitter", previous_jitter.data(), 2);
     std::printf("\n");
+}
+
+bool CameraMotion::ClipTransforms(std::array<float, 16>& view_to_clip,
+                                  std::array<float, 16>& clip_to_prev_clip,
+                                  std::array<float, 16>& prev_clip_to_clip) const noexcept {
+    if (!current.valid || !previous.valid) {
+        return false;
+    }
+    return CameraMatrices::ClipTransforms(current.view, current.inv_view, current.proj,
+                                          previous.view, previous.inv_view, previous.proj,
+                                          view_to_clip, clip_to_prev_clip, prev_clip_to_clip);
 }
 
 std::array<std::array<float, 4>, 3> CameraMotion::TaaDepthParameters() const noexcept {
