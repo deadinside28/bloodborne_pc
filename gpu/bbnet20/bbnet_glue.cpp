@@ -2,6 +2,7 @@
 // bbport co-op: what shadPS4 0.20.0's network and NP libraries need from the rest of
 // shadPS4, implemented on top of the bbport runtime, and their registration.
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -26,6 +28,7 @@
 #endif
 
 #include "common/elf_info.h"
+#include "common/logging/line.h"
 #include "common/types.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -345,14 +348,22 @@ s32 GetCurrentPid() {
 }
 } // namespace Core::Debugger
 
-// ---- Notifications (log only for now) ------------------------------------------------------------
+// ---- Notifications ------------------------------------------------------------------------------
+// The console and the log get every one; an Info notice (the login failed, the server is down or
+// refuses this client) also shows for a while on the port's overlay line, over the game.
 
 namespace ImGui::ShadNetNotify {
 namespace {
 std::mutex history_mutex;
 std::vector<HistoryEntry> history;
 std::size_t unread{};
+// Bumped by every user of the overlay line: a notice clears it only while it is still its own.
+std::atomic<u64> overlay_line_generation{0};
+constexpr auto NoticeShown = std::chrono::seconds(15);
 } // namespace
+void OverlayLineTaken() {
+    ++overlay_line_generation;
+}
 KindDisplay DisplayOf(Kind kind) {
     switch (kind) {
     case Kind::FriendRequest:
@@ -370,7 +381,19 @@ KindDisplay DisplayOf(Kind kind) {
     }
 }
 void Push(Kind kind, std::string text) {
-    std::printf("Co-op: %s: %s\n", DisplayOf(kind).tag, text.c_str());
+    // One write of the whole line: the shadNet threads log at the same moment.
+    Common::Log::WriteLine(stdout,
+                           std::string("Co-op: ") + DisplayOf(kind).tag + ": " + text + "\n");
+    if (kind == Kind::Info) {
+        const u64 mine = ++overlay_line_generation;
+        bbgpu_overlay_banner(text.c_str());
+        std::thread([mine] {
+            std::this_thread::sleep_for(NoticeShown);
+            if (overlay_line_generation.load() == mine) {
+                bbgpu_overlay_banner(nullptr);
+            }
+        }).detach();
+    }
     std::scoped_lock lock{history_mutex};
     history.push_back({kind, std::move(text), {}});
     ++unread;
@@ -605,9 +628,13 @@ BBNET_EXPORT int bbnet_init(const BbNetHost* host) {
         Core::KeepGuestCodeWritable();
     }
     const auto& ids = Common::ElfInfo::Instance().GetNpCommIds();
-    std::printf("Co-op: %s, NP communication id %s%s\n", host->serial ? host->serial : "?",
-                ids.empty() ? "missing" : ids.front().c_str(),
-                EmulatorSettings.IsConnectedToNetwork() ? "; online play on" : "");
+    std::string line = std::string("Co-op: ") + (host->serial ? host->serial : "?") +
+                       ", NP communication id " +
+                       (ids.empty() ? std::string("missing") : ids.front());
+    if (EmulatorSettings.IsConnectedToNetwork()) {
+        line += "; online play on"; // a launcher can look for this
+    }
+    Common::Log::WriteLine(stdout, line + "\n"); // one write (line.h)
     Core::Loader::SymbolsResolver resolver;
     Core::Loader::SymbolsResolver* sym = &resolver;
     if (BbThd::Enabled()) {
