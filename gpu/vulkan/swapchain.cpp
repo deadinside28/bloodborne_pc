@@ -28,6 +28,9 @@ vk::PresentModeKHR RequestedPresentMode() {
     if (name == "Immediate") {
         return vk::PresentModeKHR::eImmediate;
     }
+    if (name == "FifoRelaxed") {
+        return vk::PresentModeKHR::eFifoRelaxed;
+    }
     if (name != "Mailbox") {
         LOG_ERROR(Render_Vulkan, "Unknown present mode {}, using Mailbox", name);
     }
@@ -71,10 +74,16 @@ void Swapchain::ChoosePresentMode() {
     const auto [result, modes] = instance.GetPhysicalDevice().getSurfacePresentModesKHR(surface);
     present_mode = RequestedPresentMode();
     if (result != vk::Result::eSuccess || !std::ranges::contains(modes, present_mode)) {
-        // FIFO is always there.
-        LOG_WARNING(Render_Vulkan, "Present mode {} is not supported, using Fifo",
-                    vk::to_string(present_mode));
-        present_mode = vk::PresentModeKHR::eFifo;
+        // FIFO is always there. FIFO Relaxed (not on Mesa's Wayland surfaces) falls back to
+        // Mailbox, which also presents a late frame at once instead of locking to half the
+        // refresh rate as FIFO does.
+        const bool mailbox = result == vk::Result::eSuccess &&
+                             present_mode == vk::PresentModeKHR::eFifoRelaxed &&
+                             std::ranges::contains(modes, vk::PresentModeKHR::eMailbox);
+        const auto fallback = mailbox ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+        LOG_WARNING(Render_Vulkan, "Present mode {} is not supported, using {}",
+                    vk::to_string(present_mode), vk::to_string(fallback));
+        present_mode = fallback;
     }
 }
 
