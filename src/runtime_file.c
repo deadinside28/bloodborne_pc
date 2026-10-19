@@ -9,17 +9,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#ifndef _WIN32
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define MAX_FILES 1024
-#define MAX_MOUNTS 16
+#define MAX_MOUNTS 64 /* app0, 16 save data slots, 16 add-ons and the rest */
 
 typedef struct { int64_t sec, nsec; } GuestTimespec;
 typedef struct {
@@ -304,7 +304,144 @@ static int commit_file(const File *f) {
     sync_directory(f->commit);
     return 0;
 }
+/* The game's option pages (menu/optionsetting.gfx, Scaleform): the ControllSetting layout
+ * (sprite "_Option_ItemList_71", rows Item_0_0 .. Item_6_0) stacks its rows upwards, a later row
+ * drawn over an earlier one, and a row's pop-up list showed the rows below it through. The port's
+ * settings page (gpu/shim/bbport_game_menu.cpp) has pop-up rows there: the copy the game reads has
+ * these rows' depths reversed, as the game's own LanguageSetting layout (made for pop-up rows)
+ * has them. Only those depths change; anything unexpected in the file: the file as it is.
+ * BB_GAME_MENU=0 (no port pages) leaves it alone too. */
+typedef struct { const uint8_t *p; size_t bit; } Bits;
+static unsigned bits_read(Bits *b,int n) {
+    unsigned v=0;
+    while (n--) { v=v<<1 | ((b->p[b->bit>>3]>>(7-(b->bit&7)))&1); ++b->bit; }
+    return v;
+}
+/* A tag at `at` of `buf` (up to `end`): its code, body and the next tag. */
+static int swf_tag(const uint8_t *buf,size_t at,size_t end,unsigned *code,size_t *body,size_t *len,size_t *next) {
+    if (at+2>end) return 0;
+    unsigned v=buf[at] | buf[at+1]<<8;
+    *code=v>>6; *len=v&0x3f; *body=at+2;
+    if (*len==0x3f) {
+        if (at+6>end) return 0;
+        *len=buf[at+2] | buf[at+3]<<8 | buf[at+4]<<16 | (size_t)buf[at+5]<<24;
+        *body=at+6;
+    }
+    *next=*body+*len;
+    return *next<=end;
+}
+/* The depth field of a placing or removing tag in a sprite, or NULL. */
+static uint8_t *swf_depth(uint8_t *buf,unsigned code,size_t body,size_t len) {
+    if ((code==26 || code==28) && len>=(code==26 ? 3u : 2u)) return buf+body+(code==26 ? 1 : 0);
+    if (code==70 && len>=4) return buf+body+2;
+    if (code==5 && len>=4) return buf+body+2;
+    return NULL;
+}
+/* PlaceObject2/3's instance name ("Item_3_0"), or NULL. */
+static const char *swf_place_name(const uint8_t *t,unsigned code,size_t len) {
+    size_t p=code==70 ? 2 : 1;
+    unsigned flags=t[0], flags2=code==70 ? t[1] : 0;
+    p+=2;                                        /* depth */
+    if (code==70 && (flags2&0x08)) { while (p<len && t[p]) ++p; ++p; } /* class name */
+    if (flags&0x02) p+=2;                        /* character id */
+    if (!(flags&0x20) || p>=len) return NULL;
+    Bits b={t,p*8};
+    if (flags&0x04) {                            /* matrix */
+        if (bits_read(&b,1)) { int n=bits_read(&b,5); bits_read(&b,n); bits_read(&b,n); }
+        if (bits_read(&b,1)) { int n=bits_read(&b,5); bits_read(&b,n); bits_read(&b,n); }
+        int n=bits_read(&b,5); bits_read(&b,n); bits_read(&b,n);
+        p=(b.bit+7)/8;
+    }
+    if (flags&0x08) {                            /* color transform with alpha */
+        b.bit=p*8;
+        int add=bits_read(&b,1), mult=bits_read(&b,1), n=bits_read(&b,4);
+        if (mult) for (int i=0;i<4;++i) bits_read(&b,n);
+        if (add) for (int i=0;i<4;++i) bits_read(&b,n);
+        p=(b.bit+7)/8;
+    }
+    if (flags&0x10) p+=2;                        /* ratio */
+    if (p>=len || !memchr(t+p,0,len-p)) return NULL;
+    return (const char *)t+p;
+}
+/* Reverses the item rows' depths of the ControllSetting layout in `buf` (an uncompressed GFX). */
+static int fix_option_layout(uint8_t *buf,size_t size) {
+    if (size<16 || memcmp(buf,"GFX",3)) return 0;
+    const size_t rect=(5+4*(buf[8]>>3)+7)/8, first=8+rect+4;
+    static const char wanted[]="OptionSetting_fla._Option_ItemList_71";
+    unsigned code; size_t body,len,next;
+    long sprite=-1;
+    for (size_t at=first; swf_tag(buf,at,size,&code,&body,&len,&next) && code; at=next) {
+        if (code!=76 || len<2) continue;          /* SymbolClass: ids and class names */
+        size_t p=body+2;
+        for (unsigned i=0,n=buf[body] | buf[body+1]<<8; i<n && p+2<next; ++i) {
+            unsigned id=buf[p] | buf[p+1]<<8;
+            const char *name=(const char *)buf+p+2;
+            if (!memchr(name,0,next-p-2)) return 0;
+            if (!strcmp(name,wanted)) sprite=id;
+            p+=2+strlen(name)+1;
+        }
+    }
+    if (sprite<0) return 0;
+    for (size_t at=first; swf_tag(buf,at,size,&code,&body,&len,&next) && code; at=next) {
+        if (code!=39 || len<4 || (buf[body] | buf[body+1]<<8)!=sprite) continue;
+        /* The items' depths as placed (frame 0), Item_0_0 .. Item_6_0. */
+        unsigned depth[7]={0};
+        size_t inner,ilen,inext;
+        unsigned c;
+        for (size_t t=body+4; swf_tag(buf,t,next,&c,&inner,&ilen,&inext) && c && c!=1; t=inext) {
+            if (c!=26 && c!=70) continue;
+            const char *name=swf_place_name(buf+inner,c,ilen);
+            const uint8_t *d=swf_depth(buf,c,inner,ilen);
+            if (name && d && !strncmp(name,"Item_",5) && name[5]>='0' && name[5]<='6' && !strcmp(name+6,"_0"))
+                depth[name[5]-'0']=d[0] | d[1]<<8;
+        }
+        for (int i=0;i<7;++i) if (!depth[i] || (i && depth[i]<=depth[i-1])) return 0;
+        for (size_t t=body+4; swf_tag(buf,t,next,&c,&inner,&ilen,&inext) && c; t=inext) {
+            uint8_t *d=swf_depth(buf,c,inner,ilen);
+            if (!d) continue;
+            const unsigned v=d[0] | d[1]<<8;
+            for (int i=0;i<7;++i) {
+                if (v==depth[i]) { d[0]=depth[6-i]&0xff; d[1]=depth[6-i]>>8; break; }
+            }
+        }
+        return 1;
+    }
+    return 0;
+}
+/* The host file for `guest`: a fixed copy (a memfd) for the option layouts, else `host`. */
+static int menu_layout_file(const char *guest,int host) {
+    static const char suffix[]="/menu/optionsetting.gfx";
+    const char *env=getenv("BB_GAME_MENU");
+    const size_t n=strlen(guest), k=sizeof(suffix)-1;
+    if ((env && env[0]=='0') || n<k || strcasecmp(guest+n-k,suffix)) return host;
+    struct stat s;
+    if (fstat(host,&s) || s.st_size<=0 || s.st_size>(16<<20)) return host;
+    uint8_t *buf=malloc((size_t)s.st_size);
+    if (!buf) return host;
+    if (pread(host,buf,(size_t)s.st_size,0)!=s.st_size || !fix_option_layout(buf,(size_t)s.st_size)) {
+        free(buf); return host;
+    }
+    int fixed=memfd_create("optionsetting.gfx",MFD_CLOEXEC);
+    if (fixed<0 || write(fixed,buf,(size_t)s.st_size)!=s.st_size || lseek(fixed,0,SEEK_SET)) {
+        if (fixed>=0) close(fixed);
+        free(buf); return host;
+    }
+    free(buf);
+    close(host);
+    static int told;
+    if (!__atomic_exchange_n(&told,1,__ATOMIC_RELAXED))
+        printf("Runtime: %s: the settings rows stack downwards (pop-up lists cover the rows below)\n",guest);
+    return fixed;
+}
 /* All operations return >=0 or -(host errno); wrappers adapt the convention. */
+/* The host file a guest path opens (mods and case included), for the GPU side reading the game's
+ * own files (gpu/: button prompt icons). 0 or a host errno. */
+int runtime_file_host_path(const char *guest,char *out,size_t size) {
+    const int e=translate(guest,out,size);
+    if (e) return e;
+    if (access(out,F_OK)!=0 && !fix_case(out)) return ENOENT;
+    return 0;
+}
 static int64_t do_open(const char *guest,int flags,int mode) {
     if (game_path(guest) && (flags & (3|0x8|0x200|0x400|0x800))) return -EROFS;
     char path[1024];
@@ -324,6 +461,7 @@ static int64_t do_open(const char *guest,int flags,int mode) {
             snprintf(path,sizeof(path),"%s",current); // the directory listing below uses it
         }
     }
+    if (host>=0 && !(flags&3) && game_path(guest)) host=menu_layout_file(guest,host);
     if (save_trace() && save_path(guest))
         printf("Save trace: open(%s, flags 0x%x) -> host %d%s%s\n",guest,flags,host,temp ? ", copy " : "",temp ? temp : "");
     if (host<0) {
@@ -635,8 +773,3 @@ void runtime_file_report(void) {
     printf("Runtime: files opened=%zu, reads=%zu (%llu bytes), writes=%zu, not found=%zu\n",
            opens,reads,(unsigned long long)bytes_read,writes,missing);
 }
-#else
-uintptr_t runtime_file_resolve(const char *name) { (void)name; return 0; }
-void runtime_file_report(void) {}
-void runtime_file_configure(const char *a,const char *u) { (void)a; (void)u; }
-#endif

@@ -563,3 +563,31 @@ message NotifyRoomMessage {
     uint32 src_platform = 9;
     bytes msg = 10;
 }
+
+// bbport (2026-10-15), as shadPS4's protocol since 2026-10-12: the client reports its version
+// after login (command 13); the server may then refuse it (notification 19) or a service
+// (notification 18).
+message SetClientVersionRequest {
+    string version = 1;
+}
+
+// Notification 18: the server refused a service to this player.
+//   service: 1 = Matching2 (matchmaking)
+//   reason:  1 = server full (in_use / limit are set), 2 = account not allowed,
+//            3 = service disabled on this server
+message NotifyServiceUnavailable {
+    uint32 service = 1;
+    uint32 reason  = 2;
+    uint32 in_use  = 3;
+    uint32 limit   = 4;
+}
+
+// Notification 19: the server is signing this client out, then disconnects.
+//   reason:  1 = client version not accepted
+//   message: text for the player, from the server's rule
+//   version: the version the server checked ("" = none reported)
+message NotifyClientRejected {
+    uint32 reason  = 1;
+    string message = 2;
+    string version = 3;
+}

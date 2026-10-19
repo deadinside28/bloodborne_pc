@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_settings.h"
+#include <cmath>
 
 #include <algorithm>
 #include <cstdio>
@@ -30,6 +31,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         if (value == "en") v.menu_language = MenuLanguage::English;
         else if (value == "ru") v.menu_language = MenuLanguage::Russian;
         else std::printf("Settings: unknown menu_language '%s' (expected en or ru)\n", value.c_str());
+        v.menu_language_chosen = value == "en" || value == "ru";
     } else if (key == "upscaler") {
         for (int u = 0; u < UpscalerCount; ++u) {
             if (value == UpscalerName(u)) {
@@ -71,13 +73,20 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fsr4_invert_jitter = i != 0;
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
+    } else if (key == "frame_generation") {
+        v.frame_generation = i != 0;
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
-        for (int r = 0; r < OutputCount; ++r) {
-            if (value == std::to_string(OutputWidths[r]) + "x" + std::to_string(OutputHeights[r])) {
-                v.output_res = r;
-            }
+        int w = 0, h = 0;
+        if (std::sscanf(value.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 200 && w <= 16384 &&
+            h <= 16384) {
+            v.output_res = PackSize({w, h});
+        }
+    } else if (key == "aspect_ratio") {
+        v.aspect = AspectAuto;
+        for (int a = 0; a < AspectCount; ++a) {
+            if (value == AspectKey(a)) v.aspect = a;
         }
     } else {
         for (int e = 0; e < EffectCount; ++e) {
@@ -89,6 +98,115 @@ void Set(Values& v, const std::string& key, const std::string& value) {
 }
 
 } // namespace
+
+namespace {
+struct Group {
+    const char* key;
+    double ratio;
+    std::array<OutputSize, 10> sizes;
+    int count;
+};
+constexpr Group Groups[AspectCount] = {
+    {"auto", 0.0, {}, 0},
+    {"4:3", 4.0 / 3.0,
+     {{{640, 480}, {800, 600}, {1024, 768}, {1280, 960}, {1440, 1080}, {1600, 1200}, {2048, 1536}, {2880, 2160}}}, 8},
+    {"16:10", 16.0 / 10.0,
+     {{{640, 400}, {960, 600}, {1280, 800}, {1440, 900}, {1680, 1050}, {1920, 1200}, {2560, 1600}, {3840, 2400}}}, 8},
+    {"16:9", 16.0 / 9.0,
+     {{{640, 360}, {854, 480}, {960, 540}, {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3200, 1800},
+       {3840, 2160}}}, 9},
+    // 2560x1080 and 5120x2160 are 64:27, 3440x1440 43:18, 3840x1600 12:5: each output's own
+    // ratio is the camera's.
+    {"21:9", 64.0 / 27.0,
+     {{{860, 360}, {1280, 540}, {1720, 720}, {2560, 1080}, {3440, 1440}, {3840, 1600}, {5120, 2160}}}, 7},
+    {"32:9", 32.0 / 9.0, {{{1280, 360}, {1920, 540}, {2560, 720}, {3840, 1080}, {5120, 1440}, {7680, 2160}}}, 6},
+};
+std::atomic<std::uint32_t> monitor{0}; // PackSize, 0 until known
+} // namespace
+
+int OutputList::IndexOf(OutputSize size) const {
+    for (int i = 0; i < count; ++i) {
+        if (sizes[i] == size) return i;
+    }
+    return -1;
+}
+
+const char* AspectKey(int aspect) {
+    return Groups[std::clamp(aspect, 0, AspectCount - 1)].key;
+}
+
+OutputSize Monitor() {
+    return UnpackSize(monitor.load(std::memory_order_relaxed));
+}
+
+int ResolvedAspect(int aspect) {
+    if (aspect > AspectAuto && aspect < AspectCount) return aspect;
+    const OutputSize m = Monitor();
+    if (m.width <= 0 || m.height <= 0) return Aspect16x9;
+    const double ratio = double(m.width) / m.height;
+    int best = Aspect16x9;
+    for (int a = AspectAuto + 1; a < AspectCount; ++a) {
+        if (std::abs(std::log(ratio / Groups[a].ratio)) < std::abs(std::log(ratio / Groups[best].ratio))) {
+            best = a;
+        }
+    }
+    return best;
+}
+
+OutputList Outputs(int aspect) {
+    const Group& g = Groups[ResolvedAspect(aspect)];
+    OutputList list;
+    for (int i = 0; i < g.count; ++i) list.sizes[list.count++] = g.sizes[i];
+    // Auto: the monitor's own size too (another ratio than its group's sizes, 1366x768, ...).
+    const OutputSize m = Monitor();
+    if (aspect == AspectAuto && m.width >= 640 && m.height >= 360 && m.width <= 7680 &&
+        m.height <= 4320 && list.IndexOf(m) < 0) {
+        int at = 0;
+        while (at < list.count && (list.sizes[at].height < m.height ||
+                                   (list.sizes[at].height == m.height && list.sizes[at].width < m.width))) {
+            ++at;
+        }
+        for (int i = list.count; i > at; --i) list.sizes[i] = list.sizes[i - 1];
+        list.sizes[at] = m;
+        ++list.count;
+    }
+    return list;
+}
+
+OutputSize NearestOutput(int aspect, OutputSize size) {
+    const OutputList list = Outputs(aspect);
+    if (list.IndexOf(size) >= 0) return size;
+    OutputSize best = list.sizes[0];
+    for (const OutputSize& s : list) {
+        if (std::abs(s.height - size.height) < std::abs(best.height - size.height)) best = s;
+    }
+    return best;
+}
+
+OutputSize CurrentOutput() {
+    const auto& v = Get();
+    return NearestOutput(v.aspect.load(std::memory_order_relaxed),
+                         UnpackSize(v.output_res.load(std::memory_order_relaxed)));
+}
+
+std::string SizeText(OutputSize size) {
+    return std::to_string(size.width) + "x" + std::to_string(size.height);
+}
+
+void SetMonitor(int width, int height) {
+    const OutputSize m{width, height};
+    if (width <= 0 || height <= 0 || m == Monitor()) return;
+    monitor.store(PackSize(m), std::memory_order_relaxed);
+    auto& v = Get();
+    // Auto follows the monitor: its output is kept (and saved: run.sh's startup patch reads it).
+    const OutputSize fitted = CurrentOutput();
+    if (v.aspect == AspectAuto && PackSize(fitted) != v.output_res.load()) {
+        std::printf("Output: %s for the monitor (%dx%d, aspect ratio auto)\n", SizeText(fitted).c_str(),
+                    width, height);
+        v.output_res = PackSize(fitted);
+        Save();
+    }
+}
 
 Values& Get() {
     static Values values;
@@ -146,7 +264,11 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
+        {"BB_FRAME_GEN", "frame_generation"},
     };
+    // Frame generation is hidden in the menu until its artifacts are fixed: only BB_FRAME_GEN turns
+    // it on, a saved setting does not.
+    v.frame_generation = false;
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
             Set(v, key, value);
@@ -159,7 +281,11 @@ void Load() {
         v.startup_effects[e] = v.effects[e];
     }
     v.startup_model_lod = v.model_lod;
-    v.startup_output_res = v.output_res;
+    if (FixedRenderSession()) {
+        int w = 0, h = 0;
+        const char* output = std::getenv("BB_OUTPUT_RES");
+        if (output && std::sscanf(output, "%dx%d", &w, &h) == 2) v.startup_output = {w, h};
+    }
     v.startup_live_resolution = v.live_resolution;
 }
 
@@ -203,11 +329,9 @@ int RenderPreset() {
 
 bool ResolutionNeedsRestart() {
     const auto& v = Get();
-    // The 16:10 camera/UI aspect is an executable patch even in an otherwise live session.
-    if (v.output_res != v.startup_output_res && Is16x10Output(v.output_res)) return true;
     // TAA needs the live path (native guest targets): run.sh selects it on restart.
     return FixedRenderSession() &&
-        (v.preset != v.startup_preset || v.output_res != v.startup_output_res ||
+        (v.preset != v.startup_preset || CurrentOutput() != v.startup_output ||
          (v.upscaler == UpscalerOff) != (v.startup_upscaler == UpscalerOff) ||
          (v.upscaler == UpscalerTaa) != (v.startup_upscaler == UpscalerTaa));
 }
@@ -224,7 +348,9 @@ void Save() {
         return std::string(text);
     };
     const auto flag = [](bool value) { return std::string(value ? "1" : "0"); };
-    put("menu_language", v.menu_language == MenuLanguage::Russian ? "ru" : "en");
+    if (v.menu_language_chosen) {
+        put("menu_language", v.menu_language == MenuLanguage::Russian ? "ru" : "en");
+    }
     put("upscaler", UpscalerName(v.upscaler));
     put("preset", std::to_string(v.preset.load()));
     put("sharpen", flag(v.sharpen));
@@ -244,10 +370,11 @@ void Save() {
         put(Effects[e].key, flag(v.effects[e]));
     }
     put("model_lod", std::to_string(v.model_lod.load()));
-    put("output_res", std::to_string(OutputWidths[v.output_res]) + "x" +
-                          std::to_string(OutputHeights[v.output_res]));
+    put("aspect_ratio", AspectKey(v.aspect));
+    put("output_res", SizeText(CurrentOutput()));
     // Read by run.sh at start.
     put("live_resolution", v.live_resolution < 0 ? "auto" : flag(v.live_resolution != 0));
+    put("frame_generation", flag(v.frame_generation));
     if (v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));
     }

@@ -1,0 +1,196 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport textures: a guest image on the host: its Vulkan image (one per sample count it has been
+// used with), its views, its layout and access state for barriers, and what the cache knows of
+// it (dirty flags, the pages watched, when it was used).
+#pragma once
+
+#include <deque>
+#include <optional>
+#include <vector>
+
+#include <boost/container/small_vector.hpp>
+#include <boost/container/static_vector.hpp>
+
+#include "common/enum.h"
+#include "common/incremental_id.h"
+#include "common/types.h"
+#include "textures/image_info.h"
+#include "textures/image_view.h"
+#include "vulkan/vk_common.h"
+
+namespace Vulkan {
+class Instance;
+class Runtime;
+} // namespace Vulkan
+
+VK_DEFINE_HANDLE(VmaAllocation)
+VK_DEFINE_HANDLE(VmaAllocator)
+
+namespace VideoCore {
+
+enum ImageFlagBits : u32 {
+    Empty = 0,
+    MaybeCpuDirty = 1 << 0, ///< a page under it was written; its hash tells whether it was
+    CpuDirty = 1 << 1,      ///< the guest wrote it
+    GpuDirty = 1 << 2,      ///< the GPU wrote its memory as a buffer (reupload from there)
+    Dirty = MaybeCpuDirty | CpuDirty | GpuDirty,
+    GpuModified = 1 << 3, ///< the GPU wrote it as an image
+    Registered = 1 << 6,  ///< in the cache's page table
+    Picked = 1 << 7,      ///< seen in the current region walk
+};
+DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
+
+/// A Vulkan image with its memory (VMA).
+class HostImage {
+public:
+    HostImage() = default;
+    HostImage(vk::Device device_, VmaAllocator allocator_) : device{device_}, allocator{allocator_} {}
+    ~HostImage();
+    HostImage(const HostImage&) = delete;
+    HostImage& operator=(const HostImage&) = delete;
+    HostImage(HostImage&& other) noexcept;
+    HostImage& operator=(HostImage&& other) noexcept;
+
+    void Create(const vk::ImageCreateInfo& create_info);
+    void Destroy();
+
+    operator vk::Image() const {
+        return image;
+    }
+    explicit operator bool() const {
+        return bool(image);
+    }
+
+    vk::Device device{};
+    VmaAllocator allocator{};
+    VmaAllocation allocation{};
+    vk::Image image{};
+    vk::ImageCreateInfo image_ci{};
+    vk::DeviceSize size_bytes{};
+};
+
+struct Image {
+    Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime,
+          Common::SlotVector<ImageView>& slot_image_views, const ImageInfo& info);
+    ~Image();
+    Image(const Image&) = delete;
+    Image& operator=(const Image&) = delete;
+    Image(Image&&) = default;
+    Image& operator=(Image&&) = default;
+
+    bool Overlaps(VAddr address, size_t size) const noexcept {
+        return info.guest_address < address + size && address < info.guest_address + info.guest_size;
+    }
+    vk::Image GetImage() const {
+        return backing->image.image;
+    }
+    vk::DeviceSize GetHostImageSize() const {
+        return backing->image.size_bytes;
+    }
+    bool IsTracked() const {
+        return track_addr != 0 && track_addr_end != 0;
+    }
+    /// Written by the GPU and not changed since by anything else.
+    bool SafeToDownload() const {
+        return True(flags & ImageFlagBits::GpuModified) && False(flags & ImageFlagBits::Dirty);
+    }
+    void AssociateDepth(ImageId id, u64 uid) {
+        depth_id = id;
+        depth_uid = uid;
+    }
+    void DisassociateDepth() {
+        depth_id = {};
+        depth_uid = {};
+    }
+
+    /// The view with `view_info` (created on first use). `ensure_guest_samples`: switches to the
+    /// backing of the guest's sample count first.
+    ImageView& FindView(const ImageViewInfo& view_info, bool ensure_guest_samples = true);
+
+    using Barriers = boost::container::small_vector<vk::ImageMemoryBarrier2, 32>;
+    /// The barriers that bring `range` (else the whole image) to `dst_layout`, `dst_mask` at
+    /// `dst_stage`; the state is updated as if they ran.
+    void GetBarriers(Barriers& out, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
+                     vk::PipelineStageFlags2 dst_stage,
+                     std::optional<SubresourceRange> range = {});
+
+    // Read by every binding of the image: together, ahead of the large ImageInfo.
+    ImageFlagBits flags = ImageFlagBits::Dirty;
+    struct Binding {
+        u32 is_bound : 1;
+        u32 is_target : 1;
+        u32 needs_rebind : 1;
+        u32 force_general : 1;
+    } binding{};
+    struct {
+        u32 texture : 1;
+        u32 storage : 1;
+        u32 render_target : 1;
+        u32 depth_target : 1;
+        u32 vo_surface : 1;
+    } usage{};
+    bool scene_proxy = false; ///< SceneTargets holds a reduced-size proxy of it
+    u8 prompt_icon = 0;       ///< one of the game's key guide icons (BbPrompts::IconOf + 1)
+    u8 prompt_atlas = 0;      ///< one of the HUD's icon atlases (BbPrompts::AtlasOf + 1)
+    u32 prompt_upload = 0;    ///< the upload that gave it its bytes (ButtonPrompts::Atlas)
+    /// Its memory may hold one of the key guide icons (32x32, one level, block-compressed): the
+    /// bytes are checked at each bind until they are one (a copy the GPU made is never uploaded).
+    bool MaybePromptIcon() const {
+        return prompt_icon == 0 && info.size.width == 32 && info.size.height == 32 &&
+               info.resources.levels == 1 && info.resources.layers == 1 && info.props.is_block &&
+               info.guest_size >= 1024;
+    }
+    VAddr track_addr = 0;     ///< the pages watched: [track_addr, track_addr_end)
+    VAddr track_addr_end = 0;
+    VAddr guest_begin = 0; ///< info.guest_address
+    VAddr guest_end = 0;   ///< its end
+    struct BackingImage;
+    BackingImage* backing{};
+    mutable u64 lru_touched_tick = ~0ull; ///< the GC tick of the last LRU touch
+    u64 tick_accessed_last{};
+    u64 gpu_write_tick{}; ///< the scheduler tick of the last binding the GPU may write
+    ImageId depth_id{};
+    u64 depth_uid{};
+    u64 image_uid{};
+
+    ImageInfo info;
+    Vulkan::Runtime* runtime;
+    Common::SlotVector<ImageView>* slot_image_views;
+    vk::ImageAspectFlags aspect_mask = vk::ImageAspectFlagBits::eColor;
+    vk::SampleCountFlags supported_samples = vk::SampleCountFlagBits::e1;
+    vk::ImageUsageFlags usage_flags;
+    vk::FormatFeatureFlags2 format_features;
+
+    struct State {
+        vk::PipelineStageFlags2 pl_stage = vk::PipelineStageFlagBits2::eAllCommands;
+        vk::AccessFlags2 access_mask = vk::AccessFlagBits2::eNone;
+        vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+
+        bool operator==(const State&) const = default;
+    };
+    struct BackingImage {
+        HostImage image;
+        State state;
+        /// Per level and layer once parts of it were transitioned on their own.
+        std::vector<State> subresource_states;
+        /// The range the last per-part transition set to `settled_state` (every part in it is in
+        /// that state; nothing else changes the parts): the same read-only transition again is
+        /// nothing to do without walking them (a cube array of 2048 faces bound for every draw).
+        SubresourceRange settled_range{};
+        State settled_state{};
+        bool settled = false;
+        boost::container::small_vector<ImageViewInfo, 4> image_view_infos;
+        boost::container::small_vector<ImageViewId, 4> image_view_ids;
+        u32 last_view = 0; ///< index of the view FindView returned last
+        u32 num_samples;
+    };
+    std::deque<BackingImage> backing_images;
+    boost::container::static_vector<u64, 16> mip_hashes{};
+    u64 lru_id{};
+    u64 hash{};
+
+private:
+    static Common::IncrementalIdProvider<u64> next_uid;
+};
+
+} // namespace VideoCore

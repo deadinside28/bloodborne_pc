@@ -4,15 +4,22 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
+
+#include <nlohmann/json.hpp>
 
 #include "common/logging/log.h"
+#include "common/path_util.h"
 #include "core/libraries/network/net.h"
 #include "core/libraries/network/sockets.h"
 #include "core/libraries/np/np_error.h"
@@ -95,7 +102,148 @@ bool ShouldConnectToPeer(const RoomCache& room, OrbisNpMatching2RoomMemberId sel
     return true;
 }
 
+// BBSC: static peer map - "direct connection" mode.
+// When both players sit on a fixed virtual LAN (Tailscale / Radmin / ZeroTier) their addresses
+// never change, so asking the matchmaking server to resolve them is pure overhead and one more
+// thing that can be down. A configured entry wins over both the cached member address and the
+// server lookup, so a session comes up with no broker involved in addressing at all.
+//
+// Sources, in order (the first one to define an npid wins):
+//   SHADPS4_BBSC_PEERS   "npid=host:port,npid=host:port"
+//   bbsc_peers.json      in the user folder, path overridable with SHADPS4_BBSC_PEERS_JSON:
+//                        { "CLS_AMG": "100.101.102.103:41001" }
+// The port is that player's SHADPS4_P2P_PORT.
+struct StaticPeer {
+    u32 addr_nbo = 0;
+    u16 port_nbo = 0;
+};
+
+bool ParseStaticPeerEndpoint(std::string_view text, StaticPeer& out) {
+    const auto colon = text.rfind(':');
+    if (colon == std::string_view::npos || colon == 0 || colon + 1 >= text.size()) {
+        return false;
+    }
+    const std::string host(text.substr(0, colon));
+    u32 port_host = 0;
+    for (const char c : text.substr(colon + 1)) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        port_host = port_host * 10 + static_cast<u32>(c - '0');
+        if (port_host > 65535) {
+            return false;
+        }
+    }
+    if (port_host == 0) {
+        return false;
+    }
+    u32 addr_nbo = 0;
+    if (Libraries::Net::sceNetInetPton(Net::ORBIS_NET_AF_INET, host.c_str(), &addr_nbo) <= 0) {
+        return false;
+    }
+    out.addr_nbo = addr_nbo;
+    out.port_nbo = Libraries::Net::sceNetHtons(static_cast<u16>(port_host));
+    return true;
+}
+
+std::unordered_map<std::string, StaticPeer> LoadStaticPeerMap() {
+    std::unordered_map<std::string, StaticPeer> peers;
+    const auto add = [&peers](std::string npid, std::string_view endpoint) {
+        StaticPeer parsed;
+        if (npid.empty() || !ParseStaticPeerEndpoint(endpoint, parsed)) {
+            LOG_ERROR(Lib_NpMatching2, "BBSC static peer: ignoring bad entry '{}' -> '{}'", npid,
+                      endpoint);
+            return;
+        }
+        peers.emplace(std::move(npid), parsed);
+    };
+
+    if (const char* env = std::getenv("SHADPS4_BBSC_PEERS"); env != nullptr && env[0] != '\0') {
+        std::string_view rest{env};
+        while (!rest.empty()) {
+            const auto comma = rest.find(',');
+            const std::string_view item = rest.substr(0, comma);
+            rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+            if (const auto eq = item.find('='); eq != std::string_view::npos) {
+                add(std::string(item.substr(0, eq)), item.substr(eq + 1));
+            }
+        }
+    }
+
+    std::filesystem::path path;
+    if (const char* env = std::getenv("SHADPS4_BBSC_PEERS_JSON"); env != nullptr && env[0] != '\0') {
+        path = env;
+    } else {
+        path = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "bbsc_peers.json";
+    }
+    if (std::ifstream f(path); f.is_open()) {
+        try {
+            const nlohmann::json doc = nlohmann::json::parse(f, nullptr, true, true);
+            for (const auto& [npid, value] : doc.items()) {
+                if (value.is_string()) {
+                    add(npid, value.get<std::string>());
+                }
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR(Lib_NpMatching2, "BBSC static peer: cannot parse {}: {}", path.string(),
+                      e.what());
+        }
+    }
+
+    if (!peers.empty()) {
+        LOG_INFO(Lib_NpMatching2, "BBSC static peer map: {} entries loaded", peers.size());
+    }
+    return peers;
+}
+
+const std::unordered_map<std::string, StaticPeer>& GetStaticPeerMap() {
+    static const std::unordered_map<std::string, StaticPeer> peers = LoadStaticPeerMap();
+    return peers;
+}
+
+bool LookupStaticPeer(const std::string& npid, StaticPeer& out) {
+    const auto& peers = GetStaticPeerMap();
+    if (peers.empty() || npid.empty()) {
+        return false;
+    }
+    const auto it = peers.find(npid);
+    if (it == peers.end()) {
+        return false;
+    }
+    out = it->second;
+    return true;
+}
+
+bool ResolvePeerEndpointUnremembered(const MemberCache& member, PeerInfo& peer);
+
+// BBSC relay fallback: the transport learns which online id sits behind each endpoint.
 bool ResolvePeerEndpoint(const MemberCache& member, PeerInfo& peer) {
+    const bool resolved = ResolvePeerEndpointUnremembered(member, peer);
+    if (resolved) {
+        Net::P2PRelayRememberPeer(std::string(member.np_id.handle.data), peer.addr, peer.port);
+    }
+    return resolved;
+}
+
+bool ResolvePeerEndpointUnremembered(const MemberCache& member, PeerInfo& peer) {
+    const std::string online_id(member.np_id.handle.data);
+
+    // A configured fixed endpoint wins over the cached address and the server lookup both - that
+    // is the whole point of direct mode, and it keeps the peer pinned if the broker disagrees.
+    if (StaticPeer fixed; LookupStaticPeer(online_id, fixed)) {
+        const bool changed = peer.addr != fixed.addr_nbo || peer.port != fixed.port_nbo;
+        peer.addr = fixed.addr_nbo;
+        peer.port = fixed.port_nbo;
+        if (peer.online_id.data[0] == 0) {
+            peer.online_id = member.np_id.handle;
+        }
+        if (changed) {
+            LOG_INFO(Lib_NpMatching2, "BBSC direct peer '{}' -> {:#x}:{} (no broker lookup)",
+                     online_id, peer.addr, Libraries::Net::sceNetNtohs(peer.port));
+        }
+        return true;
+    }
+
     if (peer.addr != 0 && peer.port != 0) {
         return true;
     }
@@ -108,7 +256,6 @@ bool ResolvePeerEndpoint(const MemberCache& member, PeerInfo& peer) {
         return true;
     }
 
-    const std::string online_id(member.np_id.handle.data);
     u32 resolved_addr = 0;
     u16 resolved_port = 0;
     if (!online_id.empty() && RequestSignalingInfos(online_id, &resolved_addr, &resolved_port)) {

@@ -1,0 +1,3 @@
+// bbport Windows: the executable manifest (bb-probe.manifest).
+#include <winuser.h>
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "bb-probe.manifest"

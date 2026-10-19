@@ -8,11 +8,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include "shader_recompiler/backend/spirv/emit_spirv.h"
-#include "shader_recompiler/ir/ir_emitter.h"
-#include "video_core/renderer_vulkan/vk_gpu_labels.h"
-#include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "shader/backend/spirv/emit_spirv.h"
+#include "shader/ir/ir_emitter.h"
+#include "render/vk_gpu_labels.h"
+#include "vulkan/instance.h"
+#include "render/scheduler.h"
 #include <vk_mem_alloc.h>
 
 int main(int argc, char** argv) {
@@ -28,6 +28,7 @@ int main(int argc, char** argv) {
     const auto device = instance.GetDevice();
     Scheduler scheduler(instance);
     constexpr u32 Page = 65536, Pages = 3, Bytes = Page * Pages;
+    constexpr u64 CopyShaderHash = 0xfefebf9f; // Bloodborne's buffer copy shader (games/)
     struct Allocation { VkBuffer buffer{}; VmaAllocation memory{}; void* mapped{}; u64 bda{}; };
     std::array<Allocation, 6> allocations{};
     for (auto& a : allocations) {
@@ -68,13 +69,13 @@ int main(int argc, char** argv) {
 
     Info info{};
     info.hw_stage=HwStage::Compute; info.sw_stage=SwStage::Compute;
-    info.pgm_hash=BufferCopyShaderHash; info.uses_paged_buffers=true;
+    info.pgm_hash=CopyShaderHash; info.uses_paged_buffers=true;
     for (u32 i=0;i<3;++i) {
         BufferResource buffer{};
         buffer.buffer_type=i==2 ? BufferType::BdaPagetable : BufferType::Guest;
         buffer.used_types=i==2 ? IR::Type::U64 : IR::Type::U32;
         buffer.is_written=i==1;
-        const auto sharp=AmdGpu::Buffer::Placeholder(64*1024*1024);
+        const auto sharp=::Gcn::Buffer::Placeholder(64*1024*1024);
         std::memcpy(buffer.sharp_fetch.immediates.data(),&sharp,sizeof(sharp));
         info.buffers.push_back(buffer);
     }
@@ -94,6 +95,7 @@ int main(int argc, char** argv) {
     runtime.hw.cs.workgroup_size={1,1,1};
     Profile profile{}; profile.supported_spirv=0x00010600; profile.support_int64=true;
     profile.paged_buffers=true; profile.sparse_page_shift=16;
+    profile.buffer_copy_shader_hash=CopyShaderHash;
     Backend::Bindings bindings{};
     const auto code=Backend::SPIRV::EmitSPIRV(profile,runtime,program,bindings);
     if (argc>1) {

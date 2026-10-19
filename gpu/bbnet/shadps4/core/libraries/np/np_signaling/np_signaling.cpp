@@ -289,12 +289,20 @@ s32 PS4_SYSV_ABI sceNpSignalingActivateConnection(OrbisNpSignalingContextId ctxI
         }
     }
     if (!peerNpId || !outConnId) {
+        LOG_WARNING(Lib_NpSignaling, "ActivateConnection refused: null peer or out pointer");
         return ORBIS_NP_SIGNALING_ERROR_INVALID_ARGUMENT;
     }
 
     OrbisNpId peer_npid{};
     OrbisNpOnlineId peer_online_id{};
     if (NormalizeNpId(peerNpId, &peer_npid, &peer_online_id) != ORBIS_OK) {
+        // 2026-10-06 (4-player Nucleus test): guests called this every 6 s with no "Status:" line
+        // after it - one of these early exits fired and nothing said which. Each one says so now.
+        const auto* raw = static_cast<const u8*>(peerNpId);
+        LOG_WARNING(Lib_NpSignaling,
+                    "ActivateConnection refused: peer NpId is not a valid online id (first bytes "
+                    "{:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x})",
+                    raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
         return ORBIS_NP_SIGNALING_ERROR_INVALID_ARGUMENT;
     }
     const std::string peer_online_id_str = OnlineIdToString(peer_online_id);
@@ -310,12 +318,18 @@ s32 PS4_SYSV_ABI sceNpSignalingActivateConnection(OrbisNpSignalingContextId ctxI
         }
         const auto ctx_it = g_contexts.find(ctxId);
         if (ctx_it == g_contexts.end() || !ctx_it->second.active) {
+            LOG_WARNING(Lib_NpSignaling, "ActivateConnection refused: ctx {} not found or inactive "
+                        "(peer '{}')", ctxId, peer_online_id_str);
             return ORBIS_NP_SIGNALING_ERROR_CTX_NOT_FOUND;
         }
         if (std::memcmp(&ctx_it->second.owner_npid, &peer_npid, sizeof(peer_npid)) == 0) {
+            LOG_WARNING(Lib_NpSignaling, "ActivateConnection refused: peer '{}' is ourselves",
+                        peer_online_id_str);
             return ORBIS_NP_SIGNALING_ERROR_OWN_NP_ID;
         }
         if (!ConsumeActivationBudgetGatedLocked(ctx_it->second)) {
+            LOG_WARNING(Lib_NpSignaling, "ActivateConnection refused: rate limit (peer '{}', budget "
+                        "{} us)", peer_online_id_str, ctx_it->second.activate_budget_us);
             return ORBIS_NP_SIGNALING_ERROR_EXCEED_RATE_LIMIT;
         }
 
@@ -329,11 +343,20 @@ s32 PS4_SYSV_ABI sceNpSignalingActivateConnection(OrbisNpSignalingContextId ctxI
                 cid = existing_it->second;
                 ConnectionInfo& ci = conn_it->second;
                 const bool was_locally_activated = ci.locally_activated;
+                const bool was_lingering = ci.deactivate_lingering;
                 ci.locally_activated = true;
                 if (ci.state == ConnState::Established) {
                     ClearLingerAndTimeoutLocked(cid);
                     reused_established = true;
                     start_handshake = false;
+                    if (was_lingering) {
+                        // BBSC rejoin fix (2026-10-12): deactivated before (the peer left with
+                        // the Silencing Blank) - before, this cancelled the linger timeout with
+                        // no keepalive left, so the dead connection stayed "established" forever
+                        // and the peer's next join was ignored (its Offers hit an established
+                        // connection). Check the peer first.
+                        BeginRevalidationLocked(cid);
+                    }
                 } else {
                     ClearLingerAndTimeoutLocked(cid);
                     start_handshake = true;
@@ -347,6 +370,8 @@ s32 PS4_SYSV_ABI sceNpSignalingActivateConnection(OrbisNpSignalingContextId ctxI
         if (cid == 0) {
             cid = AllocateConnectionIdLocked();
             if (cid < 0) {
+                LOG_WARNING(Lib_NpSignaling, "ActivateConnection refused: no free connection id "
+                            "(peer '{}')", peer_online_id_str);
                 return ORBIS_NP_SIGNALING_ERROR_OUT_OF_MEMORY;
             }
             ConnectionInfo ci{};
@@ -370,9 +395,13 @@ s32 PS4_SYSV_ABI sceNpSignalingActivateConnection(OrbisNpSignalingContextId ctxI
         if (queue_activation) {
             QueueActivationLocked(cid, peer_online_id_str, start_handshake);
         }
+        const auto logged = g_connections.find(cid);
+        const bool revalidating = logged != g_connections.end() && logged->second.revalidating;
         LOG_INFO(Lib_NpSignaling, "ctxId={} peer='{}' connId={} Status: {}", ctxId,
                  peer_online_id_str, cid,
                  created_new          ? "queued, async"
+                 : revalidating       ? "deactivated connection activated again - checking the "
+                                        "peer is still there (10 s)"
                  : reused_established ? "queued local activation on established connection"
                  : queue_activation   ? "queued local activation on existing connection"
                                       : "reused transient");
@@ -386,7 +415,15 @@ s32 PS4_SYSV_ABI sceNpSignalingActivateConnection(OrbisNpSignalingContextId ctxI
     }
 
     if (reused_established) {
-        EstablishConnection(cid, false);
+        bool revalidating = false;
+        {
+            SignalingMutexGuard lock;
+            const auto it = g_connections.find(cid);
+            revalidating = it != g_connections.end() && it->second.revalidating;
+        }
+        if (!revalidating) {
+            EstablishConnection(cid, false);
+        }
     }
     return ORBIS_OK;
 }

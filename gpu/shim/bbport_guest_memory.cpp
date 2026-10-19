@@ -10,7 +10,7 @@
 #include <mutex>
 #include <sys/mman.h>
 #include <unistd.h>
-#include "video_core/renderer_vulkan/vk_instance.h"
+#include "vulkan/instance.h"
 #include "bblayer_gpu_memory.h"
 
 extern "C" void runtime_memory_set_guest_chunk_allocator(int (*alloc)(uint64_t phys,
@@ -32,6 +32,13 @@ bool whole_only = false; // the driver's dma-buf maps at offset 0 only: a chunk 
 enum class Mode { DmaBuf, HostImport };
 Mode mode = Mode::DmaBuf;
 std::atomic<u64> chunk_bytes{0};
+// BB_GUEST_UNCACHED=1 (Instance::IsGuestUncached): only memory types the GPU reads past its caches.
+bool uncached = false;
+
+/// A type the guest memory may use: AMD's device-uncached types exactly when asked for.
+bool TypeAllowed(vk::MemoryPropertyFlags flags) {
+    return bool(flags & vk::MemoryPropertyFlagBits::eDeviceUncachedAMD) == uncached;
+}
 
 bool GuestInVram() {
     // bbport BB_GUEST_VRAM=1 (experiment): the game's direct memory in VRAM the CPU maps through
@@ -57,7 +64,7 @@ std::uint32_t FindType(std::uint32_t bits) {
     for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
         const auto flags = memory_properties.memoryTypes[i].propertyFlags;
         if ((bits & (1u << i)) && (flags & want) == want &&
-            !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+            !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal) && TypeAllowed(flags)) {
             return i;
         }
     }
@@ -186,8 +193,8 @@ std::uint32_t FindHostType(std::uint32_t bits) {
         for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
             const auto flags = memory_properties.memoryTypes[i].propertyFlags;
             if (!(bits & (1u << i)) || !(flags & vk::MemoryPropertyFlagBits::eHostVisible) ||
-                (flags & vk::MemoryPropertyFlagBits::eDeviceLocal) ||
-                (cached && !(flags & vk::MemoryPropertyFlagBits::eHostCached))) {
+                (flags & vk::MemoryPropertyFlagBits::eDeviceLocal) || !TypeAllowed(flags) ||
+                (cached &&!(flags & vk::MemoryPropertyFlagBits::eHostCached))) {
                 continue;
             }
             return i;
@@ -358,6 +365,16 @@ bool HostImportWorks(const Vulkan::Instance& instance, const char*& why) {
         why = "import alignment above 4 MiB";
         return false;
     }
+#ifdef _WIN32
+    // A pagefile-backed section mapped twice (as the runtime's guest memory is on Windows).
+    void* views[2] = {};
+    if (!bb_win32_shared_views(Size, &views[0], &views[1])) {
+        why = "a shared memory section";
+        return false;
+    }
+    auto* view = static_cast<std::uint32_t*>(views[0]);
+    auto* guest = static_cast<std::uint32_t*>(views[1]);
+#else
     const int fd = memfd_create("bb-guest-memory-probe", MFD_CLOEXEC);
     if (fd < 0 || ftruncate(fd, Size) != 0) {
         why = "memfd";
@@ -371,6 +388,7 @@ bool HostImportWorks(const Vulkan::Instance& instance, const char*& why) {
     auto* guest = static_cast<std::uint32_t*>(
         mmap(nullptr, Size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
     close(fd);
+#endif
     bool ok = false;
     vk::Buffer buffer, sparse;
     vk::DeviceMemory memory;
@@ -511,12 +529,14 @@ bool PcModelGpu(const Vulkan::Instance& instance) {
         constexpr std::uint32_t AmdVendor = 0x1002, NvidiaVendor = 0x10de;
         const std::uint32_t vendor = instance.GetVendorID();
         const char* any = std::getenv("BB_PC_MODEL_ANY_GPU");
-        // AMD keeps the sparse arena, every other GPU gets the layer's memory module (no sparse
-        // binding of the game's memory, see LayerMemory); BB_LAYER_MEMORY=1/0 by hand. On an
-        // RX 7800 XT the module was on par with the arena on a route in Yharnam, but in the
-        // Hunter's Dream it kept ~1 GB of the area's data out of VRAM (ranges with a few
-        // unannounced blocks stay in place without volatile blocks): 100 FPS against ~200.
-        layer_default.store(vendor == AmdVendor ? 0 : 1, std::memory_order_relaxed);
+        // The layer's memory module on every GPU, AMD's too (no sparse binding of the game's
+        // memory, see LayerMemory); BB_LAYER_MEMORY=0: the sparse arena (AMD). On an RX 7800 XT
+        // after 0.51 the module is ahead of the arena: route in Yharnam 4.30 against 4.60 ms a
+        // frame (p99 5.8-6.0 against 6.6), Hunter's Dream with the camera turning 4.8-5.0 against
+        // 5.2-5.3, Oedon Chapel 234 against 213 FPS. And it alone is right without the game's
+        // profile: with the arena a game without one (the US release before 0.51) had the
+        // allocator's bookkeeping overwritten by a readback of a stale VRAM copy (issue #119).
+        layer_default.store(1, std::memory_order_relaxed);
         if (LayerMemory()) {
             std::printf("Guest memory: the new memory model through the layer's memory module on "
                         "this GPU (vendor 0x%04x): no sparse binding of the game's memory\n",
@@ -555,6 +575,11 @@ bool LayerMemory() {
 namespace {
 /// dma-buf chunks: exported cached system memory the runtime maps at the game's addresses.
 bool DmaBufWorks(const Vulkan::Instance& instance) {
+#ifdef _WIN32
+    (void)instance;
+    std::printf("Guest memory: no dma-buf on Windows\n");
+    return false;
+#else
     {
         if (!instance.IsGuestMemoryExportSupported()) {
             std::printf("Guest memory: the driver cannot export system memory as a dma-buf\n");
@@ -658,6 +683,7 @@ bool DmaBufWorks(const Vulkan::Instance& instance) {
         }
         return ok;
     }
+#endif
 }
 } // namespace
 
@@ -665,14 +691,24 @@ bool Usable(const Vulkan::Instance& instance) {
     static const bool usable = [&] {
         device = instance.GetDevice();
         memory_properties = instance.GetPhysicalDevice().getMemoryProperties();
+        uncached = instance.IsGuestUncached();
+        if (uncached) {
+            std::printf("Guest memory: the GPU reads it uncached (BB_GUEST_UNCACHED=1, "
+                        "VK_AMD_device_coherent_memory): a diagnostic, as on NVIDIA's imported "
+                        "host memory\n");
+        }
         // BB_GUEST_MEMORY=dmabuf|host chooses; else AMD uses dma-buf chunks (tested the most) and
         // other GPUs host memory import first (NVIDIA: its dma-buf maps at offset 0 only, and
         // CPU access through it may be slow).
         const char* forced = std::getenv("BB_GUEST_MEMORY");
         const bool force_host = forced && std::string_view{forced} == "host";
         const bool force_dmabuf = forced && std::string_view{forced} == "dmabuf";
+#ifdef _WIN32
+        const bool host_first = !force_dmabuf; // no dma-buf on Windows
+#else
         const bool host_first =
             force_host || (!force_dmabuf && instance.GetVendorID() != 0x1002);
+#endif
         const char* why = "";
         if (host_first && HostImportWorks(instance, why)) {
             mode = Mode::HostImport;

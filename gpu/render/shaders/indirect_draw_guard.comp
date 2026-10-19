@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: the arguments of indirect draws, checked on the GPU before the draws run
+// (vk_indirect_guard.cpp). A draw of billions of vertices (garbage in its arguments: another game,
+// GPU hangs on area streaming) keeps the GPU busy past the kernel's timeout and loses the
+// device, the desktop with it; such a draw runs no vertices instead, and is counted.
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Args { uint args[]; };
+layout(std430, binding = 1) writeonly buffer Checked { uint checked[]; };
+layout(std430, binding = 2) buffer Skipped { uint skipped; uvec3 last; };
+
+layout(push_constant) uniform Push {
+    uint first;        // the first draw's first dword in binding 0
+    uint stride;       // dwords from one draw's arguments to the next
+    uint num_draws;
+    uint words;        // dwords of one draw's arguments: 5 indexed, 4 not
+    uint slot;         // where the checked copies go in binding 1 (dwords)
+    uint max_vertices; // vertices x instances of one draw
+} push;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= push.num_draws) {
+        return;
+    }
+    const uint src = push.first + i * push.stride;
+    const uint dst = push.slot + i * push.words;
+    const uint count = args[src];
+    const uint instances = args[src + 1];
+    uint high, low;
+    umulExtended(count, instances, high, low);
+    const bool plausible = high == 0 && low <= push.max_vertices;
+    for (uint w = 0; w < push.words; ++w) {
+        checked[dst + w] = args[src + w];
+    }
+    if (!plausible) {
+        checked[dst] = 0;
+        checked[dst + 1] = 0;
+        atomicAdd(skipped, 1);
+        last = uvec3(count, instances, i);
+    }
+}

@@ -27,6 +27,8 @@ enum Event : std::uint32_t {
     FrameRetired,      ///< arg: frame
     DecoderIdleBegin,  ///< the GPU command thread has nothing to decode
     DecoderIdleEnd,
+    RecorderIdleBegin, ///< the draw recording thread (stage B) has no packet to run
+    RecorderIdleEnd,
 };
 
 struct Entry {

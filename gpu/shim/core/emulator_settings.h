@@ -23,12 +23,11 @@ public:
     u32 GetInternalScreenWidth() { static const auto value = u32(Number("BB_INTERNAL_WIDTH", 1920)); return value; }
     u32 GetInternalScreenHeight() { static const auto value = u32(Number("BB_INTERNAL_HEIGHT", 1080)); return value; }
     std::string GetPresentMode() { const char* v = std::getenv("BB_PRESENT_MODE"); return v ? v : "Mailbox"; }
-    int GetRcasAttenuation() { static const auto value = int(Number("BB_RCAS_ATTENUATION", 250)); return value; }
     // bbport: Relaxed by default: without readbacks FaceGen reads stale GPU-written vertices
     // (vertex explosions); in Hunter's Nightmare it costs no measurable frame rate.
     u32 GetReadbacksMode() { static const auto value = u32(Number("BB_READBACKS", GpuReadbacksMode::Relaxed)); return value; }
-    // bbport: uncapped presets (run.sh: BB_VBLANK_HZ=480; 0 means the same): vblank runs at
-    // 480 Hz, and a finished frame is presented as soon as it arrives (IsUncappedVblank), not on
+    // bbport: uncapped presets (run.sh: BB_VBLANK_HZ=1000; 0 means 480): vblank runs at
+    // 1000 Hz, and a finished frame is presented as soon as it arrives (IsUncappedVblank), not on
     // the next vblank tick (at the display rate frames alternated 10/20 ms at 100 Hz: judder; at
     // 480 Hz they snap to ~2.1 ms steps). The frame rate is not limited unless BB_FPS_LIMIT
     // (launcher: "FPS limit") asks for it. Other values are used as given (60/90: the
@@ -53,16 +52,14 @@ public:
         static const u32 value = u32(std::max(0L, Number("BB_FPS_LIMIT", 0)));
         return value;
     }
-    bool IsCopyGpuBuffers() { static const auto value = Flag("BB_COPY_GPU_BUFFERS", false); return value; }
+    bool IsCopyGpuBuffers() { static const auto value = Flag("BB_COPY_GPU_BUFFERS", true); return value; }
     bool IsDirectMemoryAccessEnabled() { static const auto value = Flag("BB_DIRECT_MEMORY_ACCESS", false); return value; }
     bool IsDumpShaders() { static const auto value = Flag("BB_DUMP_SHADERS", false); return value; }
-    bool IsFsrEnabled() { static const auto value = Flag("BB_FSR1", false); return value; }
     bool IsHdrAllowed() { static const auto value = Flag("BB_HDR", false); return value; }
     bool IsNullGPU() { static const auto value = Flag("BB_NULL_GPU", false); return value; }
     bool IsPatchShaders() { return false; }
     bool IsPipelineCacheArchived() { return false; }
     bool IsPipelineCacheEnabled() { static const auto value = Flag("BB_PIPELINE_CACHE", true); return value; }
-    bool IsRcasEnabled() { static const auto value = Flag("BB_RCAS", true); return value; }
     bool IsReadbackLinearImagesEnabled() { static const auto value = Flag("BB_READBACK_LINEAR", false); return value; }
     bool IsRenderdocEnabled() { return false; }
     bool IsShaderCollect() { return false; }

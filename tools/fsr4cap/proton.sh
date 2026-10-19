@@ -65,10 +65,17 @@ proton_candidates() {
             /usr/share/steam/compatibilitytools.d)
     {
         # GE-Proton: version order (`ls | tail -1` took GE-Proton9-27 over GE-Proton10-x).
+        # A package may name the folder otherwise (AUR proton-ge-custom: /usr/share/steam/
+        # compatibilitytools.d/proton-ge-custom, issue #186): then its `version` file names it.
         for root in "${tools[@]}"; do
-            for p in "$root"/GE-Proton*; do
-                if [[ -f $p/proton && ${p##*/} =~ ^GE-Proton([0-9]+)- && ${BASH_REMATCH[1]} -ge 10 ]]; then
-                    printf '%s\t%s\n' "${p##*/}" "$p"
+            for p in "$root"/*; do
+                [[ -f $p/proton ]] || continue
+                local name=${p##*/}
+                if [[ ! $name =~ ^GE-Proton ]]; then
+                    name=$(grep -o -m1 'GE-Proton[0-9]*-[0-9]*' "$p/version" 2>/dev/null) || continue
+                fi
+                if [[ $name =~ ^GE-Proton([0-9]+)- && ${BASH_REMATCH[1]} -ge 10 ]]; then
+                    printf '%s\t%s\n' "$name" "$p"
                 fi
             done
         done | sort -V -r -k1,1 | cut -f2

@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifndef _WIN32
 #include <sys/time.h>
 typedef struct { int64_t seconds, microseconds; } GuestTimeval;
 typedef struct { int32_t minuteswest, dsttime; } GuestTimezone;
@@ -20,9 +19,6 @@ static ABI int guest_gettimeofday(GuestTimeval *value,GuestTimezone *zone) {
     return 0;
 }
 uintptr_t runtime_time_resolve(const char *name) {
-    if (!strcmp(name,"n88vx3C5nW8#I#J")) return (uintptr_t)guest_gettimeofday;
+    if (runtime_nid_is(name, "n88vx3C5nW8")) return (uintptr_t)guest_gettimeofday;
     return 0;
 }
-#else
-uintptr_t runtime_time_resolve(const char *name) { (void)name; return 0; }
-#endif

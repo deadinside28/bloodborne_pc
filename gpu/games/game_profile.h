@@ -36,6 +36,10 @@ struct Profile {
     /// A compute shader (GCN program hash) that only copies buffers, into memory the translator
     /// reads on the CPU: its stores go through to the game's memory; 0 = none known.
     std::uint64_t buffer_copy_shader = 0;
+    /// Its hooks make the game's camera follow the output's aspect ratio (a wider output sees
+    /// more to the sides). Without them an output of another shape keeps the game's 16:9 picture
+    /// in its middle: drawn wider, the game's own shading (data packed per pixel column) breaks.
+    bool camera_aspect = false;
 };
 
 /// Chooses the profile for the game by its TITLE_ID (bbgpu_init). BB_GAME_PROFILE=none runs the
@@ -53,5 +57,11 @@ inline std::uint64_t BufferCopyShader() {
 
 /// Whether guest_rip is in code the active profile knows to write per-frame data.
 bool IsDynamicWriter(std::uint64_t guest_rip);
+
+/// Whether the active profile's camera follows the output's aspect ratio.
+inline bool CameraAspect() {
+    const Profile* profile = Active();
+    return profile && profile->camera_aspect;
+}
 
 } // namespace Game

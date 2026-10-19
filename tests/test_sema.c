@@ -31,7 +31,7 @@ static void setup(void) {
     delete_sem=GET(Delete,"R1Jvn8bSCW8#p#J");
     cancel_sem=GET(Cancel,"4DM06U2BNEY#p#J");
     assert(create && poll_sem && signal_sem && wait_sem && delete_sem && cancel_sem);
-    assert(!runtime_resolve("188x57JYp0g#I#J",0));
+    assert(runtime_resolve("188x57JYp0g#I#J",0)); /* any library letters (runtime_nid_is) */
     assert(!runtime_resolve("188x57JYp0g#p#J",1));
 }
 static void lifecycle(void) {

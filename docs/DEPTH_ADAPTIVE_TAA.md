@@ -22,7 +22,7 @@
 
 ### 1. Depth-Adaptive Disocclusion Threshold
 
-**Файл:** `gpu/shadps4/video_core/host_shaders/taa.comp`
+**Файл:** `gpu/upscale/shaders/taa.comp`
 
 ```glsl
 float depthThreshold(float depth) {
@@ -75,7 +75,7 @@ result = mix(current, clipped, weight);
 
 ### 3. Motion Vector Validation (camera_motion.comp)
 
-**Файл:** `gpu/shadps4/video_core/host_shaders/camera_motion.comp`
+**Файл:** `gpu/upscale/shaders/camera_motion.comp`
 
 ```glsl
 // Depth-adaptive validation: distant surfaces need tighter depth matching.
@@ -93,7 +93,7 @@ if (object_motion.b > 0.99 && abs(object_motion.a - depth) < depth_threshold &&
 
 ### 4. Улучшенная визуализация debug режимов
 
-**Файл:** `gpu/shadps4/video_core/host_shaders/camera_motion.comp`
+**Файл:** `gpu/upscale/shaders/camera_motion.comp`
 
 Режимы `BB_DEBUG_MOTION=1` теперь структурированы:
 ```glsl
@@ -184,5 +184,5 @@ echo "0" > /tmp/bb_toggle
 
 - [upscaler.md](upscaler.md) — общая архитектура апскейлера
 - [motion_vectors.md](motion_vectors.md) — векторы движения
-- TAA shader: `gpu/shadps4/video_core/host_shaders/taa.comp`
-- Camera motion: `gpu/shadps4/video_core/host_shaders/camera_motion.comp`
+- TAA shader: `gpu/upscale/shaders/taa.comp`
+- Camera motion: `gpu/upscale/shaders/camera_motion.comp`

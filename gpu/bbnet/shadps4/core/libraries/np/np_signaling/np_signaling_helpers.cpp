@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <vector>
 
 #include "common/alignment.h"
 #include "common/logging/log.h"
@@ -12,11 +13,13 @@
 #include "core/libraries/kernel/memory.h"
 #include "core/libraries/network/net.h"
 #include "core/libraries/network/net_util.h"
+#include "core/libraries/network/sockets.h"
 #include "core/libraries/np/np_common.h"
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_signaling/np_signaling_helpers.h"
 #include "core/libraries/np/np_signaling/np_signaling_state.h"
 #include "core/libraries/np/np_signaling/np_signaling_stubs.h"
+#include "core/bloodborne_re.h"
 
 namespace Libraries::Np::NpSignaling::Helpers {
 
@@ -152,6 +155,58 @@ s32 StartMainRuntime(s32 thread_priority, s32 cpu_affinity_mask, s64 thread_stac
     return ORBIS_OK;
 }
 
+namespace {
+struct BbscPeer {
+    u32 addr;
+    u16 port;
+};
+
+std::vector<BbscPeer> EstablishedBbscPeers() {
+    std::vector<BbscPeer> peers;
+    SignalingMutexGuard lock;
+    peers.reserve(g_connections.size());
+    for (const auto& [conn_id, ci] : g_connections) {
+        if (ci.addr != 0 && ci.port != 0 && ci.state == ConnState::Established) {
+            peers.push_back({ci.addr, ci.port});
+        }
+    }
+    return peers;
+}
+} // namespace
+
+u32 SendBbscWorldFlagsToPeers(const void* packet, u32 size) {
+    u32 sent = 0;
+    for (const BbscPeer& peer : EstablishedBbscPeers()) {
+        if (Stubs::SignalingSendTo(packet, size, peer.addr, peer.port) > 0) {
+            ++sent;
+        }
+    }
+    return sent;
+}
+
+u32 SendBbscFollowToPeers(u32 packed_map, float x, float y, float z, float heading, u32 sequence,
+                          s32 lamp_point) {
+    const std::vector<BbscPeer> peers = EstablishedBbscPeers();
+    if (peers.empty()) {
+        return 0;
+    }
+    SignalingBbscFollow packet{};
+    packet.packed_map = packed_map;
+    packet.x = x;
+    packet.y = y;
+    packet.z = z;
+    packet.heading = heading;
+    packet.sequence = sequence;
+    packet.lamp_point = lamp_point;
+    u32 sent = 0;
+    for (const BbscPeer& peer : peers) {
+        if (Stubs::SignalingSendTo(&packet, sizeof(packet), peer.addr, peer.port) > 0) {
+            ++sent;
+        }
+    }
+    return sent;
+}
+
 s32 StartEchoRuntime(s32 thread_priority, s32 cpu_affinity_mask) {
     LOG_DEBUG(Lib_NpSignaling, "thread_priority={} cpu_affinity_mask={}", thread_priority,
               cpu_affinity_mask);
@@ -223,6 +278,7 @@ static void HandleStunEcho(s32 ctx_id, const StunEcho& echo) {
 
     auto* netinfo = Common::Singleton<NetUtil::NetUtilInternal>::Instance();
     netinfo->SetExternalIp(echo.ext_ip);
+    Net::P2PRelaySetSelfEndpoint(echo.ext_ip, echo.ext_port);
 
     ctx.stun_cv.notify_all();
 }
@@ -254,7 +310,8 @@ static void DrainControlPackets() {
 }
 
 static void ReceiveThreadMain() {
-    static constexpr u32 kBufSize = 256;
+    // Large enough for SignalingBbscWorldFlags (~1 KB); every other packet here is < 0x40 bytes.
+    static constexpr u32 kBufSize = 2048;
     u8 buf[kBufSize];
 
     while (!g_receive_stop) {
@@ -314,6 +371,20 @@ static void ReceiveThreadMain() {
             pong.conn_id = ping.conn_id;
             pong.orig_ts_us = ping.send_ts_us;
             Stubs::SignalingSendTo(&pong, sizeof(pong), from_addr, from_port);
+            continue;
+        }
+        if ((nbytes == sizeof(SignalingBbscFollow) || nbytes == kSignalingBbscFollowV1Size) &&
+            type == static_cast<u8>(SignalingPacketType::BbscFollow)) {
+            SignalingBbscFollow follow{}; // lamp_point stays -1 for an older build's packet
+            std::memcpy(&follow, buf, static_cast<size_t>(nbytes));
+            Core::Bloodborne::OnBbscHostFollowPacket(follow.packed_map, follow.x, follow.y,
+                                                     follow.z, follow.heading, follow.sequence,
+                                                     follow.lamp_point);
+            continue;
+        }
+        if (nbytes == sizeof(SignalingBbscWorldFlags) &&
+            type == static_cast<u8>(SignalingPacketType::BbscWorldFlags)) {
+            Core::Bloodborne::OnBbscWorldFlagsPacket(buf, static_cast<u32>(nbytes));
             continue;
         }
         if (nbytes == sizeof(SignalingEchoPong) &&

@@ -7,13 +7,16 @@
 #include <cstdint>
 
 namespace BbWriteLog {
-enum Source : std::uint32_t { Backing, WriteData, Fence, FenceIntent, WriteDataIntent, EosIntent, Dma };
+enum Source : std::uint32_t { Backing, WriteData, Fence, FenceIntent, WriteDataIntent, EosIntent, Dma,
+                            MirrorCopyIntent };
 bool Enabled();
 /// BB_WRITE_LOG=1: at the write itself (changes the timing of those writes).
 void Note(std::uint64_t address, const void* data, std::uint64_t size, Source source);
 /// BB_WRITE_LOG=2: where the GPU command thread decodes a fence or WriteData, off the write
 /// path (the address and value it will write later).
 void NoteIntent(std::uint64_t address, const void* data, std::uint64_t size, Source source);
+/// BB_WRITE_LOG=1: a queued GPU mirror copy into guest storage (intent, not completion/data).
+void NoteMirrorCopy(std::uint64_t address, std::uint64_t size);
 /// Logged writes into [address, address + size), newest first (BB_WRITE_LOG=1 or 2).
 void DumpRange(std::uint64_t address, std::uint64_t size);
 }

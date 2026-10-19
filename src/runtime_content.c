@@ -120,13 +120,76 @@ static ABI int32_t addon_list(uint32_t service,void *list,uint32_t capacity,uint
     if (count) printf("Runtime: AppContent add-ons reported installed (%s): %u\n",root,(unsigned)count);
     ++lists; return 0;
 }
+/* The folder of an add-on: <user>/addcont/<any title>/<label> (0: none). */
+static int addon_dir(const char *label,char *out,size_t size) {
+    char root[4096];
+    snprintf(root,sizeof(root),"%s/addcont",runtime_file_user_dir());
+    DIR *titles=opendir(root);
+    int found=0;
+    for (struct dirent *t; !found && titles && (t=readdir(titles));) {
+        if (t->d_name[0]=='.') continue;
+        struct stat entry;
+        if ((size_t)snprintf(out,size,"%s/%s/%s",root,t->d_name,label)>=size) continue;
+        found=!stat(out,&entry) && S_ISDIR(entry.st_mode);
+    }
+    if (titles) closedir(titles);
+    return found;
+}
+#define ADDON_NOT_FOUND ((int32_t)0x80d90005)
+/* sceAppContentAddcontMount: the add-on's files appear as /addcont0..15 (read-only data). */
+static ABI int32_t addon_mount(uint32_t service,const char *label,char *point) {
+    require_initialized();
+    (void)service;
+    if (!label || !point) return PARAMETER;
+    char name[LABEL_SIZE+1]={0}, host[4096];
+    memcpy(name,label,LABEL_SIZE);
+    if (!addon_dir(name,host,sizeof(host))) {
+        printf("Runtime: add-on '%s' not installed\n",name);
+        return ADDON_NOT_FOUND;
+    }
+    static char mounted[16][LABEL_SIZE+1];
+    int slot=-1;
+    for (int i=0;i<16;++i) {
+        if (!strcmp(mounted[i],name)) { slot=i; break; }
+        if (slot<0 && !mounted[i][0]) slot=i;
+    }
+    if (slot<0) return BUSY;
+    memcpy(mounted[slot],name,sizeof(name));
+    char guest[32];
+    snprintf(guest,sizeof(guest),"/addcont%d",slot & 15);
+    memset(point,0,16); memcpy(point,guest,strlen(guest));
+    if (runtime_file_mount(guest,host)) {
+        fprintf(stderr,"Runtime: add-on '%s' could not be mounted: mount table full\n",name);
+        return BUSY;
+    }
+    printf("Runtime: add-on '%s' mounted at %s (%s)\n",name,guest,host);
+    return 0;
+}
+static ABI int32_t addon_unmount(const char *point) { (void)point; return 0; }
+/* sceAppContentGetAddcontInfo: an installed add-on. */
+static ABI int32_t addon_info(uint32_t service,const char *label,void *info) {
+    require_initialized();
+    (void)service;
+    if (!label || !info) return PARAMETER;
+    char name[LABEL_SIZE+1]={0}, host[4096];
+    memcpy(name,label,LABEL_SIZE);
+    if (!addon_dir(name,host,sizeof(host))) return ADDON_NOT_FOUND;
+    AddonInfo out;
+    memset(&out,0,sizeof(out)); memcpy(out.label,name,strlen(name));
+    out.status=ADDON_INSTALLED;
+    memcpy(info,&out,sizeof(out));
+    return 0;
+}
 uintptr_t runtime_content_resolve(const char *name) {
-    if (!strcmp(name,"g8cM39EUZ6o#M#N")) return (uintptr_t)module_load;
-    if (!strcmp(name,"fMP5NHUOaMk#M#N")) return (uintptr_t)module_loaded;
-    if (!strcmp(name,"eR2bZFAAU0Q#M#N")) return (uintptr_t)module_unload;
-    if (!strcmp(name,"R9lA82OraNs#c#d")) return (uintptr_t)content_init;
-    if (!strcmp(name,"99b82IKXpH4#c#d")) return (uintptr_t)param_int;
-    if (!strcmp(name,"xnd8BJzAxmk#c#d")) return (uintptr_t)addon_list;
+    if (runtime_nid_is(name, "VANhIWcqYak")) return (uintptr_t)addon_mount;
+    if (runtime_nid_is(name, "3rHWaV-1KC4")) return (uintptr_t)addon_unmount;
+    if (runtime_nid_is(name, "m47juOmH0VE")) return (uintptr_t)addon_info;
+    if (runtime_nid_is(name, "g8cM39EUZ6o")) return (uintptr_t)module_load;
+    if (runtime_nid_is(name, "fMP5NHUOaMk")) return (uintptr_t)module_loaded;
+    if (runtime_nid_is(name, "eR2bZFAAU0Q")) return (uintptr_t)module_unload;
+    if (runtime_nid_is(name, "R9lA82OraNs")) return (uintptr_t)content_init;
+    if (runtime_nid_is(name, "99b82IKXpH4")) return (uintptr_t)param_int;
+    if (runtime_nid_is(name, "xnd8BJzAxmk")) return (uintptr_t)addon_list;
     return 0;
 }
 void runtime_content_report(void) {

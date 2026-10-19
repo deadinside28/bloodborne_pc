@@ -237,6 +237,10 @@ thread_local Batch batch;
 
 } // namespace
 
+bool OnCopyThread() {
+    return in_copy_thread;
+}
+
 bool Enabled() {
     return GetPool().Enabled() && !BbToggle::Disabled(BbToggle::ParallelCopies);
 }

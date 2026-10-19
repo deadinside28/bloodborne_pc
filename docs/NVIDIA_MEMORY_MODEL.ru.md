@@ -18,7 +18,7 @@
 ## Решение: модуль памяти прослойки
 
 Вместо sparse-арены работает собственный модуль памяти (`gpu/layer/bblayer_gpu_memory.*`,
-`gpu/shadps4/video_core/buffer_cache/buffer_cache_layer.cpp`, план — `MEMORY_MODULE_PLAN.ru.md`):
+`gpu/buffers/buffer_cache.cpp`, план — `MEMORY_MODULE_PLAN.ru.md`):
 
 - память игры привязывается **на месте**, через буферы её кусков (dma-buf на AMD, импорт памяти
   хоста `VK_EXT_external_memory_host` на NVIDIA);

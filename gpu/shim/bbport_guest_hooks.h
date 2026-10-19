@@ -14,4 +14,22 @@ using RangeCallback = void (*)(std::uint64_t address, std::uint64_t size);
 
 /// Installs the hooks once (GPU side, after the game is loaded).
 void Install(RangeCallback on_gpu_range_allocated);
+
+/// The output's aspect ratio (the upscaler, when its size changes): the camera's from its next
+/// update (wider: more to the sides, taller: more above and below), and the HUD markers' places
+/// in the UI the port draws in the middle of the output at its height (width). 16:9: the game's.
+void SetDisplayAspect(float aspect);
+/// The current camera's state the hooks above write (its projection at +0x50), 0 until known.
+std::uint64_t CameraState();
+/// The free camera (community patch) is on: the mouse drives it, not the follow camera.
+bool FreeCameraActive();
+/// The game effects chosen in the settings take effect now (a no-op when nothing changed, or
+/// when the effects are only set by the startup patches, BB_HOT_EFFECTS=0).
+void ApplyGameEffects();
+
+/// Native mouse look (BB_NATIVE_MOUSE, on by default): whether the camera hook is in, and a turn
+/// (radians: pitch, yaw) for the camera's next update; false while the camera does not take the
+/// turns (lock-on, menus: the caller drives the stick instead).
+bool CameraLookAvailable();
+bool CameraLookAdd(float pitch, float yaw);
 } // namespace BbGuestHooks

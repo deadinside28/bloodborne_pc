@@ -23,6 +23,7 @@
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/path_util.h"
+#include "core/bbsc_persistence.h"
 #include "core/bloodborne_re.h"
 #include "core/debugger.h"
 #include "core/emulator_settings.h"
@@ -675,8 +676,7 @@ bool IsFollowableRedirect(int status, s32 method) {
 }
 
 bool EnvFlagEnabled(const char* name) {
-    const char* enabled = std::getenv(name);
-    return enabled != nullptr && enabled[0] != '\0' && std::string_view{enabled} != "0";
+    return Core::Bbsc::SwitchEnabled(name);
 }
 
 bool IsBloodborneSummonPath(std::string_view path) {
@@ -802,6 +802,43 @@ void RewriteHostHeader(SendRequestPlan& plan) {
     }
 }
 
+// BBSC connect-first cross-map summon: once the broker has named the host's map (placement
+// header), the guest's sign is advertised in that map so the broker matches and delivers the claim
+// without the teleport-first step (see bloodborne_re.cpp).
+static void RewriteConnectFirstAreaId(SendRequestPlan& plan) {
+    if (!IsBloodborneSummonCreatePath(plan.path)) {
+        return;
+    }
+    const auto host_map = Core::Bloodborne::GetBbscConnectFirstAreaId();
+    if (!host_map) {
+        return;
+    }
+    constexpr std::string_view Key = "\"AreaId\":";
+    const std::string_view body{reinterpret_cast<const char*>(plan.body.data()), plan.body.size()};
+    const size_t key = body.find(Key);
+    if (key == std::string_view::npos) {
+        return;
+    }
+    const size_t value_begin = key + Key.size();
+    size_t value_end = value_begin;
+    while (value_end < body.size() && body[value_end] >= '0' && body[value_end] <= '9') {
+        ++value_end;
+    }
+    if (value_end == value_begin) {
+        return;
+    }
+    const std::string original{body.substr(value_begin, value_end - value_begin)};
+    const std::string replacement = std::to_string(*host_map);
+    if (original == replacement) {
+        return;
+    }
+    plan.body.erase(plan.body.begin() + value_begin, plan.body.begin() + value_end);
+    plan.body.insert(plan.body.begin() + value_begin, replacement.begin(), replacement.end());
+    std::erase_if(plan.headers,
+                  [](const auto& header) { return HeaderNameMatches(header.first, "Content-Length"); });
+    LOG_INFO(Lib_Http, "BBSC connect-first: advertisement AreaId {} -> {}", original, replacement);
+}
+
 bool ApplyBloodborneSeamlessRoute(SendRequestPlan& plan) {
     if (!EnvFlagEnabled("SHADPS4_BLOODBORNE_SEAMLESS_COOP") ||
         !EmulatorSettings.IsShadNetEnabled() || !IsBloodborneSummonPath(plan.path)) {
@@ -831,11 +868,18 @@ bool ApplyBloodborneSeamlessRoute(SendRequestPlan& plan) {
     }
     RewriteHostHeader(plan);
     plan.headers.emplace_back("X-ShadPS4-Bloodborne-Seamless", "1");
-    if (IsBloodborneSummonRequestPath(plan.path) || IsBloodborneSummonSearchPath(plan.path)) {
+    // BBSC: SHADPS4_BBSC_NO_PLACEMENT_HEADER=1 disables the host-placement transport in both
+    // directions (isolation test for the seamless join stall; cross-map preparation needs it).
+    if (!EnvFlagEnabled("SHADPS4_BBSC_NO_PLACEMENT_HEADER") &&
+        (IsBloodborneSummonRequestPath(plan.path) || IsBloodborneSummonSearchPath(plan.path))) {
         if (const auto placement = Core::Bloodborne::GetSeamlessHostPlacementHeader()) {
             plan.headers.emplace_back(BloodborneHostPlacementHeader, *placement);
         }
     }
+
+    // BBSC connect-first cross-map summon: advertise the sign in the host's map so the broker
+    // matches and delivers the claim without the teleport-first step (see bloodborne_re.cpp).
+    RewriteConnectFirstAreaId(plan);
 
     LOG_INFO(Lib_Http, "Bloodborne seamless route active: {}://{}:{}{} -> {}://{}:{}{}", old_scheme,
              old_host, old_port, plan.path, plan.scheme, plan.host, plan.port, plan.path);
@@ -1705,6 +1749,65 @@ int PS4_SYSV_ABI sceHttpRequestGetAllHeaders() {
     return ORBIS_OK;
 }
 
+// BBSC: the seamless summon broker keeps Preparing/Claimed/Delivered records for 15 minutes and
+// ignores ordinary removals. Bloodborne reuses the same SessionId/UserId after an emulator restart,
+// so a record left by a crashed or closed session made the next advertisement receive a stale claim
+// for a room that no longer exists (observed 2026-09-15 22:09–22:13: host claimed the old record
+// before the guest advertised; the guest never joined). Before the first seamless advertisement of
+// this process, send a forced removal for the same identity. Once per process only, so in-session
+// cross-map preparation (which relies on retained records) is untouched.
+std::atomic<bool> g_bbsc_stale_summon_cleared{false};
+
+void ClearStaleSeamlessSummonRecord(const SendRequestPlan& plan) {
+    if (!Core::Bbsc::BuiltIn) {
+        return; // vanilla build: the bbsc.dll mod does its own cleanup
+    }
+    if (!IsBloodborneSummonCreatePath(plan.path) ||
+        std::none_of(plan.headers.begin(), plan.headers.end(), [](const auto& header) {
+            return HeaderNameMatches(header.first, "X-ShadPS4-Bloodborne-Seamless");
+        }) ||
+        g_bbsc_stale_summon_cleared.exchange(true)) {
+        return;
+    }
+    std::string session_id;
+    s64 user_id = -1;
+    try {
+        const auto body = nlohmann::json::parse(plan.body.begin(), plan.body.end());
+        session_id = body.value("SessionId", std::string{});
+        if (body.contains("UserId") && body["UserId"].is_number_integer()) {
+            user_id = body["UserId"].get<s64>();
+        }
+    } catch (...) {
+        LOG_WARNING(Lib_Http, "BBSC stale summon cleanup: advertisement body is not JSON");
+        return;
+    }
+    if (session_id.empty() || user_id < 0) {
+        return;
+    }
+
+    SendRequestPlan removal = plan;
+    const auto create_pos = removal.path.find("/summon_messenger/create");
+    removal.path.replace(create_pos, std::string_view{"/summon_messenger/create"}.size(),
+                         "/summon_messenger/delete");
+    const std::string body = nlohmann::json{{"MessageId", "SummonDataRemoveRequest"},
+                                            {"SessionId", session_id},
+                                            {"UserId", user_id},
+                                            {"Force", true}}
+                                 .dump();
+    removal.body.assign(body.begin(), body.end());
+    std::erase_if(removal.headers, [](const auto& header) {
+        return HeaderNameMatches(header.first, "Content-Length") ||
+               HeaderNameMatches(header.first, BloodborneHostPlacementHeader);
+    });
+
+    HttpResponse response;
+    u32 event_bits = 0;
+    const s32 error = RunRealHttpRequest(removal, response, event_bits);
+    LOG_INFO(Lib_Http,
+             "BBSC stale summon cleanup for session {} user {}: error={} status={} body_bytes={}",
+             session_id, user_id, error, response.status_code, response.body.size());
+}
+
 int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
     LOG_INFO(Lib_Http, "called reqId={}, postData={}, size={}", reqId, fmt::ptr(postData), size);
     std::shared_ptr<HttpRequest> req_ptr;
@@ -1793,17 +1896,71 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
             SynthesizeTransportFailureResponse(local_res);
             worker_errno = ORBIS_HTTP_ERROR_RESOLVER_ENODNS;
         } else {
+            ClearStaleSeamlessSummonRecord(plan);
             worker_errno = RunRealHttpRequest(plan, local_res, success_event_bits);
         }
 
-        if (worker_errno == 0 && IsBloodborneSummonPath(plan.path)) {
+        const auto absorb_placement = [&plan](const HttpResponse& res) {
+            if (!IsBloodborneSummonPath(plan.path) ||
+                EnvFlagEnabled("SHADPS4_BBSC_NO_PLACEMENT_HEADER")) {
+                return;
+            }
             if (const auto placement =
-                    FindResponseHeader(local_res.all_headers_blob, BloodborneHostPlacementHeader);
+                    FindResponseHeader(res.all_headers_blob, BloodborneHostPlacementHeader);
                 placement.has_value() &&
                 !Core::Bloodborne::SetSeamlessHostPlacementHeader(*placement)) {
                 LOG_WARNING(Lib_Http, "Ignored invalid Bloodborne host-placement header");
             } else if (!placement.has_value() && IsBloodborneSummonCreatePath(plan.path)) {
                 Core::Bloodborne::ClearSeamlessHostPlacementHeader();
+            }
+        };
+        if (worker_errno == 0) {
+            absorb_placement(local_res);
+        }
+
+        // BBSC fast sign: the game re-posts its co-op sign only every ~30 s whatever ss.info says,
+        // and a cross-map summon needs three or four of those round trips with the broker
+        // (advertised -> preparing with the host's placement -> re-advertised in the host's map ->
+        // claimed and delivered): about 2 minutes on 2026-09-23/24 against 5 s on the same map.
+        // So the guest's own post is repeated here every 3 s, with the host's map written in as
+        // soon as the broker names it, until the broker hands back the claim or 15 s have passed.
+        // The game receives the last reply as the answer to the post it made.
+        const bool seamless_route =
+            std::any_of(plan.headers.begin(), plan.headers.end(), [](const auto& header) {
+                return HeaderNameMatches(header.first, "X-ShadPS4-Bloodborne-Seamless");
+            });
+        if (online && worker_errno == 0 && seamless_route &&
+            IsBloodborneSummonCreatePath(plan.path) &&
+            !EnvFlagEnabled("SHADPS4_BBSC_NO_FAST_SIGN")) {
+            const auto delivered = [](const HttpResponse& res) {
+                const std::string_view body{reinterpret_cast<const char*>(res.body.data()),
+                                            res.body.size()};
+                return body.find("\"SessionId\"") != std::string_view::npos;
+            };
+            constexpr int FastSignTries = 5;
+            constexpr auto FastSignPause = std::chrono::seconds(3);
+            for (int attempt = 1; attempt <= FastSignTries; ++attempt) {
+                if (local_res.status_code != 200 || delivered(local_res) ||
+                    g_state.shutting_down.load() || req_ptr->deleted) {
+                    break;
+                }
+                std::this_thread::sleep_for(FastSignPause);
+                SendRequestPlan again = plan;
+                RewriteConnectFirstAreaId(again);
+                HttpResponse next_res;
+                u32 next_bits = 0;
+                const s32 next_errno = RunRealHttpRequest(again, next_res, next_bits);
+                if (next_errno != 0) {
+                    LOG_INFO(Lib_Http, "BBSC fast sign: re-post {} failed ({:#x}), keeping the "
+                                       "previous reply", attempt, static_cast<u32>(next_errno));
+                    break;
+                }
+                absorb_placement(next_res);
+                local_res = std::move(next_res);
+                success_event_bits = next_bits;
+                LOG_INFO(Lib_Http, "BBSC fast sign: re-post {} -> status {}, {} bytes{}", attempt,
+                         local_res.status_code, local_res.body.size(),
+                         delivered(local_res) ? " (claim delivered)" : "");
             }
         }
 

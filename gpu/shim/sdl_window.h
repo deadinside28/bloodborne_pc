@@ -40,6 +40,9 @@ public:
     bool MouseCaptured() const { return mouse_captured.load(std::memory_order_relaxed); }
     /// mouse_look=0: a click does not take the mouse.
     static void EnableMouseLook(bool enabled) { mouse_look.store(enabled, std::memory_order_relaxed); }
+    /// From any thread: the window thread takes the mouse at its next poll (unless a menu or a
+    /// text prompt wants the cursor).
+    void RequestMouseCapture() { capture_requested.store(true, std::memory_order_relaxed); }
 
 private:
     std::atomic<s32> width, height;
@@ -52,11 +55,15 @@ private:
     void UpdateCursor();
     u64 last_mouse_motion_ms{}; ///< SDL_GetTicks of the last mouse motion (UpdateCursor)
     bool cursor_hidden{};
+    u64 capture_settle_ms{}; ///< mouse motion before this (SDL_GetTicks) is not looking around
+    bool pointer_shown{};        ///< a game module's pointer menu is open (bbgpu_pointer_wanted)
+    bool released_for_pointer{}; ///< the mouse was let go for it: taken back after
     void CaptureMouse(bool capture);
     std::mutex mouse_mutex;
     double mouse_dx{}, mouse_dy{};
     int wheel_up{}, wheel_down{};
     std::atomic<bool> mouse_captured{false};
+    std::atomic<bool> capture_requested{false};
     static inline std::atomic<bool> mouse_look{true};
     SDL_Window* window{};
     WindowSystemInfo window_info{};

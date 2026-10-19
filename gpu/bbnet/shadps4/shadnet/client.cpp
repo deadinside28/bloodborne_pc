@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <thread>
 
 #include "client.h"
@@ -109,10 +110,15 @@ ShadNetState ShadNetClient::WaitForConnection() {
 ShadNetState ShadNetClient::WaitForAuthenticated() {
     {
         std::lock_guard lock(m_mutex_authenticated);
-        if (m_authenticated)
+        if (m_ready && m_authenticated)
             return ShadNetState::Ok;
     }
-    m_sem_authenticated.acquire();
+    // A server that never answers the version report: signed in all the same.
+    if (!m_sem_authenticated.try_acquire_for(std::chrono::seconds(15))) {
+        LOG_WARNING(ShadNet, "No answer to the login's last step; going on");
+    }
+    if (m_rejected)
+        return ShadNetState::FailureRejected;
     return m_authenticated ? ShadNetState::Ok : m_state.load();
 }
 
@@ -515,6 +521,20 @@ u64 ShadNetClient::RemoveBlock(const std::string& npid) {
     return SubmitRequest(CommandType::RemoveBlock, MakeProtoPayload(req));
 }
 
+std::string ShadNetClient::BuildVersionString() {
+    if (const char* env = std::getenv("BB_SHADNET_CLIENT_VERSION"); env && env[0]) {
+        return env;
+    }
+    return "bbport " BBNET_PORT_VERSION " (Bloodborne PC port; shadPS4 network code)";
+}
+
+u64 ShadNetClient::ReportClientVersion() {
+    shadnet::SetClientVersionRequest req;
+    req.set_version(BuildVersionString());
+    LOG_INFO(ShadNet, "Reporting client version '{}'", req.version());
+    return SubmitRequest(CommandType::SetClientVersion, MakeProtoPayload(req));
+}
+
 u64 ShadNetClient::SetAppearOffline(bool enable) {
     m_appear_offline = enable; // cache so the (re)login packet carries the current state
     if (!IsAuthenticated())
@@ -552,6 +572,9 @@ void ShadNetClient::DispatchPacket(PacketType type, u16 cmd_raw, u64 pkt_id,
             break;
         case CommandType::GetServerFeatures:
             HandleServerFeaturesReply(payload);
+            break;
+        case CommandType::SetClientVersion:
+            HandleClientVersionReply(payload);
             break;
         default:
             if (onAsyncReply) {
@@ -720,6 +743,19 @@ void ShadNetClient::HandleServerFeaturesReply(const std::vector<u8>& payload) {
     m_server_features_received.store(parsed);
     LOG_INFO(ShadNet, "Server features: matching2_enabled={}{}",
              matching2_enabled ? "true" : "false", parsed ? "" : " (defaulted)");
+    // The server signs out a client that reports no version (it closes the connection a little
+    // later and refuses logins for a while), and one whose version it does not accept
+    // (notification 19 before this reply): the login ends with the answer.
+    ReportClientVersion();
+}
+
+void ShadNetClient::HandleClientVersionReply(const std::vector<u8>& payload) {
+    if (!payload.empty() && static_cast<ErrorType>(payload[0]) != ErrorType::NoError) {
+        LOG_WARNING(ShadNet, "SetClientVersion returned error={}", static_cast<int>(payload[0]));
+    }
+    if (m_rejected)
+        return; // the rejection ended the login
+    m_ready = true;
     m_sem_authenticated.release();
 }
 
@@ -909,6 +945,45 @@ void ShadNetClient::HandleNotification(u16 cmd_raw, const std::vector<u8>& paylo
                  n.npServiceName, n.dataType, n.fromNpid, n.data.size(), n.extdData.size());
         if (onWebApiPushEvent)
             onWebApiPushEvent(n);
+        break;
+    }
+    case NotificationType::ServiceUnavailable: {
+        shadnet::NotifyServiceUnavailable pb;
+        if (!pb.ParseFromString(blob)) {
+            LOG_WARNING(ShadNet, "ServiceUnavailable parse error");
+            break;
+        }
+        NotifyServiceUnavailable n;
+        n.service = pb.service();
+        n.reason = pb.reason();
+        n.inUse = pb.in_use();
+        n.limit = pb.limit();
+        LOG_WARNING(ShadNet, "ServiceUnavailable service={} reason={} in_use={} limit={}",
+                    n.service, n.reason, n.inUse, n.limit);
+        if (onServiceUnavailable)
+            onServiceUnavailable(n);
+        break;
+    }
+    case NotificationType::ClientRejected: {
+        shadnet::NotifyClientRejected pb;
+        if (!pb.ParseFromString(blob)) {
+            LOG_WARNING(ShadNet, "ClientRejected parse error");
+            break;
+        }
+        NotifyClientRejected n;
+        n.reason = pb.reason();
+        n.message = pb.message();
+        n.version = pb.version();
+        LOG_ERROR(ShadNet, "Server rejected this client (reason={}, version='{}'): {}", n.reason,
+                  n.version, n.message);
+        if (!m_ready && !m_rejected.exchange(true)) {
+            // Still signing in: the login fails (no session the game would see dropped).
+            m_authenticated = false;
+            m_state = ShadNetState::FailureRejected;
+            m_sem_authenticated.release();
+        }
+        if (onClientRejected)
+            onClientRejected(n);
         break;
     }
     default:

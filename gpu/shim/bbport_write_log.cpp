@@ -56,6 +56,12 @@ void Note(std::uint64_t address, const void* data, std::uint64_t size, Source so
     }
 }
 
+void NoteMirrorCopy(std::uint64_t address, std::uint64_t size) {
+    if (!Enabled()) return;
+    const std::array<unsigned char, 64> no_data{};
+    Record(address, no_data.data(), size, MirrorCopyIntent);
+}
+
 void Record(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
     static thread_local const std::uint32_t tid = static_cast<std::uint32_t>(gettid());
     Entry e{address, size, 0, __rdtsc(), source, tid};
@@ -84,7 +90,8 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
         return;
     }
     const char* sources[] = {"backing",      "WriteData",           "fence",
-                             "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData"};
+                             "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData",
+                             "GPU mirror copy (queued)"};
     const std::uint64_t now = __rdtsc(), n = head.load();
     int shown = 0;
     for (std::uint64_t i = n; i-- > (n > Size ? n - Size : 0) && shown < 64;) {
@@ -92,7 +99,7 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
         if (e.address < address + size && address < e.address + e.size) {
             std::fprintf(stderr,
                          "Write log: into range %s %#llx +%llu first %#llx tid %u, %.3f s before\n",
-                         e.source < 7 ? sources[e.source] : "?", (unsigned long long)e.address,
+                         e.source < 8 ? sources[e.source] : "?", (unsigned long long)e.address,
                          (unsigned long long)e.size, (unsigned long long)e.first, e.tid,
                          double(now - e.tsc) / 3.0e9);
             ++shown;
@@ -120,12 +127,13 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
         std::fprintf(stderr, "Write log: %s=%#llx\n", names[i], (unsigned long long)regs[i]);
     }
     const char* sources[] = {"backing",      "WriteData",           "fence",
-                             "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData"};
+                             "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData",
+                             "GPU mirror copy (queued)"};
     const std::uint64_t now = __rdtsc();
     const auto print = [&](const Entry& e, const char* what) {
         std::fprintf(stderr,
                      "Write log: %s %s %#llx +%llu first %#llx tid %u, %.3f s before the fault\n",
-                     what, e.source < 7 ? sources[e.source] : "?", (unsigned long long)e.address,
+                     what, e.source < 8 ? sources[e.source] : "?", (unsigned long long)e.address,
                      (unsigned long long)e.size, (unsigned long long)e.first, e.tid,
                      double(now - e.tsc) / 3.0e9);
     };

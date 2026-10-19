@@ -4,6 +4,7 @@
 // the same one.
 #include "game_profile.h"
 #include "bbport_guest_hooks.h"
+#include "bloodborne_menu_pointer.h"
 
 namespace Game {
 namespace {
@@ -29,6 +30,8 @@ constexpr CodeRange DynamicWriters[] = {
 void InstallHooks(const CoreServices& services) {
     // The resource loaders' copies, the GPU memory range allocator and the heap (bbport_guest_hooks).
     BbGuestHooks::Install(services.fresh_range);
+    // The mouse as a pointer in the game's menus (bloodborne_menu_pointer).
+    BbMenuPointer::Install();
 }
 } // namespace
 
@@ -39,6 +42,8 @@ extern const Profile BloodborneProfile = {
     .dynamic_writers = DynamicWriters,
     // The game's buffer-copy compute shader (not the export-stage copy shader).
     .buffer_copy_shader = 0xfefebf9f,
+    // The camera's projection stores and the HUD's markers (BbGuestHooks::SetDisplayAspect).
+    .camera_aspect = true,
 };
 
 } // namespace Game

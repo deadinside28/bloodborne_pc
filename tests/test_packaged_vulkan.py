@@ -60,6 +60,8 @@ class PackagedVulkanTests(unittest.TestCase):
         driver = self.library("libGLX_nvidia.so.580.1")
         (self.libs / "libGLX_nvidia.so.0").symlink_to(driver.name)
         compiler = self.library("libnvidia-glvkspirv.so.580.1")
+        cuda = self.library("libcuda.so.580.1")
+        (self.libs / "libcuda.so.1").symlink_to(cuda.name)
         self.library("libc.so.6")
         self.manifest()
         self.assertIn("host NVIDIA", self.configure())
@@ -69,6 +71,8 @@ class PackagedVulkanTests(unittest.TestCase):
         self.assertEqual(Path(data["ICD"]["library_path"]).resolve(), driver)
         cache = Path(self.env["LD_LIBRARY_PATH"].split(":")[0])
         self.assertEqual((cache / compiler.name).resolve(), compiler)
+        # DLSS (NGX) has the driver load libcuda.so.1 (#135).
+        self.assertEqual((cache / "libcuda.so.1").resolve(), cuda)
         self.assertFalse((cache / "libc.so.6").exists())
         self.assertTrue(self.env["VK_DRIVER_FILES"].endswith(":/bundled/radeon.json:/bundled/intel.json"))
         # Repeated starts reuse valid links and do not accumulate per-launch caches.
@@ -77,6 +81,24 @@ class PackagedVulkanTests(unittest.TestCase):
         self.env["LD_LIBRARY_PATH"] = "/bundled/lib"
         self.configure()
         self.assertEqual(self.env, before)
+
+    def test_debian_nvidia_siblings_one_level_up_are_linked(self):
+        # Debian 13: the ICD in nvidia/current/, glsi/tls/glcore in the multiarch directory (#205).
+        current = self.libs / "nvidia" / "current"
+        current.mkdir(parents=True)
+        driver = current / "libGLX_nvidia.so.550.163.01"
+        driver.write_bytes(self.library("tmp").read_bytes())
+        (self.libs / "tmp").unlink()
+        (self.libs / "libGLX_nvidia.so.0").symlink_to(driver)
+        glsi = self.library("libnvidia-glsi.so.550.163.01")
+        own = current / "libnvidia-glcore.so.550.163.01"
+        own.write_bytes(glsi.read_bytes())
+        self.library("libnvidia-glcore.so.550.163.01")  # the ICD directory's copy wins
+        self.manifest()
+        self.configure()
+        cache = Path(self.env["LD_LIBRARY_PATH"].split(":")[0])
+        self.assertEqual((cache / glsi.name).resolve(), glsi)
+        self.assertEqual((cache / own.name).resolve(), own)
 
     def nvidia_host(self):
         driver = self.library("libGLX_nvidia.so.580.1")
@@ -166,3 +188,17 @@ class PackagedVulkanTests(unittest.TestCase):
     def test_nvidia_report_is_empty_without_the_host_driver(self):
         self.configure()
         self.assertEqual(vulkan.nvidia_report(self.env, "vulkaninfo", None), [])
+
+
+class PressureVesselTests(PackagedVulkanTests):
+    """Steam's Game Mode (pressure-vessel) sets Vulkan variables of its own (#172)."""
+    def test_pressure_vessel_overrides_are_dropped(self):
+        env = dict(self.env,
+                   VK_DRIVER_FILES="/usr/lib/pressure-vessel/overrides/share/vulkan/icd.d/radeon_icd.x86_64.json",
+                   VK_IMPLICIT_LAYER_PATH="/usr/lib/pressure-vessel/overrides/share/vulkan/implicit_layer.d",
+                   LD_LIBRARY_PATH="/usr/lib/pressure-vessel/overrides/lib/x86_64-linux-gnu/aliases:/bundled/lib")
+        vulkan.configure(env, manifest_dirs=(self.icds,), library_dirs=(self.libs,),
+                         egl_dirs=(self.egl,))
+        self.assertEqual(env["VK_DRIVER_FILES"], "/bundled/radeon.json:/bundled/intel.json")
+        self.assertNotIn("VK_IMPLICIT_LAYER_PATH", env)
+        self.assertEqual(env["LD_LIBRARY_PATH"], "/bundled/lib")

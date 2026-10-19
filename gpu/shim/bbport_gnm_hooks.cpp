@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "common/types.h"
 #include "bbport_gnm_hooks.h"
+#include "bbport_guest_code_hooks.h"
+#include "cp/cp_diagnostics.h"
 
 #include <algorithm>
 #include <initializer_list>
@@ -8,15 +11,63 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <vector>
 #include <sys/mman.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 namespace BbGnmHooks {
 namespace {
 using u8 = std::uint8_t;
 using u64 = std::uint64_t;
+
+struct DriverRecord {
+    u64 begin, bytes;
+    const char* writer;
+    u64 guest_fn = 0, caller = 0, cb = 0;
+    u64 bad_offset = ~u64(0);
+    std::uint32_t bad_word = 0;
+    int thread = 0;
+    u64 when = 0;
+    std::uint32_t head[16]{};
+};
+std::mutex driver_records_mutex;
+DriverRecord driver_records[65536]{};
+u64 driver_record_next = 0;
+struct NativeRecords {
+    std::mutex mutex;
+    std::vector<DriverRecord> records = std::vector<DriverRecord>(65536);
+    u64 next = 0;
+};
+std::vector<NativeRecords*> native_records;
+u64 RecordTime() {
+    return std::chrono::steady_clock::now().time_since_epoch().count();
+}
+int RecordThread() {
+    static thread_local const int thread = gettid();
+    return thread;
+}
+void RememberNative(const DriverRecord& record) {
+    // Separate rings avoid serializing otherwise independent guest command producers.
+    // Keep their storage after a guest thread exits so a later failure can still inspect it.
+    static thread_local NativeRecords* ring = [] {
+        auto* fresh = new NativeRecords;
+        std::scoped_lock lock{driver_records_mutex};
+        native_records.push_back(fresh);
+        return fresh;
+    }();
+    std::scoped_lock lock{ring->mutex};
+    ring->records[ring->next++ % ring->records.size()] = record;
+}
+bool TraceDriverWrites() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_GNM_WRITES_TRACE");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
 
 struct Entry {
     u64 offset;
@@ -72,6 +123,7 @@ bool Rel32(const u8* from_next, const void* to, std::int32_t& rel) {
 /// wrote in a shadow table (writer, checksum). Submissions are checked against it: which packets
 /// came from known API calls, which from elsewhere, which were changed after the call wrote them.
 bool observe = false;
+bool native_trace_only = false;
 u8* exit_thunk = nullptr;
 
 struct Frame {
@@ -153,6 +205,47 @@ std::atomic<u64> callback_seen[8];
 std::atomic<u64> callback_hits[8];
 u64 image_base = 0;
 
+void PS4_SYSV_ABI MainContextUse(u64 tag, const Core::GuestRegisterSnapshot* r) {
+    if (gettid() != getpid()) return;
+    const auto read = [](u64 address, void* data, size_t bytes) {
+        iovec local{data, bytes}, remote{reinterpret_cast<void*>(address), bytes};
+        return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == ssize_t(bytes) ||
+               BbCp::Diagnostics::ReadGuest(reinterpret_cast<void*>(address), data, u32(bytes));
+    };
+    u64 caller = 0;
+    if (!read(r->rsp, &caller, sizeof(caller))) return;
+    static u64 callers[32]{}, counts[32]{};
+    size_t slot = 0;
+    while (slot < 32 && callers[slot] != caller && callers[slot] != 0) ++slot;
+    if (slot == 32) return;
+    callers[slot] = caller;
+    const u64 count = ++counts[slot];
+    if (count > 2 && (count & (count - 1)) != 0) return;
+    std::fprintf(stderr, "Gnm main context use: function +%#llx context %#llx CB %#llx "
+                         "caller +%#llx count %llu; stack",
+                 (unsigned long long)tag, (unsigned long long)r->rdi,
+                 (unsigned long long)(r->rdi + 0x10), (unsigned long long)(caller - image_base),
+                 (unsigned long long)count);
+    u64 frame = r->rbp;
+    for (int i = 0; i < 14; ++i) {
+        u64 pair[2]{};
+        if (!frame || !read(frame, pair, sizeof(pair))) break;
+        if (pair[1] >= image_base && pair[1] < image_base + 0x6000000)
+            std::fprintf(stderr, " +%#llx", (unsigned long long)(pair[1] - image_base));
+        if (pair[0] <= frame) break;
+        frame = pair[0];
+    }
+    std::fprintf(stderr, "\n");
+    u32 descriptor[16]{};
+    float color[4]{};
+    if (read(r->rsi, descriptor, sizeof(descriptor)) && read(r->rcx, color, sizeof(color))) {
+        std::fprintf(stderr, "  main clear texture %#llx, color %g,%g,%g,%g; descriptor",
+                     (unsigned long long)r->rsi, color[0], color[1], color[2], color[3]);
+        for (u32 word : descriptor) std::fprintf(stderr, " %08x", word);
+        std::fprintf(stderr, "\n");
+    }
+}
+
 void NoteCallback(u64 cb) {
     const u64 fn = *reinterpret_cast<const u64*>(cb + 0x18) - image_base;
     for (int k = 0; k < 8; ++k) {
@@ -164,7 +257,7 @@ void NoteCallback(u64 cb) {
     }
 }
 
-void Mark(std::uint32_t index, u64 before, u64 after, u64 cb = 0) {
+void Mark(std::uint32_t index, u64 before, u64 after, u64 cb = 0, u64 caller = 0) {
     if (after == before) {
         return;
     }
@@ -186,6 +279,22 @@ void Mark(std::uint32_t index, u64 before, u64 after, u64 cb = 0) {
         }
         return;
     }
+    // Keep the actual native cursor span, including malformed spans. Unlike the driver's
+    // requested capacity, this is the amount the guest wrapper advanced its write pointer.
+    auto record_native = [&](u64 bad = ~u64(0), std::uint32_t word = 0) {
+        if (!TraceDriverWrites() || index >= Count) return;
+        DriverRecord record{before, after - before, nullptr};
+        record.guest_fn = Table[index].offset;
+        record.caller = caller;
+        record.cb = cb;
+        record.bad_offset = bad;
+        record.bad_word = word;
+        record.thread = RecordThread();
+        record.when = RecordTime();
+        std::memcpy(record.head, reinterpret_cast<const void*>(before),
+                    std::min<u64>(sizeof(record.head), record.bytes));
+        RememberNative(record);
+    };
     for (u64 p = before; p < after;) {
         const auto* w = reinterpret_cast<const std::uint32_t*>(p);
         const std::uint32_t n = PacketDwords(*w);
@@ -193,15 +302,19 @@ void Mark(std::uint32_t index, u64 before, u64 after, u64 cb = 0) {
             anomalies.fetch_add(1, std::memory_order_relaxed);
             anomalies_by_fn[index].fetch_add(1, std::memory_order_relaxed);
             anomaly_kind[n == 0 ? 1 : 2].fetch_add(1, std::memory_order_relaxed);
+            record_native(p - before, *w);
             return;
         }
-        std::uint32_t* page = ShadowPage(p, true);
-        page[(p >> 2) & 1023] = ((index + 1) << 22) | Checksum(w, n);
+        if (!native_trace_only) {
+            std::uint32_t* page = ShadowPage(p, true);
+            page[(p >> 2) & 1023] = ((index + 1) << 22) | Checksum(w, n);
+        }
         p += n * 4;
     }
+    record_native();
 }
 
-extern "C" void BbGnmEnter(std::uint32_t index, u64 cb, u64* slot) {
+extern "C" void PS4_SYSV_ABI BbGnmEnter(std::uint32_t index, u64 cb, u64* slot) {
     __atomic_fetch_add(CounterAt(index), 1, __ATOMIC_RELAXED);
     if (depth == MaxDepth) {
         overflow.fetch_add(1, std::memory_order_relaxed);
@@ -218,7 +331,7 @@ extern "C" void BbGnmEnter(std::uint32_t index, u64 cb, u64* slot) {
     *slot = reinterpret_cast<u64>(exit_thunk);
 }
 
-extern "C" u64 BbGnmLeave() {
+extern "C" u64 PS4_SYSV_ABI BbGnmLeave() {
     const Frame f = frames[--depth];
     const bool cb_method = Table[f.index].cb_method;
     if (f.index == trace_index && trace_left.fetch_sub(1, std::memory_order_relaxed) > 0) {
@@ -249,7 +362,8 @@ extern "C" u64 BbGnmLeave() {
     if (!cb_method) {
         return f.ret;
     }
-    Mark(f.index, f.before, *reinterpret_cast<const u64*>(f.cb + 0x10), f.cb);
+    Mark(f.index, f.before, *reinterpret_cast<const u64*>(f.cb + 0x10), f.cb,
+         f.ret - image_base);
     return f.ret;
 }
 
@@ -460,7 +574,7 @@ void ReportLoop() {
 } // namespace
 
 void CheckSubmission(const std::uint32_t* commands, std::uint64_t dwords) {
-    if (!observe || !commands) {
+    if (!observe || native_trace_only || !commands) {
         return;
     }
     u64 packets = 0, covered = 0, covered_dw = 0, changed = 0;
@@ -510,9 +624,18 @@ void CheckSubmission(const std::uint32_t* commands, std::uint64_t dwords) {
 }
 
 void PatchImage(unsigned char* image, std::uint64_t size) {
+    image_base = reinterpret_cast<u64>(image);
+    if (const char* env = std::getenv("BB_GNM_RACE_STACKS"); env && env[0] == '1') {
+        constexpr std::array<u8, 6> entry{0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
+        const bool ok = Core::InstallGuestCodeHook(image + 0x26b4ef0, entry, 0x26b4ef0,
+                                                   MainContextUse);
+        std::fprintf(stderr, "Gnm main context observer: %s\n", ok ? "on" : "unavailable");
+    }
     const char* env = std::getenv("BB_GNM_CENSUS");
     const char* observe_env = std::getenv("BB_GNM_OBSERVE");
-    observe = observe_env && observe_env[0] == '1';
+    const char* native_env = std::getenv("BB_GNM_NATIVE_ONLY");
+    native_trace_only = native_env && native_env[0] == '1';
+    observe = native_trace_only || (observe_env && observe_env[0] == '1');
     if (!observe && (!env || env[0] != '1')) {
         return;
     }
@@ -583,9 +706,20 @@ void PatchImage(unsigned char* image, std::uint64_t size) {
             ++mismatched;
             continue;
         }
+        // Earlier native hooks may already have restored this text page to RX.
+        const auto patch_begin = reinterpret_cast<u64>(fn) & ~(u64(page) - 1);
+        const auto patch_end = (reinterpret_cast<u64>(fn) + e.prologue_size + page - 1) &
+                               ~(u64(page) - 1);
+        if (mprotect(reinterpret_cast<void*>(patch_begin), patch_end - patch_begin,
+                     PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+            ++mismatched;
+            continue;
+        }
         fn[0] = 0xe9;
         std::memcpy(fn + 1, &to_stub, 4);
         std::memset(fn + 5, 0xcc, e.prologue_size - 5);
+        mprotect(reinterpret_cast<void*>(patch_begin), patch_end - patch_begin,
+                 Core::GuestCodeProtection());
         ++patched;
     }
     mprotect(stubs, code_bytes, PROT_READ | PROT_EXEC);
@@ -596,8 +730,66 @@ void PatchImage(unsigned char* image, std::uint64_t size) {
 } // namespace BbGnmHooks
 
 namespace BbGnmHooks {
+void ReportDriverWrites(std::uintptr_t begin, std::uint64_t bytes) {
+    if (!TraceDriverWrites()) return;
+    std::scoped_lock lock{driver_records_mutex};
+    std::vector<std::pair<u64, DriverRecord>> matching;
+    const auto overlaps = [&](const DriverRecord& record) {
+        return record.begin < begin + bytes && record.begin + record.bytes > begin;
+    };
+    const u64 first = driver_record_next > 65536 ? driver_record_next - 65536 : 0;
+    for (u64 i = driver_record_next; i > first; --i) {
+        const auto& record = driver_records[(i - 1) % 65536];
+        if (overlaps(record)) matching.emplace_back(i - 1, record);
+    }
+    for (auto* ring : native_records) {
+        std::scoped_lock ring_lock{ring->mutex};
+        const u64 oldest = ring->next > ring->records.size() ? ring->next - ring->records.size() : 0;
+        for (u64 i = ring->next; i > oldest; --i) {
+            const auto& record = ring->records[(i - 1) % ring->records.size()];
+            if (overlaps(record)) matching.emplace_back(i - 1, record);
+        }
+    }
+    std::sort(matching.begin(), matching.end(), [](const auto& a, const auto& b) {
+        return a.second.when > b.second.when;
+    });
+    unsigned shown = 0;
+    for (const auto& [number, record] : matching) {
+        if (shown == 24) break;
+        std::fprintf(stderr, "  Gnm %s write #%llu at %#llx +%llu bytes: %s (thread %d)\n",
+                     record.guest_fn ? "native" : "driver",
+                     (unsigned long long)number, (unsigned long long)record.begin,
+                     (unsigned long long)record.bytes,
+                     record.writer ? record.writer : "guest command buffer method", record.thread);
+        if (record.guest_fn) {
+            std::fprintf(stderr, "    function +%#llx caller +%#llx cb %#llx; at return: ",
+                         (unsigned long long)record.guest_fn, (unsigned long long)record.caller,
+                         (unsigned long long)record.cb);
+            if (record.bad_offset == ~u64(0)) {
+                std::fprintf(stderr, "packet boundaries valid\n");
+            } else {
+                std::fprintf(stderr, "INVALID +%#llx word %#x\n",
+                             (unsigned long long)record.bad_offset, record.bad_word);
+            }
+            std::fprintf(stderr, "    head:");
+            for (u64 k = 0; k < std::min<u64>(16, record.bytes / 4); ++k)
+                std::fprintf(stderr, " %08x", record.head[k]);
+            std::fprintf(stderr, "\n");
+        }
+        ++shown;
+    }
+    if (!shown) std::fprintf(stderr, "  no recent Gnm driver writes overlap this window\n");
+}
+
 DriverWrite::~DriverWrite() {
-    if (!observe || !commands) {
+    if (commands && TraceDriverWrites()) {
+        std::scoped_lock lock{driver_records_mutex};
+        DriverRecord record{reinterpret_cast<u64>(commands), dwords * 4, writer};
+        record.thread = RecordThread();
+        record.when = RecordTime();
+        driver_records[driver_record_next++ % 65536] = record;
+    }
+    if (!observe || native_trace_only || !commands) {
         return;
     }
     // The written packets end where the space does or at the first zero dword (unused space).

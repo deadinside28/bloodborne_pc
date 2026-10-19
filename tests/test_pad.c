@@ -8,6 +8,11 @@ int bbgpu_overlay_captures_input(void) { return capture; }
 void bbgpu_mouse_take(double *dx, double *dy, int *up, int *down) { *dx=*dy=0; *up=*down=0; }
 int bbgpu_mouse_captured(void) { return 0; }
 void bbgpu_mouse_look_enable(int enabled) { (void)enabled; }
+void bbgpu_mouse_capture(void) {}
+int bbgpu_camera_look(float yaw, float pitch) { (void)yaw; (void)pitch; return 0; }
+void bbgpu_filter_pad(uint32_t *buttons, const uint8_t *sticks) { (void)buttons; (void)sticks; }
+void runtime_re_watch_tick(const void *pad_buffer, uint64_t reads) { (void)pad_buffer; (void)reads; }
+uintptr_t runtime_libc_base;
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -32,7 +37,8 @@ int main(void) {
     int config_fd=mkstemp(config);
     assert(config_fd>=0);
     const char controls[]="upscaler=fsr3\npad.cross=b\npad.circle=a\npad.r2=rightshoulder\n"
-                          "pad.r1=righttrigger\nkey.cross=X, Space\npad.bogus=a\n";
+                          "pad.r1=righttrigger\nkey.cross=X, Space\npad.bogus=a\n"
+                          "key.l3=Left Ctrl+C, Keypad +\n";
     assert(write(config_fd,controls,sizeof(controls)-1)==(ssize_t)(sizeof(controls)-1));
     close(config_fd);
     setenv("BB_CONFIG",config,1);
@@ -40,6 +46,23 @@ int main(void) {
     /* Only the virtual test controller is a gamepad, whatever is plugged in. */
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT,"0x1d50/0x6189");
     assert(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMEPAD));
+    /* The keyboard defaults: Escape the menu, R2 a Shift chord on the left button. */
+    bind_defaults();
+    assert(bindings[IN_OPTIONS].keys[0]==SDL_SCANCODE_ESCAPE && bindings[IN_OPTIONS].mods[0]<0);
+    assert(bindings[IN_R2].keys[0]==MOUSE_KEY+SDL_BUTTON_LEFT && bindings[IN_R2].mods[0]==SDL_SCANCODE_LSHIFT);
+    assert(bindings[IN_R1].keys[0]==MOUSE_KEY+SDL_BUTTON_LEFT && bindings[IN_R1].mods[0]<0);
+    /* A chord on the keyboard: C alone is R3, Ctrl+C is L3 and not R3 too. */
+    load_bindings();
+    assert(bindings[IN_L3].key_count==2 && bindings[IN_L3].keys[0]==SDL_SCANCODE_C &&
+           bindings[IN_L3].mods[0]==SDL_SCANCODE_LCTRL && bindings[IN_L3].keys[1]==SDL_SCANCODE_KP_PLUS &&
+           bindings[IN_L3].mods[1]<0);
+    {
+        bool keys[SDL_SCANCODE_COUNT]={0};
+        keys[SDL_SCANCODE_C]=true;
+        assert(key_down(keys,IN_R3) && !key_down(keys,IN_L3));
+        keys[SDL_SCANCODE_LCTRL]=true;
+        assert(key_down(keys,IN_L3) && !key_down(keys,IN_R3));
+    }
     assert(pad_init()==0 && pad_open(1,0,0,NULL)==1);
     PadData data;
     inject(path,"cross l3 touchpad_left");

@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// SOPP program flow: branches and waits are the CFG's (nothing to emit here); barriers, the PC
+// read, and geometry shader messages.
+#include "common/logging/log.h"
+#include "shader/frontend/translate/translate.h"
+
+namespace Shader::Gcn {
+
+void Translator::EmitFlowControl(const GcnInst& inst) {
+    switch (inst.opcode) {
+    case Opcode::S_BARRIER:
+        return S_BARRIER();
+    case Opcode::S_GETPC_B64:
+        return S_GETPC_B64(inst);
+    case Opcode::S_SENDMSG:
+        return S_SENDMSG(inst);
+    case Opcode::S_TTRACEDATA:
+    case Opcode::S_SETPRIO:
+    case Opcode::S_TRAP:
+        LOG_WARNING(Render_Vulkan, "{} instruction!", inst.opcode);
+        return;
+    case Opcode::S_SETPC_B64:
+    case Opcode::S_WAITCNT:
+    case Opcode::S_NOP:
+    case Opcode::S_ENDPGM:
+    case Opcode::S_CBRANCH_EXECZ:
+    case Opcode::S_CBRANCH_SCC0:
+    case Opcode::S_CBRANCH_SCC1:
+    case Opcode::S_CBRANCH_VCCNZ:
+    case Opcode::S_CBRANCH_VCCZ:
+    case Opcode::S_CBRANCH_EXECNZ:
+    case Opcode::S_BRANCH:
+        return;
+    default:
+        UNREACHABLE();
+    }
+}
+
+void Translator::S_BARRIER() {
+    ir.Barrier();
+}
+
+/// The PC as the program-relative address of the next instruction (GetPcLo; high half 0).
+void Translator::S_GETPC_B64(const GcnInst& inst) {
+    const IR::ScalarReg dst{inst.dst[0].code};
+    ir.SetScalarReg(dst, ir.GetPcLo(ir.Imm32(pc)));
+    ir.SetScalarReg(dst + 1, ir.Imm32(0));
+}
+
+void Translator::S_SENDMSG(const GcnInst& inst) {
+    const auto& simm = reinterpret_cast<const SendMsgSimm&>(inst.control.sopp.simm);
+    switch (simm.msg) {
+    case SendMsgSimm::Message::Gs:
+        switch (simm.op) {
+        case SendMsgSimm::GsOp::Nop:
+            break;
+        case SendMsgSimm::GsOp::Cut:
+            ir.EmitPrimitive();
+            break;
+        case SendMsgSimm::GsOp::Emit:
+            ir.EmitVertex();
+            break;
+        default:
+            UNREACHABLE();
+        }
+        break;
+    case SendMsgSimm::Message::GsDone:
+        break;
+    default:
+        UNREACHABLE();
+    }
+}
+
+} // namespace Shader::Gcn

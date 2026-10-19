@@ -13,6 +13,9 @@ void ParallelFor(std::size_t count, const std::function<void(std::size_t)>& task
 
 /// True when ParallelFor would split work (more than one thread available).
 bool Enabled();
+/// True on a copy thread (it copies guest memory for the GPU side: it must not wait for the
+/// GPU command thread, whose submissions wait for the copies).
+bool OnCopyThread();
 
 /// Starts `task` on a copy thread now (inline when the pool is disabled). Tasks run in any
 /// order and concurrently.

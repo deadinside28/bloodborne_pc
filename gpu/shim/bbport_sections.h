@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// bbport BB_SECTIONS=1 (diagnostics): time the draw recording thread spends per part of a draw,
-// inclusive (nested parts count in their parent too), printed with the draw pipe statistics.
+// bbport BB_SECTIONS=1 (diagnostics): time the draw recording thread (and, "A:" parts, the GPU
+// command thread) spends per part of a draw, inclusive (nested parts count in their parent too),
+// printed with the draw pipe statistics.
 #pragma once
 
 #include <array>
@@ -35,6 +36,17 @@ enum Id : std::uint32_t {
     ObtainStream,  ///< ObtainBuffer's copy of a small read-only buffer into the stream buffer
     ObtainVram,    ///< ObtainBuffer's VRAM path (SynchronizeMemory)
     LayerBind,     ///< BB_LAYER_MEMORY: BufferCache::LayerBind
+    // The GPU command thread (stage A), per draw handed over.
+    ADraw,         ///< Rasterizer::Draw: the pipeline selection and the hand-over
+    APipeline,     ///< PipelineCache::GetGraphicsPipeline
+    APrepared,     ///< its prepared-draw check (TryPreparedPipeline)
+    APostDraw,     ///< packing the draw for the recording thread
+    ARing,         ///< constants copied into the ring (CollectRingBindings)
+    ARingChecks,   ///< its checks of each buffer (GPU-written, pending writes, VRAM copies)
+    ARingCopy,     ///< its copies (memcpy and flush)
+    ARingSharp,    ///< its V# reads and range clamps
+    ARingNote,     ///< its pending read notes (NotePendingRead)
+    ADecode,       ///< decoding a whole submission (everything of stage A)
     Count,
 };
 inline constexpr const char* Names[Count] = {
@@ -43,8 +55,12 @@ inline constexpr const char* Names[Count] = {
     "emit vertex",  "dynamic",     "dispatch",      "HLE shader",   "ObtainBuffer",
     "flush",        "motion",      "descriptors",   "kick",         "preupload",
     "EnsureResident", "stream copy", "VRAM path", "layer bind",
+    "A: draw", "A: pipeline", "A: prepared", "A: post", "A: ring", "A: ring checks",
+    "A: ring copy", "A: ring sharp", "A: ring note", "A: decode",
 };
 inline std::array<std::atomic<std::uint64_t>, Count> cycles{};
+/// Constant buffers stage A looked at and bytes it copied into the ring (with the sections).
+inline std::atomic<std::uint64_t> ring_buffers{0}, ring_copies{0}, ring_bytes{0};
 
 inline bool Enabled() {
     static const bool on = [] {
@@ -53,11 +69,14 @@ inline bool Enabled() {
     }();
     return on;
 }
-/// Set on the draw recording thread (DrawPipe::Run): only its time is counted.
+/// Set on the draw recording thread (DrawPipe::Run) and the GPU command thread: only their time
+/// is counted.
 inline thread_local bool recording_thread = false;
+inline thread_local bool command_thread = false;
 
 struct Scope {
-    explicit Scope(Id id_) : id{id_}, start{Enabled() && recording_thread ? __rdtsc() : 0} {}
+    explicit Scope(Id id_)
+        : id{id_}, start{Enabled() && (recording_thread || command_thread) ? __rdtsc() : 0} {}
     ~Scope() {
         if (start) {
             cycles[id].fetch_add(__rdtsc() - start, std::memory_order_relaxed);

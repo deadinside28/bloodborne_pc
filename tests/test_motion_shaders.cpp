@@ -5,8 +5,8 @@
 #include <filesystem>
 #include <fstream>
 #include <setjmp.h>
-#include "shader_recompiler/backend/spirv/emit_spirv.h"
-#include "shader_recompiler/ir/ir_emitter.h"
+#include "shader/backend/spirv/emit_spirv.h"
+#include "shader/ir/ir_emitter.h"
 
 
 int main(int argc, char** argv) {
@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
                 runtime.hw.vs.motion_vectors = motion;
             } else {
                 runtime.hw.fs.motion_vectors = motion;
-                runtime.hw.fs.color_buffers[0].num_format = AmdGpu::NumberFormat::Float;
+                runtime.hw.fs.color_buffers[0].num_format = ::Gcn::NumberFormat::Float;
             }
             Common::ObjectPool<IR::Inst> pool;
             IR::Block block(pool);

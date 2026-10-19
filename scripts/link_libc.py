@@ -7,6 +7,7 @@ import collections
 import hashlib
 import json
 from pathlib import Path
+import re
 import struct
 from prepare import parse_self, span, unpack
 
@@ -59,7 +60,10 @@ def module(path):
         n, info, other, section, value, size = unpack('<IBBHQQ', table, pos)
         name = string(n)
         symbols.append(dict(name=name, type=info & 15, binding=info >> 4, section=section,
-                            value=value, size=size, identity=identity(name) if name else None))
+                            value=value, size=size,
+                            # Older SDKs' modules also carry local symbols under plain names
+                            # (__start__Ztext): not NID-encoded, never linked against.
+                            identity=identity(name) if name.count('#') == 2 else None))
     relocations = []
     for ot, st in ((0x61000029, 0x6100002d), (0x6100002f, 0x61000031)):
         table = span(blob, tags[ot], tags[st])
@@ -157,21 +161,20 @@ def link(game, out):
         if identity in exports:
             s = exports[identity]
             bindings.append((index,base+s['value'],2 if s['type']==1 else 1))
-    # The eboot reads its thread pointer with `mov rax, fs:[0]` (initial-exec
-    # TLS). glibc owns FS on Linux, so rewrite the segment prefix to GS; the
-    # runtime points GS at each guest thread's TCB. Only executable eboot
-    # segments are scanned, and only this exact 9-byte instruction.
-    fs_load = bytes.fromhex('64488b042500000000')
+    # The eboot reads its thread pointer with `mov r64, fs:[0]` (initial-exec
+    # TLS), into any register. glibc owns FS on Linux, so rewrite the segment
+    # prefix to GS; the runtime points GS at each guest thread's TCB. Only
+    # executable eboot segments are scanned, and only these 9-byte instructions
+    # (FS, REX.W(+R), MOV r64 r/m64, ModRM reg/[SIB], SIB disp32, disp 0).
+    fs_load = re.compile(rb'\x64[\x48\x4c]\x8b[\x04\x0c\x14\x1c\x24\x2c\x34\x3c]\x25\x00\x00\x00\x00')
     patched = 0
     for p in main['ph']:
         if p['type'] != 1 or not p['flags'] & 1:
             continue
         start, end = p['vaddr'], p['vaddr'] + p['filesz']
-        at = image.find(fs_load, start, end)
-        while at >= 0:
-            image[at] = 0x65
+        for match in fs_load.finditer(image, start, end):
+            image[match.start()] = 0x65
             patched += 1
-            at = image.find(fs_load, at + len(fs_load), end)
     main_tls = next((p for p in main['ph'] if p['type']==7), None)
     main_tls_values = (main_tls['vaddr'], main_tls['filesz'], main_tls['memsz'], main_tls['align']) if main_tls else (0,0,0,0)
     if main_tls and (main_tls['filesz'] > main_tls['memsz'] or main_tls['memsz'] > 1024*1024

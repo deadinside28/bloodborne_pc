@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport gcn isa: decoding GCN3 instructions.
+#pragma once
+
+#include "gcn/isa.h"
+
+namespace GcnIsa {
+
+/// Decodes the instruction at `code` and advances `code` past it (literals and SDWA/DPP dwords
+/// included).
+GcnInst Decode(const u32*& code);
+
+/// Whether `opcode` (VOP2 or VOP3) also writes a scalar carry or a VCC result (VOP3B).
+constexpr bool IsVop3B(Opcode opcode) noexcept {
+    switch (opcode) {
+    case Opcode::V_ADD_I32:
+    case Opcode::V_ADDC_U32:
+    case Opcode::V_SUB_I32:
+    case Opcode::V_SUBB_U32:
+    case Opcode::V_SUBREV_I32:
+    case Opcode::V_SUBBREV_U32:
+    case Opcode::V_DIV_SCALE_F32:
+    case Opcode::V_DIV_SCALE_F64:
+    case Opcode::V_MAD_U64_U32:
+    case Opcode::V_MAD_I64_I32:
+        return true;
+    default:
+        return false;
+    }
+}
+
+} // namespace GcnIsa

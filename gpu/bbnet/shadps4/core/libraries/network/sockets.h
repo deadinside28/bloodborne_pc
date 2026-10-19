@@ -46,6 +46,7 @@ typedef int net_socket;
 #endif
 #include <condition_variable>
 #include <deque>
+#include <string_view>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -238,5 +239,12 @@ int P2PControlSendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port);
 int P2PControlRecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port);
 int P2PMatching2SendTo(const void* data, u32 len, u32 dest_addr, u16 dest_port);
 int P2PMatching2RecvFrom(void* buf, u32 len, u32* from_addr, u16* from_port);
+
+// BBSC relay fallback (2026-10-12): a peer that sends nothing back directly within 2 s is reached
+// through the game server's UDP relay (port 3478 on the shadNet server's address), by online id.
+void P2PRelaySetServer(u32 addr_nbo);
+void P2PRelaySetLocalId(std::string_view online_id);
+void P2PRelaySetSelfEndpoint(u32 addr_nbo, u16 port_nbo); // our public endpoint (STUN echo)
+void P2PRelayRememberPeer(std::string_view online_id, u32 addr_nbo, u16 port_nbo);
 
 } // namespace Libraries::Net

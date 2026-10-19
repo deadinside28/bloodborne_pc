@@ -14,12 +14,16 @@ import collections
 import hashlib
 import json
 from pathlib import Path
+import re
 import struct
 from prepare import parse_self, span, unpack
+import import_scopes
 from link_libc import encode_id
 
 DEFAULT_MODULES = ('libc.prx', 'libSceFios2.prx')
-FS_LOAD = bytes.fromhex('64488b042500000000')  # mov rax, fs:[0]
+# `mov r64, fs:[0]` (the thread pointer, initial-exec TLS): FS prefix, REX.W (+R for r8-r15),
+# MOV r64, r/m64, ModRM with the register in reg and an absolute [disp32] SIB, SIB 0x25, disp 0.
+FS_LOAD = re.compile(rb'\x64[\x48\x4c]\x8b[\x04\x0c\x14\x1c\x24\x2c\x34\x3c]\x25\x00\x00\x00\x00')
 
 
 def module(path):
@@ -75,17 +79,16 @@ def module(path):
 
 
 def patch_fs_loads(image, ph, base):
-    """Rewrite initial-exec `mov rax, fs:[0]` to GS: glibc owns FS on Linux."""
+    """Rewrite initial-exec `mov r64, fs:[0]` to GS: glibc owns FS on Linux. Games load the thread
+    pointer into any register (Bloodborne only into rax; another game also rcx, rbx, r14, ...)."""
     patched = 0
     for p in ph:
         if p['type'] != 1 or not p['flags'] & 1:
             continue
         start, end = base + p['vaddr'], base + p['vaddr'] + p['filesz']
-        at = image.find(FS_LOAD, start, end)
-        while at >= 0:
-            image[at] = 0x65
+        for match in FS_LOAD.finditer(image, start, end):
+            image[match.start()] = 0x65
             patched += 1
-            at = image.find(FS_LOAD, at + len(FS_LOAD), end)
     return patched
 
 
@@ -213,6 +216,10 @@ def link(game, out, module_names=DEFAULT_MODULES):
                      or main_tls['vaddr'] + main_tls['filesz'] > size):
         raise ValueError('unsupported eboot TLS layout')
     procparam = next(p for p in main['ph'] if p['type'] == 0x61000001)
+    # One spelling for every game's imports (the runtime's tables: import_scopes.py).
+    names = [import_scopes.canonical(name, main['libraries'], main['modules']) for name in names]
+    unresolved = [import_scopes.canonical(name, main['libraries'], main['modules'])
+                  for name in unresolved]
     with (out / 'boot-linked.bin').open('wb') as f:
         f.write(struct.pack('<8s6Q', b'BBPROBE5', len(image), entry, len(segments), len(relocs), len(names), flags))
         f.write(struct.pack('<Q', procparam['vaddr']))

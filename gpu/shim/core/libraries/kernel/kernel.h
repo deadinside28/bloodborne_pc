@@ -1,7 +1,4 @@
-// bbport: the parts of shadPS4's kernel.h used by vendored libraries.
+// bbport: libkernel declarations for the remaining vendored libraries (see platform/kernel.h).
 #pragma once
-#include "common/types.h"
-#include "core/libraries/kernel/orbis_error.h"
-namespace Libraries::Kernel {
-int* PS4_SYSV_ABI __Error();
-} // namespace Libraries::Kernel
+#include "platform/errors.h"
+#include "platform/kernel.h"

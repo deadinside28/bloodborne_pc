@@ -11,7 +11,6 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
-#ifndef _WIN32
 #include <dirent.h>
 #include <errno.h>
 #include <ftw.h>
@@ -141,7 +140,7 @@ static int read_param(const char *meta, Param *p) {
     if (!f) return -1;
     size_t n=fread(p,sizeof(*p),1,f); fclose(f);
     struct stat st;
-    if (!stat(path,&st)) p->mtime=st.st_mtime;
+    if (!stat(path,&st)) p->mtime=st.st_mtim.tv_sec;
     return n==1 ? 0 : -1;
 }
 static int remove_entry(const char *path, const struct stat *st, int flag, struct FTW *ftw) {
@@ -182,7 +181,9 @@ static int32_t mount(int32_t user, const char *title, const DirName *dir, uint32
     snprintf(point,sizeof(point),"/savedata%d",slot&15);
     memcpy(result->point.data,point,strlen(point)+1);
     result->status=exists ? 0 : 1; /* CREATED */
-    runtime_file_mount(result->point.data,host);
+    if (runtime_file_mount(result->point.data,host)) {
+        fprintf(stderr,"Runtime: save data '%s' could not be mounted: mount table full\n",dir->data);
+    }
     ++mounts_done;
     pthread_mutex_unlock(&lock);
     printf("Runtime: save data '%s' mounted at %s (%s%s)\n",dir->data,result->point.data,
@@ -359,8 +360,3 @@ static const RuntimeExport exports[]={
 };
 uintptr_t runtime_savedata_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
 void runtime_savedata_report(void) { printf("Runtime: save data mounts=%zu, memory writes=%zu\n",mounts_done,memory_writes); }
-#else
-void runtime_savedata_configure(const char *title) { (void)title; }
-uintptr_t runtime_savedata_resolve(const char *name) { (void)name; return 0; }
-void runtime_savedata_report(void) {}
-#endif

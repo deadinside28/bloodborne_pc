@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifndef _WIN32
 #include <pthread.h>
 #include <errno.h>
 #include <time.h>
@@ -37,7 +36,7 @@ static void host_check(int e) {
 }
 static uint64_t now_ns(void) {
     struct timespec t;
-    if (clock_gettime(CLOCK_MONOTONIC,&t)) { perror("clock_gettime"); exit(1); }
+    if (clock_gettime(RUNTIME_COND_CLOCK,&t)) { perror("clock_gettime"); exit(1); }
     return (uint64_t)t.tv_sec*1000000000+(uint64_t)t.tv_nsec;
 }
 static ABI int32_t sem_create(uint32_t *out,const char *name,uint32_t attr,
@@ -70,7 +69,7 @@ static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) 
         Waiter w={.need=need};
         pthread_condattr_t attr;
         host_check(pthread_condattr_init(&attr));
-        host_check(pthread_condattr_setclock(&attr,CLOCK_MONOTONIC));
+        host_check(pthread_condattr_setclock(&attr,RUNTIME_COND_CLOCK));
         host_check(pthread_cond_init(&w.event,&attr));
         host_check(pthread_condattr_destroy(&attr));
         Waiter **tail=&s->first;
@@ -164,12 +163,12 @@ unsigned runtime_sema_waiters(uint32_t id) {
     return n;
 }
 uintptr_t runtime_sema_resolve(const char *name) {
-    if (!strcmp(name,"188x57JYp0g#p#J")) return (uintptr_t)sem_create;
-    if (!strcmp(name,"Zxa0VhQVTsk#p#J")) return (uintptr_t)sem_wait;
-    if (!strcmp(name,"4czppHBiriw#p#J")) return (uintptr_t)sem_signal;
-    if (!strcmp(name,"12wOHk8ywb0#p#J")) return (uintptr_t)sem_poll;
-    if (!strcmp(name,"4DM06U2BNEY#p#J")) return (uintptr_t)sem_cancel;
-    if (!strcmp(name,"R1Jvn8bSCW8#p#J")) return (uintptr_t)sem_delete;
+    if (runtime_nid_is(name, "188x57JYp0g")) return (uintptr_t)sem_create;
+    if (runtime_nid_is(name, "Zxa0VhQVTsk")) return (uintptr_t)sem_wait;
+    if (runtime_nid_is(name, "4czppHBiriw")) return (uintptr_t)sem_signal;
+    if (runtime_nid_is(name, "12wOHk8ywb0")) return (uintptr_t)sem_poll;
+    if (runtime_nid_is(name, "4DM06U2BNEY")) return (uintptr_t)sem_cancel;
+    if (runtime_nid_is(name, "R1Jvn8bSCW8")) return (uintptr_t)sem_delete;
     return 0;
 }
 void runtime_sema_report(void) {
@@ -178,8 +177,3 @@ void runtime_sema_report(void) {
            created,deleted,acquired,signaled,timed_out);
     pthread_mutex_unlock(&lock);
 }
-#else
-uintptr_t runtime_sema_resolve(const char *name) { (void)name; return 0; }
-void runtime_sema_report(void) { puts("Runtime: Windows semaphore backend not implemented"); }
-unsigned runtime_sema_waiters(uint32_t id) { (void)id; return 0; }
-#endif

@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport buffers: lists the pages shaders reached through device addresses the buffer cache does
+// not hold (their bits set in the fault buffer, one per page) and clears the bits. Output: a count
+// in the first entry, then up to MAX_FAULTS page addresses.
+#version 450
+#extension GL_ARB_gpu_shader_int64 : enable
+
+layout(constant_id = 0) const uint PAGE_BITS = 12;
+layout(constant_id = 1) const uint MAX_FAULTS = 1024;
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) buffer Faults { uint fault_bits[]; };
+layout(std430, binding = 1) buffer Pages { uint64_t pages[]; };
+layout(std430, binding = 1) buffer Count { uint count; };
+
+void main() {
+    const uint word_index = gl_GlobalInvocationID.x;
+    uint word = fault_bits[word_index];
+    fault_bits[word_index] = 0u;
+    for (; word != 0u; word &= word - 1u) {
+        const uint slot = atomicAdd(count, 1u) + 1u;
+        if (slot >= MAX_FAULTS) {
+            return;
+        }
+        pages[slot] = uint64_t(word_index * 32u + findLSB(word)) << PAGE_BITS;
+    }
+}

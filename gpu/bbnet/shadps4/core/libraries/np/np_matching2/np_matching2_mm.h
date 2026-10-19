@@ -91,4 +91,8 @@ u16 GetMmServerUdpPort();
 
 bool RequestSignalingInfos(std::string_view target_online_id, u32* out_addr, u16* out_port);
 
+// BBSC experimental re-insertion: re-delivers member-joined (optionally member-left first) and
+// signaling-established callbacks for every other member of the current room. Returns the count.
+int BbscReplayRoomMembers(bool announce_left);
+
 } // namespace Libraries::Np::NpMatching2

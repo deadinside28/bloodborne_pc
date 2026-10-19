@@ -15,6 +15,7 @@
 #include "core/libraries/kernel/process.h"
 #include "core/libraries/network/net.h"
 #include "core/libraries/network/net_util.h"
+#include "core/libraries/network/sockets.h"
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_signaling/np_signaling_state.h"
 #include "core/libraries/np/np_signaling/np_signaling_stubs.h"
@@ -702,6 +703,7 @@ void DispatchPeerActivatedEvent(s32 conn_id) {
 
 void CloseConnectionAndDispatchDead(s32 conn_id, s32 error_code) {
     bool fire = false;
+    std::string peer;
     {
         SignalingMutexGuard lock;
         const auto it = g_connections.find(conn_id);
@@ -712,14 +714,19 @@ void CloseConnectionAndDispatchDead(s32 conn_id, s32 error_code) {
         if (ci.state == ConnState::Inactive || ci.dead_fired) {
             return;
         }
+        peer = OnlineIdToString(ci.online_id);
         SetConnStateLocked(ci, ConnState::Inactive);
         ci.dead_fired = true;
         CancelAllCalloutsLocked(ci);
         fire = true;
     }
     if (fire) {
-        LOG_DEBUG(Lib_NpSignaling, "Connection {} -> DEAD (errorCode={:#x})", conn_id,
-                  static_cast<u32>(error_code));
+        LOG_INFO(Lib_NpSignaling, "Connection {} to '{}' -> DEAD (errorCode={:#x}{})", conn_id,
+                 peer, static_cast<u32>(error_code),
+                 static_cast<u32>(error_code) == static_cast<u32>(ORBIS_NP_SIGNALING_ERROR_TIMEOUT) ? ": no answer"
+                 : static_cast<u32>(error_code) == static_cast<u32>(ORBIS_NP_SIGNALING_ERROR_TERMINATED_BY_PEER) ? ": closed by the peer"
+                 : static_cast<u32>(error_code) == static_cast<u32>(ORBIS_NP_SIGNALING_ERROR_TERMINATED_BY_MYSELF) ? ": closed by us"
+                                                                                : "");
         DispatchConnectionEvent(conn_id, ORBIS_NP_SIGNALING_EVENT_DEAD, error_code);
         SignalingMutexGuard lock;
         RemoveConnectionLocked(conn_id);
@@ -787,8 +794,9 @@ void EstablishConnection(s32 conn_id, bool peer_activated_hint) {
         Stubs::ControlSendTo(&established_pkt, sizeof(established_pkt), peer_addr, peer_port);
     }
     if (first_establish) {
-        LOG_DEBUG(Lib_NpSignaling, "Connection {} -> ESTABLISHED ({})", conn_id,
-                  fire_established ? "owner" : "answerer/non-owner");
+        LOG_INFO(Lib_NpSignaling, "Connection {} -> ESTABLISHED ({}) peer at {:#x}:{}", conn_id,
+                 fire_established ? "owner" : "answerer/non-owner", peer_addr,
+                 sceNetNtohs(peer_port));
     }
     if (fire_peer_activated) {
         DispatchPeerActivatedEvent(conn_id);
@@ -898,6 +906,49 @@ void StartHandshakeInitiator(OrbisNpSignalingConnectionId conn_id) {
     }
 }
 
+void BeginRevalidationLocked(OrbisNpSignalingConnectionId conn_id) {
+    const auto it = g_connections.find(conn_id);
+    if (it == g_connections.end()) {
+        return;
+    }
+    ConnectionInfo& ci = it->second;
+    ci.revalidating = true;
+    ci.revalidate_since_us = NowUs();
+    // The events fire again once the peer answers (EstablishConnection's first-establish part).
+    ci.established_fired = false;
+    ci.established_event_fired = false;
+    ci.mutual_fired = false; // peer_established stays: a peer that answers is still established
+    if (ci.addr != 0 && ci.port != 0) {
+        SignalingHandshake check = MakeHandshakeLocked(ci, HandshakeKind::Check);
+        check.nonce = static_cast<u64>(ci.revalidate_since_us);
+        SendHandshakeLocked(ci, check);
+    }
+    ArmStepCalloutLocked(ci, 1'000'000);
+    LOG_INFO(Lib_NpSignaling, "Connection {} to '{}': activated again after a deactivate - "
+                              "checking the peer is still there",
+             conn_id, OnlineIdToString(ci.online_id));
+}
+
+// A peer that started its connection over (it left and came back, or restarted the game) while
+// ours still counts as established: start the handshake again as if new. Before (2026-10-12
+// relay test), its Offers hit the established connection, got no answer and every rejoin died.
+static void RestartHandshakeLocked(ConnectionInfo& ci, u32 new_peer_conn, const char* why) {
+    LOG_INFO(Lib_NpSignaling,
+             "Connection {} to '{}': {} (its connection {} -> {}) - handshake again", ci.conn_id,
+             OnlineIdToString(ci.online_id), why, ci.peer_conn_id, new_peer_conn);
+    CancelAllCalloutsLocked(ci);
+    ci.established_fired = false;
+    ci.established_event_fired = false;
+    ci.mutual_fired = false;
+    ci.peer_established = false;
+    ci.peer_activated_fired = false;
+    ci.revalidating = false;
+    ci.deactivate_lingering = false;
+    ci.peer_conn_id = new_peer_conn;
+    SetConnStateLocked(ci, ConnState::WaitOffer);
+    ArmTimeoutCalloutLocked(ci, kHandshakeConnectTimeoutMs * 1000);
+}
+
 void QueueActivationLocked(OrbisNpSignalingConnectionId conn_id, std::string_view peer_online_id,
                            bool start_handshake) {
     g_pending_activations.push_back({conn_id, std::string(peer_online_id), start_handshake});
@@ -943,7 +994,8 @@ void ProcessPendingActivations() {
             it->second.addr = peer_addr;
             it->second.port = peer_port;
             SendActivationRequestLocked(it->second);
-            already_established = it->second.state == ConnState::Established;
+            already_established =
+                it->second.state == ConnState::Established && !it->second.revalidating;
             LOG_INFO(Lib_NpSignaling, "connection {} sent local activation to '{}' at {:#x}:{}{}",
                      act.conn_id, act.peer_online_id, peer_addr, sceNetNtohs(peer_port),
                      act.start_handshake ? "" : " (existing connection)");
@@ -987,9 +1039,21 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port, const SignalingHandshak
 
         if (kind == HandshakeKind::Offer) {
             if (conn_id == 0) {
+                LOG_INFO(Lib_NpSignaling,
+                         "Handshake Offer from '{}' (its connection {}) ignored: no connection to "
+                         "it here (not activated on this side yet)",
+                         from_id, pkt.from_conn_id);
                 return;
             }
             ConnectionInfo& ci = g_connections[conn_id];
+            if (ci.state == ConnState::Established && pkt.from_conn_id != 0 &&
+                (ci.revalidating ||
+                 (ci.peer_conn_id != 0 && pkt.from_conn_id != ci.peer_conn_id))) {
+                RestartHandshakeLocked(ci, pkt.from_conn_id, "the peer started over");
+            }
+            if (pkt.from_conn_id != 0) {
+                ci.peer_conn_id = pkt.from_conn_id;
+            }
             ci.addr = from_addr;
             ci.port = from_port;
             ci.peer_activated = true;
@@ -1010,6 +1074,9 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port, const SignalingHandshak
             return;
         } else if (kind == HandshakeKind::Accept) {
             ConnectionInfo& ci = g_connections[conn_id];
+            if (pkt.from_conn_id != 0 && ci.state != ConnState::Established) {
+                ci.peer_conn_id = pkt.from_conn_id;
+            }
             ci.peer_activated = true;
             if (pkt.mapped_addr != 0) {
                 ci.addr = pkt.mapped_addr;
@@ -1028,6 +1095,9 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port, const SignalingHandshak
             }
         } else if (kind == HandshakeKind::Check) {
             ConnectionInfo& ci = g_connections[conn_id];
+            if (ci.peer_conn_id == 0 && pkt.from_conn_id != 0) {
+                ci.peer_conn_id = pkt.from_conn_id;
+            }
             reply = MakeHandshakeLocked(ci, HandshakeKind::CheckAck);
             reply.nonce = pkt.nonce;
             send_reply = true;
@@ -1041,7 +1111,15 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port, const SignalingHandshak
             if (rtt_us >= 0) {
                 RecordRttSampleLocked(conn_id, static_cast<s32>(rtt_us));
             }
-            if (ci.state != ConnState::Established) {
+            if (ci.peer_conn_id == 0 && pkt.from_conn_id != 0) {
+                ci.peer_conn_id = pkt.from_conn_id;
+            }
+            if (ci.revalidating) {
+                ci.revalidating = false;
+                LOG_INFO(Lib_NpSignaling, "Connection {} to '{}': the peer answered - kept",
+                         conn_id, from_id);
+                establish_conn = conn_id;
+            } else if (ci.state != ConnState::Established) {
                 establish_conn = conn_id;
             }
         }
@@ -1095,10 +1173,29 @@ static void PS4_SYSV_ABI StepCalloutHandler(u64 arg) {
         ci.step_callout_armed = false;
         const s64 now_us = NowUs();
 
-        if (ci.state == ConnState::Established) {
+        if (ci.state == ConnState::Established && ci.revalidating) {
+            if (now_us - ci.revalidate_since_us >= 10'000'000) {
+                LOG_INFO(Lib_NpSignaling,
+                         "Connection {} to '{}': no answer in 10 s after activating it again - "
+                         "the peer is gone",
+                         conn_id, OnlineIdToString(ci.online_id));
+                liveness_dead = true;
+            } else {
+                if (ci.addr != 0 && ci.port != 0) {
+                    SignalingHandshake pkt = MakeHandshakeLocked(ci, HandshakeKind::Check);
+                    pkt.nonce = static_cast<u64>(now_us);
+                    SendHandshakeLocked(ci, pkt);
+                }
+                ArmStepCalloutLocked(ci, 1'000'000);
+            }
+        } else if (ci.state == ConnState::Established) {
             if (!ci.deactivate_lingering && ci.addr != 0 && ci.port != 0) {
                 if (ci.last_peer_rx_us != 0 &&
                     now_us - ci.last_peer_rx_us >= kEstablishedLivenessTimeoutMs * 1000) {
+                    LOG_INFO(Lib_NpSignaling,
+                             "Connection {} to '{}': nothing heard for {} s - the peer is gone",
+                             conn_id, OnlineIdToString(ci.online_id),
+                             (now_us - ci.last_peer_rx_us) / 1'000'000);
                     liveness_dead = true;
                 } else {
                     SignalingHandshake pkt = MakeHandshakeLocked(ci, HandshakeKind::Check);
@@ -1240,6 +1337,21 @@ void HandleControlPacket(u32 from_addr, u16 from_port, const SignalingControl& p
                          from_id, conn_id);
             }
             ConnectionInfo& ci = g_connections[conn_id];
+            if (ci.state == ConnState::Established && pkt.from_conn_id != 0 &&
+                ci.peer_conn_id != 0 && pkt.from_conn_id != ci.peer_conn_id) {
+                // It started over and waits for our Offer (we were the initiator before).
+                RestartHandshakeLocked(ci, pkt.from_conn_id, "activation request on a new connection");
+                start_handshake_conn = conn_id;
+            } else {
+                LOG_INFO(Lib_NpSignaling,
+                         "Control: ActivationRequest from '{}' (its connection {}) on connection {} "
+                         "(state {}{})",
+                         from_id, pkt.from_conn_id, conn_id, static_cast<s32>(ci.state),
+                         ci.revalidating ? ", checking the peer" : "");
+            }
+            if (pkt.from_conn_id != 0 && ci.state != ConnState::Established) {
+                ci.peer_conn_id = pkt.from_conn_id;
+            }
             ci.peer_activated = true;
             ci.addr = pkt.mapped_addr != 0 ? pkt.mapped_addr : from_addr;
             ci.port = from_port;
@@ -1336,6 +1448,7 @@ void SendStunPing(s32 ctx_id) {
     ping.cmd = 0x01;
     std::memcpy(ping.online_id, online_id.data, ORBIS_NP_ONLINEID_MAX_LENGTH);
     ping.local_ip = Stubs::AdvertisedAddr();
+    Net::P2PRelaySetLocalId(OnlineIdToString(online_id));
 
     LOG_DEBUG(Lib_NpSignaling, "ctxId={} online_id='{}' server={:#x}:{} local_ip={:#x}", ctx_id,
               OnlineIdToString(online_id), server_addr, sceNetNtohs(server_udp), ping.local_ip);

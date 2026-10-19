@@ -4,6 +4,7 @@
 // module's C interface (bbnet.h). From the Linux co-op fork of bbport, which took it from the
 // Windows port; the libraries are shadp2p's (a shadPS4 fork, GPL-2.0).
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -24,6 +25,7 @@
 #endif
 #include <windows.h>
 #else
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 
@@ -31,6 +33,15 @@
 #include "common/types.h"
 #include "core/emulator_settings.h"
 #include "core/bloodborne_re.h"
+#include "core/bbsc_cinematic.h"
+#include "bbgpu.h"
+#include <SDL3/SDL_events.h>
+#include "core/cpu_patches.h"
+#include "common/memory_patcher.h"
+#include "common/singleton.h"
+#include "core/bbsc_persistence.h"
+#include "core/file_format/psf.h"
+#include "games/game_profile.h"
 #include "core/debugger.h"
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/memory.h"
@@ -58,6 +69,7 @@
 #include "core/libraries/np/np_score/np_score.h"
 #include "core/libraries/np/np_signaling/np_signaling.h"
 #include "core/libraries/np/np_tus.h"
+#include "core/libraries/np/np_utility.h" // BBSC: sceNpLookupNpId online (3rd player and on)
 #include "core/libraries/np/np_web_api/np_web_api.h"
 #include "core/libraries/np/np_web_api2/np_web_api2.h"
 
@@ -318,29 +330,7 @@ s32 GetCurrentPid() {
 }
 } // namespace Core::Debugger
 
-namespace Core::Bloodborne {
-namespace {
-std::mutex placement_mutex;
-std::optional<std::string> placement;
-} // namespace
-std::optional<std::string> GetSeamlessHostPlacementHeader() {
-    std::scoped_lock lock{placement_mutex};
-    return placement;
-}
-bool SetSeamlessHostPlacementHeader(std::string_view value) {
-    if (value.empty() || value.size() > 4096) {
-        return false;
-    }
-    std::scoped_lock lock{placement_mutex};
-    placement = std::string{value};
-    return true;
-}
-void ClearSeamlessHostPlacementHeader() {
-    std::scoped_lock lock{placement_mutex};
-    placement.reset();
-}
-void TraceMatching2LeaveRoom(std::uintptr_t, std::uint64_t) {}
-} // namespace Core::Bloodborne
+// Core::Bloodborne: BBSC's seamless co-op (shadps4/core/bloodborne_re.cpp).
 
 // ---- Notifications (log only for now) ------------------------------------------------------------
 
@@ -448,6 +438,12 @@ private:
 namespace {
 void Configure(const char* app0, const char* serial, const char* title, const char* app_ver) {
     Core::Emulator::SetGame(app0, serial, title, app_ver);
+    // What BBSC reads of the game (param.sfo, the serial: shadPS4's PSF and memory patcher).
+    auto* psf = Common::Singleton<PSF>::Instance();
+    psf->app_ver = app_ver ? app_ver : "";
+    psf->title_id = serial ? serial : "";
+    psf->title = title ? title : "";
+    MemoryPatcher::g_game_serial = serial ? serial : "";
     const auto& ids = Common::ElfInfo::Instance().GetNpCommIds();
     std::printf("Co-op: %s, NP communication id %s%s\n", serial ? serial : "?",
                 ids.empty() ? "missing" : ids.front().c_str(),
@@ -484,6 +480,89 @@ extern "C" __attribute__((visibility("default"))) uintptr_t bbnet_resolve(const 
     return 0;
 }
 
+extern "C" __attribute__((visibility("default"))) void bbnet_image_ready(std::uint64_t base,
+                                                                        std::uint64_t size) {
+    MemoryPatcher::g_eboot_address = base;
+    MemoryPatcher::g_eboot_image_size = size;
+    // BBSC (Bloodborne seamless co-op): BB_BBSC=1 (the launcher's
+    // co-op switch). Its game code checks for CUSA03173 01.09; every retail Bloodborne runs the
+    // same 1.09 executable (gpu/games/bloodborne.cpp), and each of its sites is byte-checked.
+    const char* bbsc = std::getenv("BB_BBSC");
+    if (!bbsc || bbsc[0] != '1') {
+        return;
+    }
+    const Game::Profile* profile = Game::Active();
+    if (!profile || std::string_view{profile->name} != "Bloodborne") {
+        std::printf("BBSC: not Bloodborne: seamless co-op off\n");
+        return;
+    }
+    MemoryPatcher::g_game_serial = "CUSA03173";
+    // BBSC finds the save it backs up and journals in shadPS4's folders; the port's are
+    // <user>/savedata/<user id>/CUSA00207/SPRJ0005 (BBSC_SAVE_DIR: the folder of userdata0000..).
+    if (!std::getenv("BBSC_SAVE_DIR")) {
+        const char* user = std::getenv("BB_GPU_USER_DIR");
+        std::error_code error;
+        for (const auto& id : std::filesystem::directory_iterator(
+                 std::filesystem::path(user ? user : "user") / "savedata", error)) {
+            const auto folder = id.path() / "CUSA00207" / "SPRJ0005";
+            if (std::filesystem::is_directory(folder, error)) {
+                setenv("BBSC_SAVE_DIR", folder.c_str(), 0);
+                std::printf("BBSC: save folder %s\n", folder.c_str());
+                break;
+            }
+        }
+    }
+    // BBSC writes its byte patches straight into the game's code, and turns some on and off
+    // while the game runs (session teardown, the host's lamp): its code pages stay writable
+    // (shadPS4 maps them so; the port maps them read and execute).
+    unsigned writable = 0;
+    if (FILE* maps = std::fopen("/proc/self/maps", "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof(line), maps)) {
+            unsigned long long start = 0, end = 0;
+            char perms[5] = {};
+            if (std::sscanf(line, "%llx-%llx %4s", &start, &end, perms) != 3 || perms[2] != 'x') {
+                continue;
+            }
+            start = std::max<unsigned long long>(start, base);
+            end = std::min<unsigned long long>(end, base + size);
+            if (start < end) {
+                writable += mprotect(reinterpret_cast<void*>(start), end - start,
+                                     PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+                std::printf("BBSC: code %#llx-%#llx writable\n", start, end);
+            }
+        }
+        std::fclose(maps);
+    }
+    std::printf("BBSC: seamless co-op hooks for the image at %#llx (%u code mappings writable)\n",
+                static_cast<unsigned long long>(base), writable);
+    if (const char* probe = std::getenv("BB_BBSC_PROBE")) {
+        const unsigned long long at = std::strtoull(probe, nullptr, 0);
+        if (FILE* maps = std::fopen("/proc/self/maps", "r")) {
+            char line[512];
+            while (std::fgets(line, sizeof(line), maps)) {
+                unsigned long long a = 0, b = 0;
+                if (std::sscanf(line, "%llx-%llx", &a, &b) == 2 && at >= a && at < b) {
+                    std::printf("BBSC probe: %s", line);
+                }
+            }
+            std::fclose(maps);
+        }
+        std::fflush(stdout);
+        std::printf("BBSC probe: byte %#x\n", unsigned(*reinterpret_cast<volatile u8*>(at)));
+    }
+    // The cinematic camera (F1, keyboard and mouse): BBSC sees the window's events first.
+    if (Core::Bbsc::SwitchEnabled("SHADPS4_BBSC_CINEMATIC")) {
+        bbgpu_add_event_filter([](const void* event, void* window) -> int {
+            return Core::Bbsc::CinematicHandleEvent(*static_cast<const SDL_Event*>(event),
+                                                    static_cast<SDL_Window*>(window));
+        });
+    }
+    Core::Bloodborne::InstallSeamlessCoopPatches();
+    Core::Bbsc::InstallPersistentSessionPatches();
+    Core::Bloodborne::InstallReverseEngineeringTrace();
+}
+
 extern "C" __attribute__((visibility("default"))) int bbnet_init(const BbNetHost* host) {
     if (!host || host->abi != BBNET_ABI_VERSION || !host->thread_spawn || !host->thread_join) {
         std::printf("Online: the runtime and the online module are from different versions\n");
@@ -491,6 +570,11 @@ extern "C" __attribute__((visibility("default"))) int bbnet_init(const BbNetHost
     }
     g_host = *host;
     Configure(host->app0, host->serial, host->title, host->app_ver);
+    // BBSC patches the game's code, some of it while the game runs: from now on the port's own
+    // code patches (the GPU side's hooks go in meanwhile) leave it writable (bbnet_image_ready).
+    if (const char* bbsc = std::getenv("BB_BBSC"); bbsc && bbsc[0] == '1') {
+        Core::KeepGuestCodeWritable();
+    }
     Core::Loader::SymbolsResolver resolver;
     Core::Loader::SymbolsResolver* sym = &resolver;
     Libraries::Net::RegisterLib(sym);
@@ -508,6 +592,7 @@ extern "C" __attribute__((visibility("default"))) int bbnet_init(const BbNetHost
     Libraries::Np::NpScore::RegisterLib(sym);
     Libraries::Np::NpSignaling::RegisterLib(sym);
     Libraries::Np::NpTus::RegisterLib(sym);
+    Libraries::Np::NpUtility::RegisterLib(sym);
     Libraries::Np::NpWebApi::RegisterLib(sym);
     Libraries::Np::NpWebApi2::RegisterLib(sym);
     std::printf("Online: %zu network and PSN functions\n", g_symbols.size());

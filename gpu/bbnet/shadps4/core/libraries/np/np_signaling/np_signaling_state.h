@@ -17,6 +17,7 @@
 #include "core/libraries/kernel/threads.h"
 #include "core/libraries/np/np_common.h"
 #include "core/libraries/np/np_signaling/np_signaling.h"
+#include "core/libraries/np/np_signaling/np_signaling_bbsc.h"
 #include "core/libraries/np/np_types.h"
 
 namespace Libraries::Np::NpSignaling {
@@ -53,7 +54,17 @@ enum class SignalingPacketType : u8 {
     EchoPong = 0x06,
     Handshake = 0x07,
     Control = 0x10,
+    // BBSC, not part of the PS4 protocol: the host tells its co-op partners which map it is in,
+    // so a guest can follow it through a lamp warp. Bloodborne itself never carries this - when a
+    // host changes stage the game simply ends the session - so there is nothing to piggyback on.
+    // Only BBSC builds send it, and any other build drops it as an unknown packet.
+    BbscFollow = 0x20,
+    // BBSC: the host's event flags for the map block it is in, so a guest following it there loads
+    // the host's world state (bosses, doors, shortcuts) instead of whatever its own flags say.
+    // 0x21 is taken (Matching2 frames, see P2PTransport::ClassifyInternal).
+    BbscWorldFlags = 0x22,
 };
+static_assert(static_cast<u8>(SignalingPacketType::BbscWorldFlags) == kSignalingBbscWorldFlagsType);
 
 #pragma pack(push, 1)
 struct SignalingEchoPing {
@@ -109,6 +120,26 @@ struct SignalingControl {
     u16 reason = 0;
 };
 static_assert(sizeof(SignalingControl) == 0x32);
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+struct SignalingBbscFollow {
+    u8 magic[4] = {kSignalingMagic[0], kSignalingMagic[1], kSignalingMagic[2], kSignalingMagic[3]};
+    u8 type = static_cast<u8>(SignalingPacketType::BbscFollow);
+    u8 kind = 0; // 0: "I am the host, this is where I am"
+    u32 packed_map = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float heading = 0.0f;
+    u32 sequence = 0;
+    // The host's last lamp respawn point (global+0x1528), -1 if none. Added 2026-09-24: a dead
+    // guest respawns at the host's lamp. Older builds sent the 0x1E-byte packet without it.
+    s32 lamp_point = -1;
+};
+static_assert(sizeof(SignalingBbscFollow) == 0x22);
+inline constexpr size_t kSignalingBbscFollowV1Size = 0x1E;
+
 #pragma pack(pop)
 
 enum class ControlKind : u8 {
@@ -175,6 +206,14 @@ struct ConnectionInfo {
     NpCommon::OrbisNpCalloutEntry step_callout{};
     bool step_callout_armed = false;
     bool deactivate_lingering = false;
+
+    // BBSC rejoin fix (2026-10-12): the peer's connection id from its handshake packets - a new
+    // one on an established connection means the peer started over (left and came back).
+    u32 peer_conn_id = 0;
+    // Re-activated after a deactivate: established again only when the peer answers a Check
+    // (10 s, else DEAD) - a peer that had left must not keep the connection "active" forever.
+    bool revalidating = false;
+    s64 revalidate_since_us = 0;
 
     u32 echo_derived_value = 0;
 };
@@ -340,6 +379,9 @@ void HandleHandshakePacket(u32 from_addr, u16 from_port, const SignalingHandshak
 
 void ArmConnectTimeoutLocked(OrbisNpSignalingConnectionId conn_id);
 void ClearLingerAndTimeoutLocked(OrbisNpSignalingConnectionId conn_id);
+// BBSC rejoin fix: the game activates a connection it deactivated before - check the peer is
+// still there before it counts as established again.
+void BeginRevalidationLocked(OrbisNpSignalingConnectionId conn_id);
 
 void SendActivationRequestLocked(const ConnectionInfo& ci);
 

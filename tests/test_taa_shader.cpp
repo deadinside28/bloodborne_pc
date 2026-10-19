@@ -9,11 +9,11 @@
 #include <limits>
 #include <fstream>
 #include <vector>
-#include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/vk_scheduler.h"
-#include "video_core/texture_cache/image.h"
-#include "video_core/host_shaders/taa_comp.h"
-#include "video_core/host_shaders/taa_sharpen_comp.h"
+#include "vulkan/instance.h"
+#include "render/scheduler.h"
+#include "test_vk_image.h"
+#include "bbgpu/shaders/taa_comp.h"
+#include "bbgpu/shaders/taa_sharpen_comp.h"
 #include <vk_mem_alloc.h>
 
 int main(int argc, char** argv) {
@@ -27,12 +27,12 @@ int main(int argc, char** argv) {
     Scheduler scheduler(instance);
     // Odd dimensions and a pixel beyond 2000 exercise bounds and subpixel precision.
     constexpr u32 W = 2049, H = 7, N = W * H, X = 2010, center = 3 * W + X;
-    std::array<VideoCore::UniqueImage, 7> images;
+    std::array<TestImage, 7> images;
     std::array<vk::UniqueImageView, 7> views;
     for (u32 i = 0; i < images.size(); ++i) {
         const auto format = i != 4 && i != 6 ? vk::Format::eR32G32B32A32Sfloat
                                   : vk::Format::eR16G16B16A16Sfloat;
-        images[i] = VideoCore::UniqueImage(device, instance.GetAllocator());
+        images[i] = TestImage(device, instance.GetAllocator());
         images[i].Create({.imageType = vk::ImageType::e2D, .format = format,
             .extent = {W,H,1}, .mipLevels = 1, .arrayLayers = 1,
             .samples = vk::SampleCountFlagBits::e1, .tiling = vk::ImageTiling::eOptimal,

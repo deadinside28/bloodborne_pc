@@ -679,6 +679,7 @@ void SetMmShadNetClient(std::shared_ptr<ShadNet::ShadNetClient> client,
         NpSignaling::Stubs::SetPeerResolver(nullptr);
         NpSignaling::Stubs::SetMatching2Enabled(false);
         NpSignaling::Stubs::SetMmServerEndpoint(0, 0);
+        Net::P2PRelaySetServer(0);
         StopMatching2HandshakeThread();
         return;
     }
@@ -696,6 +697,8 @@ void SetMmShadNetClient(std::shared_ptr<ShadNet::ShadNetClient> client,
     NpSignaling::Stubs::SetPeerResolver(matching2_enabled ? RequestSignalingInfos : nullptr);
     NpSignaling::Stubs::SetMatching2Enabled(matching2_enabled);
     NpSignaling::Stubs::SetMmServerEndpoint(server_addr, server_udp_port);
+    // BBSC relay fallback: the game server's UDP relay runs on the shadNet server's address.
+    Net::P2PRelaySetServer(matching2_enabled ? server_addr : 0);
     if (matching2_enabled) {
         StartMatching2HandshakeThread();
     } else {
@@ -1235,8 +1238,76 @@ bool RequestSignalingInfos(std::string_view target_online_id, u32* out_addr, u16
     }
     *out_addr = addr_nbo;
     *out_port = Libraries::Net::sceNetHtons(port_host);
+    Net::P2PRelayRememberPeer(target_online_id, *out_addr, *out_port);
     LOG_DEBUG(Lib_NpMatching2, "'{}' -> {}:{}", target_online_id, addr_str, port_host);
     return true;
+}
+
+// BBSC (experimental, Phase 2): after Bloodborne keeps a session through a stage load, the reloaded
+// process has lost the partner's character. Re-deliver the room membership notifications that the
+// game originally used to insert the partner, built from the unchanged room cache. Nothing is sent
+// to shadNet and no cache, peer or signaling state is modified.
+int BbscReplayRoomMembers(bool announce_left) {
+    int replayed = 0;
+    const auto now = std::chrono::steady_clock::now();
+    for (u32 id = 1; id <= ContextManager::kMaxContexts; ++id) {
+        ContextObject* ctx = ContextManager::Instance().Get(static_cast<OrbisNpMatching2ContextId>(id));
+        if (!ctx || ctx->room_id == 0) {
+            continue;
+        }
+        const auto room_it = ctx->room_cache.find(ctx->room_id);
+        if (room_it == ctx->room_cache.end()) {
+            continue;
+        }
+        for (const auto& [member_id, member] : room_it->second.members) {
+            if (member_id == 0 || member_id == ctx->my_member_id) {
+                continue;
+            }
+            auto schedule_member_event = [&](OrbisNpMatching2Event event, OrbisNpMatching2Event event_a,
+                                             OrbisNpMatching2EventCause cause,
+                                             std::chrono::milliseconds delay) {
+                auto payload = std::make_shared<CallbackPayload>();
+                BuildMemberUpdate(*payload, room_it->second, member, cause, ctx->a_variant);
+                PendingEvent ev{};
+                ev.type = PendingEvent::ROOM_EVENT_CB;
+                ev.ctx_id = ctx->ctx_id;
+                ev.fire_at = now + delay;
+                ev.room_id = ctx->room_id;
+                ev.room_event = ctx->a_variant ? event_a : event;
+                ev.room_event_data = payload->room_event_data;
+                ev.request_payload_owner = std::move(payload);
+                ScheduleEvent(std::move(ev));
+            };
+
+            auto join_delay = std::chrono::milliseconds{0};
+            if (announce_left) {
+                schedule_member_event(ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_LEFT,
+                                      ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_LEFT_A,
+                                      ORBIS_NP_MATCHING2_EVENT_CAUSE_LEAVE_ACTION,
+                                      std::chrono::milliseconds{0});
+                join_delay = std::chrono::milliseconds{1500};
+            }
+            schedule_member_event(ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_JOINED,
+                                  ORBIS_NP_MATCHING2_ROOM_EVENT_MEMBER_JOINED_A,
+                                  static_cast<OrbisNpMatching2EventCause>(0), join_delay);
+
+            PendingEvent sig{};
+            sig.type = PendingEvent::SIGNALING_CB;
+            sig.ctx_id = ctx->ctx_id;
+            sig.fire_at = now + join_delay + std::chrono::milliseconds{500};
+            sig.room_id = ctx->room_id;
+            sig.member_id = member_id;
+            sig.sig_event = ORBIS_NP_MATCHING2_SIGNALING_EVENT_ESTABLISHED;
+            sig.error_code = ORBIS_OK;
+            ScheduleEvent(std::move(sig));
+
+            LOG_INFO(Lib_NpMatching2,
+                     "BBSC reinsert: replayed member {} ('{}') in room {} ctx {} (announce_left={})",
+                     member_id, member.np_id.handle.data, ctx->room_id, ctx->ctx_id, announce_left);
+            ++replayed;
+        }
+    }
+    return replayed;
 }
 
 } // namespace Libraries::Np::NpMatching2

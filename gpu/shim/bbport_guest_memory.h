@@ -9,7 +9,7 @@
 #pragma once
 
 #include <cstdint>
-#include "video_core/renderer_vulkan/vk_common.h"
+#include "vulkan/vk_common.h"
 
 namespace Vulkan {
 class Instance;

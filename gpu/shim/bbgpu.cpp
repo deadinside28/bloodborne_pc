@@ -1,8 +1,10 @@
 #include "bbport_write_log.h"
+#include "bbport_frame_rate.h"
 #include "bbport_game_menu.h"
 #include "bbport_gnm_hooks.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"
+#include "bbport_guest_hooks.h"
 #include "bbport_settings.h"
 #include "game_profile.h"
 #include "bbport_copy.h"
@@ -12,9 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
-#include <boost/asio/io_context.hpp>
 #include "common/polyfill_thread.h"
-#include "video_core/renderdoc.h"
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -23,16 +23,18 @@
 #include <vector>
 #include <SDL3/SDL.h>
 #include "../bbgpu.h"
+#include "platform/kernel/event_queue.h"
+#include "platform/videoout/videoout.h"
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/rdtsc.h"
-#include "core/libraries/kernel/orbis_error.h"
+#include "platform/errors.h"
 #include "core/libraries/libs.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "core/signals.h"
 #include "sdl_window.h"
-#include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "render/rasterizer.h"
 
 extern "C" {
 // runtime_memory.c
@@ -56,10 +58,8 @@ void runtime_memory_set_cpu_write_hook(RuntimeGpuRange hook);
 
 Frontend::WindowSDL* g_window = nullptr;
 
-namespace Libraries::GnmDriver { void RegisterLib(Core::Loader::SymbolsResolver* sym); }
-namespace Libraries::AvPlayer { void RegisterLib(Core::Loader::SymbolsResolver* sym); }
-namespace Libraries::VideoOut { void RegisterLib(Core::Loader::SymbolsResolver* sym); }
-namespace Libraries::Kernel { void RegisterEventQueue(Core::Loader::SymbolsResolver* sym); }
+namespace BbGnm { void RegisterLib(Core::Loader::SymbolsResolver* sym); }
+namespace BbAvPlayer { void RegisterLib(Core::Loader::SymbolsResolver* sym); }
 
 namespace {
 struct Symbol {
@@ -77,20 +77,7 @@ void SymbolsResolver::AddSymbol(const char* nid, const char* library, const char
 }
 } // namespace Core::Loader
 
-// ElfInfo's fields are private to Core::Emulator; the port fills them here.
 namespace Core {
-class Emulator {
-public:
-    static void FillElfInfo(const BbGpuConfig& config) {
-        auto& info = Common::ElfInfo::Instance();
-        info.initialized = true;
-        info.game_serial = config.serial ? config.serial : "UNKNOWN";
-        info.title = config.title ? config.title : "";
-        info.sdk_ver = config.sdk_version;
-        info.psf_attributes.raw = config.psf_attributes;
-    }
-};
-
 void MemoryManager::SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
     rasterizer = rasterizer_;
     // Existing guest mappings are replayed by the runtime when hooks are installed.
@@ -225,13 +212,13 @@ u64 PS4_SYSV_ABI sceKernelGetProcessTimeCounter() { return runtime_process_time_
 u64 PS4_SYSV_ABI sceKernelGetProcessTimeCounterFrequency() { return 1'000'000'000; }
 s32 PS4_SYSV_ABI sceKernelIsNeoMode() { return 0; } // base PS4
 s32 PS4_SYSV_ABI sceKernelGetCompiledSdkVersion(s32* ver) {
-    if (!ver) return ORBIS_KERNEL_ERROR_EINVAL;
+    if (!ver) return BbErr::KernelInvalid;
     *ver = s32(g_sdk_version);
-    return ORBIS_OK;
+    return BbErr::Ok;
 }
 s32 PS4_SYSV_ABI sceKernelUsleep(u32 microseconds) {
     std::this_thread::sleep_for(std::chrono::microseconds(microseconds));
-    return ORBIS_OK;
+    return BbErr::Ok;
 }
 } // namespace Libraries::Kernel
 
@@ -271,7 +258,9 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
 #endif
     g_sdk_version = config->sdk_version;
     if (config->user_dir) setenv("BB_GPU_USER_DIR", config->user_dir, 0);
-    Core::Emulator::FillElfInfo(*config);
+    Common::ElfInfo::Instance().Set(config->serial ? config->serial : "UNKNOWN",
+                                    config->title ? config->title : "", config->sdk_version,
+                                    config->psf_attributes);
     const std::string title = config->title ? config->title : "Bloodborne";
     const s32 width = config->width, height = config->height;
     g_window_thread = std::thread([title, width, height] {
@@ -297,17 +286,15 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     }
     Core::Loader::SymbolsResolver resolver;
     // GnmDriver creates the presenter that the VideoOut present thread uses.
-    Libraries::GnmDriver::RegisterLib(&resolver);
-    Libraries::VideoOut::RegisterLib(&resolver);
+    BbGnm::RegisterLib(&resolver);
+    BbVideoOut::RegisterLib(&resolver);
     return 0;
 }
 
-namespace Libraries::Kernel { void StartKernelService(); }
 extern "C" void bbgpu_register_kernel(void) {
-    Libraries::Kernel::StartKernelService();
     Core::Loader::SymbolsResolver resolver;
-    Libraries::Kernel::RegisterEventQueue(&resolver);
-    Libraries::AvPlayer::RegisterLib(&resolver);
+    BbKernel::RegisterEventQueue(&resolver);
+    BbAvPlayer::RegisterLib(&resolver);
 }
 
 extern "C" uintptr_t bbgpu_resolve(const char* scoped_nid) {
@@ -337,62 +324,18 @@ extern "C" int bbgpu_handle_fault(void* ucontext, void* address) {
 extern "C" void bbgpu_patch_image(unsigned char* image, uint64_t size) {
     BbGnmHooks::PatchImage(image, size);
     BbGameMenu::PatchImage(image, size);
+    BbFrameRate::PatchImage(image, size);
 }
 
 extern "C" unsigned bbgpu_symbol_count(void) {
     return unsigned(g_symbols.size());
 }
 
-// Kernel service thread: runs boost::asio timers for equeue timer events.
 namespace Libraries::Kernel {
-boost::asio::io_context io_context;
-static std::mutex m_asio_req;
-static std::condition_variable_any cv_asio_req;
-static std::atomic<u32> asio_requests;
-static std::jthread service_thread;
-
-void KernelSignalRequest() {
-    std::unique_lock lock{m_asio_req};
-    ++asio_requests;
-    cv_asio_req.notify_one();
-}
-
-static void KernelServiceThread(std::stop_token stoken) {
-    Common::SetCurrentThreadName("bb:kernel_service");
-    while (!stoken.stop_requested()) {
-        {
-            std::unique_lock lock{m_asio_req};
-            cv_asio_req.wait(lock, stoken, [] { return asio_requests != 0; });
-        }
-        if (stoken.stop_requested()) break;
-        io_context.run();
-        io_context.restart();
-        asio_requests = 0;
-    }
-}
-
-void StartKernelService() {
-    service_thread = std::jthread{KernelServiceThread};
-}
-
 int* PS4_SYSV_ABI __Error() {
     return runtime_errno();
 }
 } // namespace Libraries::Kernel
-
-// RenderDoc capture hooks: not used by the port.
-namespace VideoCore {
-void LoadRenderDoc() {}
-void StartCapture() {}
-void EndCapture() {}
-void TriggerCapture() {}
-void SetOutputDir(const std::filesystem::path&, const std::string&) {}
-bool IsRenderDocLoaded() { return false; }
-void RequestScreenshot(ScreenshotRequest) {}
-u32 ConsumeGameOnlyScreenshotRequests() { return 0; }
-u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
-ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
-} // namespace VideoCore
 
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
@@ -412,6 +355,27 @@ extern "C" void bbgpu_mouse_take(double* dx, double* dy, int* wheel_up, int* whe
 
 extern "C" int bbgpu_mouse_captured(void) {
     return g_window && g_window->MouseCaptured() ? 1 : 0;
+}
+
+extern "C" void bbgpu_mouse_capture(void) {
+    if (g_window) {
+        g_window->RequestMouseCapture();
+    }
+}
+
+extern "C" uint64_t bbgpu_camera_state(void) {
+    return BbGuestHooks::CameraState();
+}
+
+extern "C" int bbgpu_free_camera(void) {
+    return BbGuestHooks::FreeCameraActive() ? 1 : 0;
+}
+
+extern "C" int bbgpu_camera_look(float yaw, float pitch) {
+    if (!BbGuestHooks::CameraLookAvailable()) {
+        return 0;
+    }
+    return BbGuestHooks::CameraLookAdd(pitch, yaw) ? 1 : 0;
 }
 
 extern "C" void bbgpu_mouse_look_enable(int enabled) {

@@ -4,6 +4,8 @@
 // the live allocations are counted per call site in the game (the first two return addresses into
 // its code on the stack). Report() prints the sites whose live bytes grew since the last report:
 // what leaks when the guest heap runs out.
+#include "common/types.h"
+#include "game_profile.h"
 #include "bbport_heap_sites.h"
 
 #include <algorithm>
@@ -26,12 +28,12 @@ constexpr u64 LibcBase = ImageBase + 0x56e0000ull;
 constexpr u64 SlotMalloc = 0xba190, SlotFree = 0xba198, SlotCalloc = 0xba1a0,
               SlotRealloc = 0xba1a8, SlotMemalign = 0xba1b0, SlotPosixMemalign = 0xba1b8;
 
-using MallocFn = void* (*)(std::size_t);
-using FreeFn = void (*)(void*);
-using CallocFn = void* (*)(std::size_t, std::size_t);
-using ReallocFn = void* (*)(void*, std::size_t);
-using MemalignFn = void* (*)(std::size_t, std::size_t);
-using PosixMemalignFn = int (*)(void**, std::size_t, std::size_t);
+using MallocFn = void* (PS4_SYSV_ABI*)(std::size_t);
+using FreeFn = void (PS4_SYSV_ABI*)(void*);
+using CallocFn = void* (PS4_SYSV_ABI*)(std::size_t, std::size_t);
+using ReallocFn = void* (PS4_SYSV_ABI*)(void*, std::size_t);
+using MemalignFn = void* (PS4_SYSV_ABI*)(std::size_t, std::size_t);
+using PosixMemalignFn = int (PS4_SYSV_ABI*)(void**, std::size_t, std::size_t);
 
 MallocFn orig_malloc;
 FreeFn orig_free;
@@ -156,27 +158,27 @@ void Remove(void* ptr, const u64* frame) {
     ++untracked_frees;
 }
 
-void* WrapMalloc(std::size_t size) {
+void* PS4_SYSV_ABI WrapMalloc(std::size_t size) {
     void* p = orig_malloc(size);
     if (p && (count_allocs.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Add(p, size, static_cast<const u64*>(__builtin_frame_address(0)));
     }
     return p;
 }
-void WrapFree(void* p) {
+void PS4_SYSV_ABI WrapFree(void* p) {
     if (p && (count_frees.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Remove(p, static_cast<const u64*>(__builtin_frame_address(0)));
     }
     orig_free(p);
 }
-void* WrapCalloc(std::size_t count, std::size_t size) {
+void* PS4_SYSV_ABI WrapCalloc(std::size_t count, std::size_t size) {
     void* p = orig_calloc(count, size);
     if (p && (count_allocs.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Add(p, count * size, static_cast<const u64*>(__builtin_frame_address(0)));
     }
     return p;
 }
-void* WrapRealloc(void* old, std::size_t size) {
+void* PS4_SYSV_ABI WrapRealloc(void* old, std::size_t size) {
     void* p = orig_realloc(old, size);
     if (!old && p) {
         count_allocs.fetch_add(1, std::memory_order_relaxed);
@@ -193,14 +195,14 @@ void* WrapRealloc(void* old, std::size_t size) {
     }
     return p;
 }
-void* WrapMemalign(std::size_t alignment, std::size_t size) {
+void* PS4_SYSV_ABI WrapMemalign(std::size_t alignment, std::size_t size) {
     void* p = orig_memalign(alignment, size);
     if (p && (count_allocs.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Add(p, size, static_cast<const u64*>(__builtin_frame_address(0)));
     }
     return p;
 }
-int WrapPosixMemalign(void** out, std::size_t alignment, std::size_t size) {
+int PS4_SYSV_ABI WrapPosixMemalign(void** out, std::size_t alignment, std::size_t size) {
     const int result = orig_posix_memalign(out, alignment, size);
     if (result == 0 && out && *out &&
         (count_allocs.fetch_add(1, std::memory_order_relaxed), tracking)) {
@@ -221,7 +223,8 @@ void InstallWrappers(bool counters) {
         return env && env[0] == '1';
     }();
     static bool done = false;
-    if ((!wanted && !counters) || done) {
+    // Bloodborne's libc.prx (its slots at its link address): other games have none here.
+    if ((!wanted && !counters) || done || !Game::Active()) {
         return;
     }
     auto* slots = reinterpret_cast<u64*>(LibcBase);

@@ -106,6 +106,17 @@ progress() {
         "$([[ $variant == fp8 ]] && echo 'FP8: ')" "$(tail -1 "$R/fsr4cap.log" 2>/dev/null || true)"
 }
 
+# An RX 9000 (RDNA4: Navi 48 and 44) among this PC's GPUs.
+rdna4_present() {
+    local id
+    for id in /sys/class/drm/card*/device/device; do
+        case $(cat "$id" 2>/dev/null) in
+            0x7550|0x7551|0x7590|0x7591) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # The Proton build: the first under which the DLL starts FSR 4.1 (the first size's capture).
 first=(1920x1080 1920x1080)
 failures=()
@@ -119,8 +130,12 @@ for candidate in "${candidates[@]}"; do
     capture "${first[@]}" || status=$?
     if [[ $status != 0 && $status != 3 && ${BB_FSR4CAP_SPOOF:-1} != 0 &&
           $(tail -1 "$R/fsr4cap.log" 2>/dev/null || true) == "no version matching"* ]]; then
-        echo "  FSR 4.1 not offered on this GPU; again as an RX 7800 XT"
+        # Not a wrong detection (issue #186): the DLL did not offer FSR 4.1 to this GPU's id under
+        # this Proton build; it is asked again under an RX 7800 XT's id (INT8 passes, which every
+        # RX 7000/9000 runs).
+        echo "  The DLL did not offer FSR 4.1 to this GPU's id under this Proton; again under an RX 7800 XT's id"
         previous=${DXVK_CONFIG-}
+        spoofed_from=$previous
         export DXVK_CONFIG="${previous:+$previous; }$spoof"
         status=0
         capture "${first[@]}" || status=$?
@@ -161,6 +176,14 @@ fp8=0
 if [[ ${BB_FSR4CAP_FP8:-auto} != 0 ]]; then
     [[ ${BB_FSR4CAP_FP8:-auto} != 1 ]] || fp8_config=wmma_rdna3_workaround
     variant=fp8
+    # Recorded under the RX 7800 XT's id (above) on an RX 9000: that id gets no FP8 passes; they
+    # are asked for under an RX 9070 XT's id (issue #186).
+    fp8_spoof_restore=
+    if [[ ${DXVK_CONFIG-} == *"$spoof"* ]] && rdna4_present; then
+        fp8_spoof_restore=$DXVK_CONFIG
+        export DXVK_CONFIG="${spoofed_from:+$spoofed_from; }dxgi.customVendorId = 1002; dxgi.customDeviceId = 7550"
+        echo "FP8 variant: asked for under an RX 9070 XT's id (this PC has an RX 9000)"
+    fi
     shaders() { (cd "$1" 2>/dev/null && ls cs_*.dxil 2>/dev/null); }
     if capture "${first[@]}" &&
        [[ $(shaders "$R/fp8/capture_${first[0]}_${first[1]}") != "$(shaders "$R/capture_${first[0]}_${first[1]}")" ]]; then
@@ -171,6 +194,7 @@ if [[ ${BB_FSR4CAP_FP8:-auto} != 0 ]]; then
         rm -rf "$R/fp8"
         echo "FP8 variant: not offered on this GPU (RDNA4 only), INT8 only"
     fi
+    [[ -z $fp8_spoof_restore ]] || export DXVK_CONFIG=$fp8_spoof_restore
     variant=int8
 fi
 

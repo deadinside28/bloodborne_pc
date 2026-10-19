@@ -4,7 +4,9 @@
  * BB_GAMEPAD). --displays: the monitors, "name<tab>WxH<tab>primary (1 or 0)" per line in SDL's
  * order (the launcher's monitor list, BB_DISPLAY; issue #69). --read-input: one key or button for the
  * launcher's controls (below). --device: "vendorID<tab>name" of the GPU the game takes (run.sh:
- * memory model and driver workarounds by vendor and chip). */
+ * memory model and driver workarounds by vendor and chip). --gpus: every GPU in Vulkan's order
+ * (BB_GPU_ID is the index), "index<tab>vendorID<tab>type<tab>name<tab>1 for the one the port takes
+ * by itself" per line (the launcher's GPU list). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -241,6 +243,22 @@ int main(int argc, char **argv) {
         free(devices);
         vkDestroyInstance(instance, NULL);
         return 1;
+    }
+    if (argc > 1 && !strcmp(argv[1], "--gpus")) {
+        VkPhysicalDevice best = devices[0];
+        for (uint32_t i = 1; i < count; ++i)
+            if (better_device(devices[i], best)) best = devices[i];
+        static const char *const types[] = {"other", "integrated", "discrete", "virtual", "cpu"};
+        for (uint32_t i = 0; i < count; ++i) {
+            VkPhysicalDeviceProperties props;
+            vkGetPhysicalDeviceProperties(devices[i], &props);
+            const unsigned type = props.deviceType <= VK_PHYSICAL_DEVICE_TYPE_CPU ? props.deviceType : 0;
+            printf("%u\t%#06x\t%s\t%s\t%d\n", i, props.vendorID, types[type], props.deviceName,
+                   devices[i] == best);
+        }
+        free(devices);
+        vkDestroyInstance(instance, NULL);
+        return 0;
     }
     /* Match vk_instance.cpp's default ranking or its explicit BB_GPU_ID index. */
     VkPhysicalDevice selected = devices[0];

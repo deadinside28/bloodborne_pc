@@ -64,6 +64,21 @@ def host_nvidia(manifest_dirs, library_dirs):
 
 def configure(env, manifest_dirs=MANIFEST_DIRS, library_dirs=LIBRARY_DIRS,
               egl_dirs=EGL_VENDOR_DIRS):
+    # Steam's Game Mode starts non-Steam shortcuts in pressure-vessel, which sets these to its
+    # own proxy ICDs and layers: not the user's choice, and with them the bundled loader finds
+    # no VK_KHR_surface (#172). Dropped, so the bundled or host drivers are found as usual.
+    if any("/pressure-vessel/" in env.get(name, "")
+           for name in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "VK_IMPLICIT_LAYER_PATH")):
+        for name in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "VK_IMPLICIT_LAYER_PATH",
+                     "VK_ADD_LAYER_PATH", "VK_LAYER_PATH", "VK_LOADER_LAYERS_ENABLE"):
+            env.pop(name, None)
+        # Its library aliases would shadow the drivers' own dependencies too.
+        kept = [d for d in env.get("LD_LIBRARY_PATH", "").split(":")
+                if d and "/pressure-vessel/" not in d]
+        if kept:
+            env["LD_LIBRARY_PATH"] = ":".join(kept)
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
     # Both overrides belong to the user; VK_DRIVER_FILES takes precedence over
     # VK_ICD_FILENAMES. In particular don't replace an explicit Lavapipe setup.
     if env.get("VK_DRIVER_FILES") or env.get("VK_ICD_FILENAMES"):
@@ -92,11 +107,19 @@ def configure(env, manifest_dirs=MANIFEST_DIRS, library_dirs=LIBRARY_DIRS,
     # NVIDIA dlopens versioned shader/compiler libraries at runtime, so expose
     # the driver's siblings as well as its ICD. Never link generic host libs.
     sources = [driver]
-    for pattern in ("libnvidia-*.so*", "libGLX_nvidia.so*", "libEGL_nvidia.so*"):
-        sources.extend(sorted(driver.parent.glob(pattern)))
+    # libcuda.so.1 is the driver's too: with DLSS loaded, NGX has the driver load it, and without it
+    # vkCreateDevice fails (#135). The ICD's own directory first, then the host's library
+    # directories: Debian puts the ICD in nvidia/current/ but libnvidia-glsi/-tls/-glcore one
+    # level up (#205). The first file of each name wins.
+    for directory in dict.fromkeys((driver.parent, *library_dirs)):
+        for pattern in ("libnvidia-*.so*", "libGLX_nvidia.so*", "libEGL_nvidia.so*",
+                        "libcuda.so*"):
+            sources.extend(sorted(directory.glob(pattern)))
+    names = set()
     for source in sources:
-        if not elf64(source):
+        if source.name in names or not elf64(source):
             continue
+        names.add(source.name)
         link = libraries / source.name
         try:
             link.symlink_to(source.resolve())

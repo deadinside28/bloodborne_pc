@@ -5,11 +5,10 @@
 #include <cstdio>
 #include <cstring>
 #include "common/slot_vector.h"
-#include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/vk_runtime.h"
-#include "video_core/renderer_vulkan/vk_scheduler.h"
-#include "video_core/renderer_vulkan/vk_scene_resolution.h"
-#include "video_core/texture_cache/blit_helper.h"
+#include "vulkan/instance.h"
+#include "render/runtime.h"
+#include "render/scheduler.h"
+#include "upscale/vk_scene_resolution.h"
 #include <vk_mem_alloc.h>
 
 int main() {
@@ -30,7 +29,7 @@ int main() {
     VideoCore::ImageInfo ci;
     ci.size = {1920,1080,1};
     ci.resources = {1,1};
-    ci.type = AmdGpu::ImageType::Color2D;
+    ci.type = Gcn::ImageType::Color2D;
     ci.pixel_format = vk::Format::eR8G8B8A8Unorm;
     ci.num_bits = 32;
     const auto color_id = images.insert(instance, runtime, views, ci);

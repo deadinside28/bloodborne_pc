@@ -4,10 +4,10 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
-#include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/vk_scheduler.h"
-#include "video_core/texture_cache/image.h"
-#include "video_core/host_shaders/camera_motion_comp.h"
+#include "vulkan/instance.h"
+#include "render/scheduler.h"
+#include "test_vk_image.h"
+#include "bbgpu/shaders/camera_motion_comp.h"
 #include <vk_mem_alloc.h>
 
 int main() {
@@ -19,12 +19,12 @@ int main() {
     const auto device = instance.GetDevice();
     Vulkan::Scheduler scheduler(instance);
     constexpr u32 W=9,H=7,N=W*H;
-    std::array<VideoCore::UniqueImage,3> images;
+    std::array<TestImage,3> images;
     std::array<vk::UniqueImageView,3> views;
     std::array<vk::DescriptorSetLayoutBinding,3> bindings{};
     for (u32 i=0;i<3;++i) {
         const auto format=i==1 ? vk::Format::eR16G16Sfloat : vk::Format::eR32G32B32A32Sfloat;
-        images[i]=VideoCore::UniqueImage(device,instance.GetAllocator());
+        images[i]=TestImage(device,instance.GetAllocator());
         images[i].Create({.imageType=vk::ImageType::e2D,.format=format,.extent={W,H,1},
             .mipLevels=1,.arrayLayers=1,.samples=vk::SampleCountFlagBits::e1,
             .tiling=vk::ImageTiling::eOptimal,.usage=vk::ImageUsageFlagBits::eSampled |
