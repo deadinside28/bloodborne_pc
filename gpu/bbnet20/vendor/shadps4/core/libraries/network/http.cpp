@@ -1107,8 +1107,23 @@ static bool HeaderNameMatches(std::string_view a, std::string_view b) {
 }
 
 static bool IsCredentialHeader(std::string_view name) {
-    return HeaderNameMatches(name, "Authorization") ||
-           HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie");
+    if (HeaderNameMatches(name, "Authorization") ||
+        HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie")) {
+        return true;
+    }
+    // bbport: any other header that can carry an account's secret (tokens, session ids, keys)
+    // never reaches a log either.
+    std::string lower(name);
+    for (char& c : lower) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    for (const std::string_view secret :
+         {"cookie", "token", "password", "secret", "session", "ticket", "key"}) {
+        if (lower.find(secret) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static std::string GetLibhttpSystemVersionString() {
