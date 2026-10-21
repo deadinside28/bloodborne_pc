@@ -143,6 +143,12 @@ constexpr std::array<u8, 8> ResponderBellCommonResult{0x4C, 0x89, 0xF7, 0xE8,
                                                       0xF5, 0x9F, 0x34, 0x00};
 constexpr std::array<u8, 8> ResponderBellAllowedCommonResult{0xE9, 0xE9, 0x09, 0x00,
                                                              0x00, 0x90, 0x90, 0x90};
+// The cooperator sign's post (see InstallBbscSignPostAreaPatch).
+constexpr u64 SignPostAreaCheckOffset = 0x014B6366;
+constexpr std::array<u8, 5> SignPostAreaCheck{0xE8, 0xE5, 0x43, 0x46, 0x00}; // call 0x0191A750
+constexpr std::array<u8, 5> SignPostAllowedArea{0xB0, 0x01, 0x90, 0x90, 0x90}; // mov al, 1
+constexpr u64 SignAreaCheckOffset = 0x0191A750;
+constexpr u64 WorldChrManPointerOffset = 0x0553E878;
 constexpr u64 ActiveBellAreaComparisonOffset = 0x015068BB;
 constexpr std::array<u8, 2> ActiveBellAreaComparison{0x77, 0x4A};
 constexpr std::array<u8, 2> ActiveBellSignedAreaComparison{0x7F, 0x4A};
@@ -12968,12 +12974,42 @@ void ApplyBbscPvpTeams() {
     }
 }
 
+// The sign post above, seen from the game: when a sign of ours comes up (SpEffect 9005), what
+// the game's own area check would have said. A no is what kept the sign on this PC before.
+void TickBbscSignPostCheck() {
+    static bool was_up = false;
+    const bool up = BbscLocalEffectNode(9005) != 0;
+    if (up == was_up) {
+        return;
+    }
+    was_up = up;
+    const u64 world = ReadValue<u64>(image_base + WorldChrManPointerOffset, 0);
+    if (!up || !ReadablePointer(world, 0x68)) {
+        return;
+    }
+    using AreaCheck = bool PS4_SYSV_ABI (*)(u64 world_chr_man);
+    const bool allowed = reinterpret_cast<AreaCheck>(image_base + SignAreaCheckOffset)(world);
+    const bool patched = EnvFlagEnabled("SHADPS4_BBSC_SIGN_ANY_AREA");
+    if (allowed) {
+        LOG_INFO(Debug, "BBSC sign post: sign up in map {:#x}; the game's area check allows it",
+                 GetCurrentPackedMap());
+    } else {
+        LOG_WARNING(Debug,
+                    "BBSC sign post: sign up in map {:#x}; the game's area check refuses it "
+                    "(event flags 2405 {}, 2406 {}, 12400160 {}) - {}",
+                    GetCurrentPackedMap(), BbscEventFlag(2405), BbscEventFlag(2406),
+                    BbscEventFlag(12400160),
+                    patched ? "posted anyway" : "not posted (SHADPS4_BBSC_SIGN_ANY_AREA=0)");
+    }
+}
+
 void TickBbscPvp() {
     if (image_base == 0) {
         return;
     }
     StartBbscDuelBell();
     TickBbscDuelBellGive();
+    TickBbscSignPostCheck();
     TickBbscHostBlank();
     TickBbscInvadable();
     const s32 state = GetSessionState();
@@ -14734,6 +14770,35 @@ void TraceMatching2LeaveRoom(std::uintptr_t return_address, std::uint64_t room_i
              room_id, return_address, caller_offset, reload_phase, current_map, requested_map);
 }
 
+// ---- The cooperator's sign leaves the PC in any area (2026-10-20) ------------------------------
+// Runs of 2026-10-20 (Linux and Windows, both network modules, two players): the Kin Bell rang,
+// SpEffect 9005 came on and 0x014B9180 built the sign (local candidate, dirty byte [sign+0xA0] =
+// 1), but summon_messenger/create was never sent. The summon manager 0x014B5E10 (every frame from
+// FrpgNetMan::Update) clears that byte at 0x014B632A, then asks 0x0191A750(WorldChrMan) - the area
+// check the bell's own item check makes, which ResponderBellAreaResult already answers with yes -
+// and posts the sign (0x01E90E30, request 0x19) only on a yes; a no is never retried. The same
+// answer here: the call becomes mov al, 1 (SignPostAreaCheckOffset). Switch
+// SHADPS4_BBSC_SIGN_ANY_AREA (on).
+void InstallBbscSignPostAreaPatch(u64 base, u64 image_size) {
+    static bool done = false;
+    if (done || !EnvFlagEnabled("SHADPS4_BBSC_SIGN_ANY_AREA") || base == 0 ||
+        SignPostAreaCheckOffset + SignPostAreaCheck.size() > image_size) {
+        return;
+    }
+    done = true;
+    auto* site = reinterpret_cast<u8*>(base + SignPostAreaCheckOffset);
+    if (!std::ranges::equal(std::span<const u8>{site, SignPostAreaCheck.size()},
+                            SignPostAreaCheck)) {
+        LOG_ERROR(Debug, "BBSC sign post: signature mismatch at {:#x}: expected={} actual={}",
+                  SignPostAreaCheckOffset, BytesToHex(SignPostAreaCheck),
+                  BytesToHex(std::span<const u8>{site, SignPostAreaCheck.size()}));
+        return;
+    }
+    std::memcpy(site, SignPostAllowedArea.data(), SignPostAllowedArea.size());
+    LOG_INFO(Debug, "BBSC sign post: a cooperator sign is posted in any area ({:#x})",
+             SignPostAreaCheckOffset);
+}
+
 void InstallSeamlessCoopPatches() {
     if ((negative_area_patch_installed && area_flag_patch_installed &&
          responder_bell_area_patch_installed && responder_bell_common_patch_installed &&
@@ -15191,6 +15256,7 @@ void InstallSeamlessCoopPatches() {
              StageTransitionStopMatchingCallOffset, SummonBuildEntryOffset,
              CrossMapGuestHandoffOffset, SosStatusUpdateOffset, SetSummonReloadStateOffset,
              HealingFountainAvailabilityOffset);
+    InstallBbscSignPostAreaPatch(base, image_size);
 }
 
 void InstallReverseEngineeringTrace() {
