@@ -12,9 +12,10 @@
 void runtime_restart(void) { abort(); }
 
 /* Online play (BB_ONLINE=1): the game's network and PSN imports resolve to the online module
- * (out/gpu/libbbnet.so); trophies stay with the runtime. Without the module (a build without its
- * libraries) there is nothing to check. */
-int main(void) {
+ * (out/gpu/libbbnet.so or out/gpu/libbbnet20.so); trophies stay with the runtime. Without the
+ * module (a build without its libraries) there is nothing to check.
+ * argv[1]: path to the module under test; defaults to out/gpu/libbbnet.so. */
+int main(int argc, char **argv) {
     static const char *const online[]={
         "Nlev7Lg8k3A#E#F",  /* sceNetInit */
         "A9cVMUtEp4Y#K#L",  /* sceHttpInit */
@@ -24,7 +25,7 @@ int main(void) {
         "3KOuC4RmZZU#T#U",  /* sceNpSignalingInitialize */
     };
     static const char *const local="XbkjbobZlCY#l#m"; /* sceNpTrophyCreateContext */
-    const char *path="out/gpu/libbbnet.so";
+    const char *path = argc > 1 ? argv[1] : "out/gpu/libbbnet.so";
     void *module=dlopen(path,RTLD_NOW|RTLD_LOCAL); /* the same handle the runtime gets */
     if (!module) {
         printf("SKIP: no online module (%s)\n",dlerror());
@@ -45,6 +46,6 @@ int main(void) {
     }
     uintptr_t trophy=runtime_resolve(local,0);
     assert(trophy && trophy!=resolve(local));
-    printf("PASS: online imports go to the online module, trophies stay local\n");
+    printf("PASS: online imports go to %s, trophies stay local\n",path);
     return 0;
 }
