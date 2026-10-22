@@ -254,6 +254,7 @@ EN = {
     'Играть онлайн': 'Play online',
     'Бесшовный кооператив (BBSC)': 'Seamless co-op (BBSC)',
     'Сессия переживает смерти, лампы, смену локаций и боссов; до 5 охотников. Нужен сервер с игровым сервером BBSC, у всех игроков включено': 'The session survives deaths, lamps, area changes and bosses; up to 5 hunters. Needs a server running the BBSC game server, and every player turns it on',
+    'Пока включено, колокола игры заменены колоколами BBSC; после выключения прежние вернутся при следующей загрузке персонажа (сохранение копируется в save-backups)': 'While it is on, BBSC\'s bells replace the game\'s; turn it off and the original bells come back the next time you load your character (the save is backed up in save-backups)',
     'Играть офлайн': 'Play offline',
     'Игровой сервер': 'Game server',
     'Игровой сервер (сообщения, пятна крови, призраки)': 'Game server (messages, bloodstains, ghosts)',

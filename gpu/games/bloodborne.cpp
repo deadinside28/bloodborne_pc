@@ -4,6 +4,7 @@
 // the same one.
 #include "game_profile.h"
 #include "bbport_guest_hooks.h"
+#include "bloodborne_kit_restore.h"
 #include "bloodborne_menu_pointer.h"
 
 namespace Game {
@@ -32,6 +33,8 @@ void InstallHooks(const CoreServices& services) {
     BbGuestHooks::Install(services.fresh_range);
     // The mouse as a pointer in the game's menus (bloodborne_menu_pointer).
     BbMenuPointer::Install();
+    // BBSC's kit back to the vanilla bells when BBSC is off (bloodborne_kit_restore).
+    BbKitRestore::Install();
 }
 } // namespace
 

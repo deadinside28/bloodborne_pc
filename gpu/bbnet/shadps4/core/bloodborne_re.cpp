@@ -12515,6 +12515,12 @@ bool BackupBbscSavesUnchecked() {
     return copied != 0;
 }
 
+// bbport: what the kit takes out is journaled per character save, so that the port can give it
+// back when BBSC is off (gpu/games/bloodborne_kit_restore: libbbgpu, loaded in every run).
+extern "C" void bbport_kit_journal_reset(void);
+extern "C" void bbport_kit_journal_item(u32 goods, s32 count, int storage);
+extern "C" void bbport_kit_journal_flag(u32 flag);
+
 // The kit every BBSC player gets (the user, 2026-10-05: given when you start playing, even as a new
 // player, only once - it checks whether you carry it or have it in storage). Each kit item missing
 // from BOTH the carried items and the storage box goes into the carried items. Checked once per
@@ -12551,6 +12557,9 @@ void TickBbscDuelBellGive() {
             missing.push_back(&item);
         }
     }
+    if (missing.size() == std::size(BbscKit)) {
+        bbport_kit_journal_reset(); // bbport: a new kit (a fresh character, or after a restore)
+    }
     // The vanilla items the kit replaces (and the bells' "ringing" forms), carried or stored, are
     // taken out (the user: "old items are still there, they are not hidden").
     // The Dream's messenger holds out the vanilla Beckoning Bell (event 12101024, item lot 10010,
@@ -12561,6 +12570,7 @@ void TickBbscDuelBellGive() {
         ReadValue<u64>(image_base + EventFlagManPointerOffset, 0) != 0 && !BbscEventFlag(6622)) {
         using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
         reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, 6622, 1);
+        bbport_kit_journal_flag(6622);
         LOG_INFO(Debug, "BBSC kit: the Dream messenger's vanilla Beckoning Bell marked as given "
                         "(flag 6622) - the kit's Hunt Bell replaces it");
     }
@@ -12580,7 +12590,14 @@ void TickBbscDuelBellGive() {
     for (const u32 id : Retired) {
         for (const u64 inventory : {carried, storage}) {
             if (BbscInventoryHas(inventory, 0x40000000u | id)) {
+                const s32 slot = BbscInventorySlot(inventory, 0x40000000u | id);
+                const u64 entry =
+                    slot >= 0 ? BbscInventorySlotEntry(inventory, static_cast<u32>(slot)) : 0;
+                const s32 count = entry != 0 ? std::max(ReadValue<s32>(entry, 8), 1) : 1;
                 const bool gone = BbscInventoryRemove(inventory, 0x40000000u | id);
+                if (gone) {
+                    bbport_kit_journal_item(id, count, inventory == storage);
+                }
                 LOG_INFO(Debug, "BBSC kit: vanilla goods {} taken out of the {} ({})", id,
                          inventory == carried ? "carried items" : "storage box",
                          gone ? "gone" : "STILL THERE");
