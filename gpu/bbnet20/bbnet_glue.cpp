@@ -2,6 +2,7 @@
 // bbport co-op: what shadPS4 0.20.0's network and NP libraries need from the rest of
 // shadPS4, implemented on top of the bbport runtime, and their registration.
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -468,6 +469,103 @@ void SymbolsResolver::AddSymbol(const char* nid, const char*, const char*, Symbo
     g_symbols.push_back({nid, address});
 }
 } // namespace Core::Loader
+
+// ---- Host memory below the guest's -------------------------------------------------------------
+
+// The game's image, the guest threads' stacks and records and the import traps live in
+// [0x08'0000'0000, 0x10'0000'0000) (runtime_low_map), which the runtime's map of the guest's
+// memory leaves out. BBSC reads the game's static pointers there (the local player, the global
+// state, the carried items); without this every such read came back 0, so the hunter's kit, the
+// item names and the invasions never came (issue #282). Linux: the kernel's list, read again when
+// an address there is not in the last one (a new thread's stack), at most once a second; nothing
+// in the region is ever unmapped. Windows: VirtualQuery. Pages without read access (the gaps
+// between the image's segments, the data traps) count as unmapped.
+int BbnetLowMemoryInfo(uintptr_t address, uintptr_t* start, uintptr_t* end, int* prot) {
+    constexpr uintptr_t LowMin = 0x0800000000, LowEnd = 0x1000000000;
+    if (address < LowMin || address >= LowEnd) {
+        return 0;
+    }
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION info{};
+    if (!VirtualQuery(reinterpret_cast<const void*>(address), &info, sizeof(info)) ||
+        info.State != MEM_COMMIT || (info.Protect & PAGE_GUARD)) {
+        return 0;
+    }
+    const DWORD access = info.Protect & 0xFF;
+    const bool read = access & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                                PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                                PAGE_EXECUTE_WRITECOPY);
+    if (!read) {
+        return 0;
+    }
+    const bool write = access & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE |
+                                 PAGE_EXECUTE_WRITECOPY);
+    const bool exec = access & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                                PAGE_EXECUTE_WRITECOPY);
+    *start = reinterpret_cast<uintptr_t>(info.BaseAddress);
+    *end = *start + info.RegionSize;
+    *prot = 1 | (write ? 2 : 0) | (exec ? 4 : 0);
+    return 1;
+#else
+    struct Range {
+        uintptr_t start, end;
+        int prot;
+    };
+    static std::mutex lock;
+    static std::vector<Range> ranges;
+    static std::chrono::steady_clock::time_point read_at{};
+    std::lock_guard guard{lock};
+    const auto find = [&]() -> const Range* {
+        const auto it = std::upper_bound(
+            ranges.begin(), ranges.end(), address,
+            [](uintptr_t at, const Range& range) { return at < range.end; });
+        return it != ranges.end() && it->start <= address ? &*it : nullptr;
+    };
+    const Range* range = find();
+    const auto now = std::chrono::steady_clock::now();
+    if (!range && now - read_at >= std::chrono::seconds(1)) {
+        read_at = now;
+        ranges.clear();
+        if (FILE* maps = std::fopen("/proc/self/maps", "r")) {
+            char line[512];
+            bool line_start = true;
+            while (std::fgets(line, sizeof(line), maps)) {
+                const bool whole = std::strchr(line, '\n') != nullptr;
+                const bool first = line_start;
+                line_start = whole;
+                unsigned long long a = 0, b = 0;
+                char perms[5] = {};
+                if (!first || std::sscanf(line, "%llx-%llx %4s", &a, &b, perms) != 3 ||
+                    b <= LowMin) {
+                    continue;
+                }
+                if (a >= LowEnd) {
+                    break;
+                }
+                const int bits = (perms[0] == 'r' ? 1 : 0) | (perms[1] == 'w' ? 2 : 0) |
+                                 (perms[2] == 'x' ? 4 : 0);
+                if (!(bits & 1)) {
+                    continue;
+                }
+                if (!ranges.empty() && ranges.back().end == a && ranges.back().prot == bits) {
+                    ranges.back().end = uintptr_t(b);
+                } else {
+                    ranges.push_back({uintptr_t(a), uintptr_t(b), bits});
+                }
+            }
+            std::fclose(maps);
+        }
+        range = find();
+    }
+    if (!range) {
+        return 0;
+    }
+    *start = range->start;
+    *end = range->end;
+    *prot = range->prot;
+    return 1;
+#endif
+}
 
 #define BBNET_EXPORT extern "C" __attribute__((visibility("default")))
 

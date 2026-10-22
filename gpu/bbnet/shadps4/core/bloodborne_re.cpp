@@ -143,6 +143,14 @@ constexpr std::array<u8, 8> ResponderBellCommonResult{0x4C, 0x89, 0xF7, 0xE8,
                                                       0xF5, 0x9F, 0x34, 0x00};
 constexpr std::array<u8, 8> ResponderBellAllowedCommonResult{0xE9, 0xE9, 0x09, 0x00,
                                                              0x00, 0x90, 0x90, 0x90};
+// The cooperator sign's post (see InstallBbscSignPostAreaPatch).
+constexpr u64 SignPostAreaCheckOffset = 0x014B6366;
+constexpr std::array<u8, 5> SignPostAreaCheck{0xE8, 0xE5, 0x43, 0x46, 0x00}; // call 0x0191A750
+constexpr std::array<u8, 5> SignPostAllowedArea{0xB0, 0x01, 0x90, 0x90, 0x90}; // mov al, 1
+constexpr u64 SummonMessageAreaCheckOffset = 0x0187387B;
+constexpr std::array<u8, 5> SummonMessageAreaCheck{0xE8, 0xD0, 0x6E, 0x0A, 0x00}; // call 0x0191A750
+constexpr u64 SignAreaCheckOffset = 0x0191A750;
+constexpr u64 WorldChrManPointerOffset = 0x0553E878;
 constexpr u64 ActiveBellAreaComparisonOffset = 0x015068BB;
 constexpr std::array<u8, 2> ActiveBellAreaComparison{0x77, 0x4A};
 constexpr std::array<u8, 2> ActiveBellSignedAreaComparison{0x7F, 0x4A};
@@ -8600,6 +8608,28 @@ void PS4_SYSV_ABI BbscBellCheckHook(u64, const GuestRegisterSnapshot* registers)
              ok ? "usable side" : "NOT usable side");
 }
 
+// Diagnostics (2026-10-21): the guest got the host's claim and signaling came up, but it never
+// joined. SosStatus.Update 0x01872360 pops the next summon message (0x014BB200, rax at
+// 0x0187383C), then needs the area check (patched, see InstallBbscSignPostAreaPatch), the matching
+// state [0x05540290]+0x124 in {0, 2, 5}, [this+0x1F8] != 0 and the message to parse (0x00C90DD0;
+// 0x018739F1 runs only then, right before it goes to the session rules).
+void PS4_SYSV_ABI BbscSummonMessageHook(u64, const GuestRegisterSnapshot* registers) {
+    if (registers == nullptr || registers->rax == 0) {
+        return;
+    }
+    const u64 matching = GetMatchingState();
+    LOG_INFO(Debug,
+             "BBSC summon message: {:#x} ({} bytes) - matching state {}, ready flag {} (needs "
+             "state 0/2/5 and flag 1)",
+             registers->rax, ReadValue<u32>(registers->rax, 0xB0),
+             ReadablePointer(matching, 0x128) ? ReadValue<s32>(matching, 0x124) : -99,
+             ReadValue<u8>(registers->rbx, 0x1F8));
+}
+
+void PS4_SYSV_ABI BbscSummonMessageParsedHook(u64, const GuestRegisterSnapshot*) {
+    LOG_INFO(Debug, "BBSC summon message: parsed - handed to the session rules");
+}
+
 void InstallBbscQuitHook() {
     if (image_base == 0) {
         return;
@@ -8610,6 +8640,17 @@ void InstallBbscQuitHook() {
                                   std::span<const u8>{BellCheck}, 0, BbscBellCheckHook)) {
             LOG_ERROR(Debug, "BBSC bell check: failed to hook {:#x}", BellCheckTraceOffset);
         }
+    }
+    {
+        static constexpr std::array<u8, 6> MessagePop{0x49, 0x89, 0xC5, 0x4D, 0x85, 0xED};
+        static constexpr std::array<u8, 6> MessageParsed{0x8B, 0x85, 0x4C, 0xF9, 0xFF, 0xFF};
+        const bool pop = InstallGuestCodeHook(reinterpret_cast<void*>(image_base + 0x0187383C),
+                                              std::span<const u8>{MessagePop}, 0,
+                                              BbscSummonMessageHook);
+        const bool parsed = InstallGuestCodeHook(reinterpret_cast<void*>(image_base + 0x018739F1),
+                                                 std::span<const u8>{MessageParsed}, 0,
+                                                 BbscSummonMessageParsedHook);
+        LOG_INFO(Debug, "BBSC summon message: traced (pop {}, parsed {})", pop, parsed);
     }
     {
         static constexpr std::array<u8, 6> ShopPrologue{0x55, 0x48, 0x89, 0xE5, 0x41, 0x57};
@@ -12968,12 +13009,42 @@ void ApplyBbscPvpTeams() {
     }
 }
 
+// The sign post above, seen from the game: when a sign of ours comes up (SpEffect 9005), what
+// the game's own area check would have said. A no is what kept the sign on this PC before.
+void TickBbscSignPostCheck() {
+    static bool was_up = false;
+    const bool up = BbscLocalEffectNode(9005) != 0;
+    if (up == was_up) {
+        return;
+    }
+    was_up = up;
+    const u64 world = ReadValue<u64>(image_base + WorldChrManPointerOffset, 0);
+    if (!up || !ReadablePointer(world, 0x68)) {
+        return;
+    }
+    using AreaCheck = bool PS4_SYSV_ABI (*)(u64 world_chr_man);
+    const bool allowed = reinterpret_cast<AreaCheck>(image_base + SignAreaCheckOffset)(world);
+    const bool patched = EnvFlagEnabled("SHADPS4_BBSC_SIGN_ANY_AREA");
+    if (allowed) {
+        LOG_INFO(Debug, "BBSC sign post: sign up in map {:#x}; the game's area check allows it",
+                 GetCurrentPackedMap());
+    } else {
+        LOG_WARNING(Debug,
+                    "BBSC sign post: sign up in map {:#x}; the game's area check refuses it "
+                    "(event flags 2405 {}, 2406 {}, 12400160 {}) - {}",
+                    GetCurrentPackedMap(), BbscEventFlag(2405), BbscEventFlag(2406),
+                    BbscEventFlag(12400160),
+                    patched ? "posted anyway" : "not posted (SHADPS4_BBSC_SIGN_ANY_AREA=0)");
+    }
+}
+
 void TickBbscPvp() {
     if (image_base == 0) {
         return;
     }
     StartBbscDuelBell();
     TickBbscDuelBellGive();
+    TickBbscSignPostCheck();
     TickBbscHostBlank();
     TickBbscInvadable();
     const s32 state = GetSessionState();
@@ -14734,6 +14805,51 @@ void TraceMatching2LeaveRoom(std::uintptr_t return_address, std::uint64_t room_i
              room_id, return_address, caller_offset, reload_phase, current_map, requested_map);
 }
 
+// ---- The cooperator's sign leaves the PC in any area (2026-10-20) ------------------------------
+// Runs of 2026-10-20 (Linux and Windows, both network modules, two players): the Kin Bell rang,
+// SpEffect 9005 came on and 0x014B9180 built the sign (local candidate, dirty byte [sign+0xA0] =
+// 1), but summon_messenger/create was never sent. The summon manager 0x014B5E10 (every frame from
+// FrpgNetMan::Update) clears that byte at 0x014B632A, then asks 0x0191A750(WorldChrMan) - the area
+// check the bell's own item check makes, which ResponderBellAreaResult already answers with yes -
+// and posts the sign (0x01E90E30, request 0x19) only on a yes; a no is never retried. The same
+// answer here: the call becomes mov al, 1 (SignPostAreaCheckOffset).
+// The same check refused the summon itself (two players, 2026-10-21): the host found the sign,
+// claimed it, the claim came back in the sign's next post and signaling to the host came up, but
+// the guest never joined and both sides dropped the connection after 25 s. SosStatus.Update
+// 0x01872360 takes the next summon message (0x014BB200), asks 0x0191A750 at 0x0187387B and, on a
+// no, throws the message away (0x014BB3D0) instead of handing it to the session rules
+// [0x0553D6D0] (0x01789010). Same answer there. Switch SHADPS4_BBSC_SIGN_ANY_AREA (on).
+void InstallBbscSignPostAreaPatch(u64 base, u64 image_size) {
+    static bool done = false;
+    if (done || !EnvFlagEnabled("SHADPS4_BBSC_SIGN_ANY_AREA") || base == 0) {
+        return;
+    }
+    done = true;
+    struct AreaCheckSite {
+        u64 offset;
+        std::span<const u8> expected;
+        const char* what;
+    };
+    const AreaCheckSite sites[] = {
+        {SignPostAreaCheckOffset, SignPostAreaCheck, "a cooperator sign is posted"},
+        {SummonMessageAreaCheckOffset, SummonMessageAreaCheck, "a host's summon is taken"},
+    };
+    for (const AreaCheckSite& check : sites) {
+        if (check.offset + check.expected.size() > image_size) {
+            continue;
+        }
+        auto* site = reinterpret_cast<u8*>(base + check.offset);
+        const std::span<const u8> actual{site, check.expected.size()};
+        if (!std::ranges::equal(actual, check.expected)) {
+            LOG_ERROR(Debug, "BBSC sign post: signature mismatch at {:#x}: expected={} actual={}",
+                      check.offset, BytesToHex(check.expected), BytesToHex(actual));
+            continue;
+        }
+        std::memcpy(site, SignPostAllowedArea.data(), SignPostAllowedArea.size());
+        LOG_INFO(Debug, "BBSC sign post: {} in any area ({:#x})", check.what, check.offset);
+    }
+}
+
 void InstallSeamlessCoopPatches() {
     if ((negative_area_patch_installed && area_flag_patch_installed &&
          responder_bell_area_patch_installed && responder_bell_common_patch_installed &&
@@ -15191,6 +15307,7 @@ void InstallSeamlessCoopPatches() {
              StageTransitionStopMatchingCallOffset, SummonBuildEntryOffset,
              CrossMapGuestHandoffOffset, SosStatusUpdateOffset, SetSummonReloadStateOffset,
              HealingFountainAvailabilityOffset);
+    InstallBbscSignPostAreaPatch(base, image_size);
 }
 
 void InstallReverseEngineeringTrace() {

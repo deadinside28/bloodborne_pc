@@ -1,5 +1,6 @@
 // bbport online module: shadPS4's memory manager as BBSC asks it (is this address mapped, with
-// which protection), answered from the runtime's own map (runtime_memory_vma_info). Each thread
+// which protection), answered from the runtime's own map (runtime_memory_vma_info) and, for the
+// game's image below it, from the host's (BbnetLowMemoryInfo). Each thread
 // remembers the last few mappings for a moment: BBSC checks every read it makes, and the map is
 // behind a lock the game's own mappings take.
 #pragma once
@@ -11,6 +12,10 @@
 #include "common/types.h"
 
 extern "C" int runtime_memory_vma_info(uintptr_t address, int* prot, int* type, uintptr_t* end);
+// The host memory below the guest's that the runtime's map leaves out (the game's image, stacks,
+// traps): 1 and the mapping's range and protection (MemoryProt bits), 0 when not readable there
+// (bbnet_glue.cpp).
+int BbnetLowMemoryInfo(uintptr_t address, uintptr_t* start, uintptr_t* end, int* prot);
 
 namespace Core {
 
@@ -54,14 +59,15 @@ public:
             }
         }
         int p = 0, type = -1;
-        uintptr_t mapping_end = 0;
-        if (!runtime_memory_vma_info(address, &p, &type, &mapping_end)) {
-            return -1;
-        }
         // The runtime's map gives the end of the mapping, not its start: the address itself
         // stands for it (callers check address >= start).
+        uintptr_t mapping_start = address & ~u64(0xfff), mapping_end = 0;
+        if (!runtime_memory_vma_info(address, &p, &type, &mapping_end) &&
+            !BbnetLowMemoryInfo(address, &mapping_start, &mapping_end, &p)) {
+            return -1;
+        }
         auto& slot = cache[next++ % cache.size()];
-        slot = {address & ~u64(0xfff), mapping_end, u32(p), now};
+        slot = {mapping_start, mapping_end, u32(p), now};
         *start = reinterpret_cast<void*>(slot.start);
         *end = reinterpret_cast<void*>(slot.end);
         *prot = slot.prot;
