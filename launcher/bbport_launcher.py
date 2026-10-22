@@ -80,7 +80,7 @@ FSR411_BUILD_ERRORS = {
 
 # Choices: (label, value). The first entry is the default. Labels are translated when shown.
 UI_LANGUAGES = [("Как в системе", ""), ("Русский", "ru"), ("English", "en"), ("Português (Brasil)", "pt_BR"),
-                ("简体中文", "zh_CN")]
+                ("简体中文", "zh_CN"), ("French", "fr_FR")]
 UPSCALERS = [("FSR 4", "fsr4"), ("FSR 4.1.1", "fsr411"), ("FSR 3", "fsr3"),
              ("DLSS (NVIDIA RTX)", "dlss"),
              ("TAA (нативное сглаживание)", "taa"), ("Выключен", "off")]
