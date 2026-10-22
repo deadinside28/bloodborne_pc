@@ -1422,7 +1422,10 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.bbsc_row = Adw.SwitchRow(
             title=tr("Бесшовный кооператив (BBSC)"),
             subtitle=tr("Сессия переживает смерти, лампы, смену локаций и боссов; до 5 охотников. "
-                        "Нужен сервер с игровым сервером BBSC, у всех игроков включено"),
+                        "Нужен сервер с игровым сервером BBSC, у всех игроков включено") + ". " +
+                     tr("Пока включено, колокола игры заменены колоколами BBSC; после выключения "
+                        "прежние вернутся при следующей загрузке персонажа (сохранение копируется "
+                        "в save-backups)"),
             active=s.get("online_bbsc", False))
         coop.add(self.bbsc_row)
         self.coop_group = coop

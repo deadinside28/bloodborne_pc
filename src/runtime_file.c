@@ -90,6 +90,30 @@ void runtime_file_unmount(const char *guest) {
 }
 static char user_root[512]="user";
 const char *runtime_file_user_dir(void) { return user_root; }
+/* bbport: the character's save the game is using (userdata0000..userdata0009, one per character;
+ * userdata0010 holds the system data): the last such file it opened. Loading a character reads
+ * its file and the game then writes only that one. Kept per host folder, for the BBSC kit's
+ * journal and its restore (gpu/shim/bbport_kit_restore). */
+static pthread_mutex_t slot_lock=PTHREAD_MUTEX_INITIALIZER;
+static int active_slot=-1;
+static char active_dir[1024];
+static void note_save_slot(const char *host) {
+    const char *name=strrchr(host,'/');
+    unsigned slot;
+    char tail;
+    if (!name || sscanf(name+1,"userdata%4u%c",&slot,&tail)!=1 || slot>9) return;
+    pthread_mutex_lock(&slot_lock);
+    active_slot=(int)slot;
+    snprintf(active_dir,sizeof(active_dir),"%.*s",(int)(name-host),host);
+    pthread_mutex_unlock(&slot_lock);
+}
+int runtime_savedata_active_slot(char *dir, size_t size) {
+    pthread_mutex_lock(&slot_lock);
+    const int slot=active_slot;
+    if (dir && size) snprintf(dir,size,"%s",slot>=0 ? active_dir : "");
+    pthread_mutex_unlock(&slot_lock);
+    return slot;
+}
 void runtime_file_configure(const char *app0,const char *user) {
     char path[600];
     snprintf(user_root,sizeof(user_root),"%s",user);
@@ -462,6 +486,7 @@ static int64_t do_open(const char *guest,int flags,int mode) {
         }
     }
     if (host>=0 && !(flags&3) && game_path(guest)) host=menu_layout_file(guest,host);
+    if (host>=0 && save_path(guest)) note_save_slot(path);
     if (save_trace() && save_path(guest))
         printf("Save trace: open(%s, flags 0x%x) -> host %d%s%s\n",guest,flags,host,temp ? ", copy " : "",temp ? temp : "");
     if (host<0) {

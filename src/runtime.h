@@ -117,6 +117,8 @@ uintptr_t runtime_pad_resolve(const char *name);
 void runtime_pad_report(void);
 uintptr_t runtime_rtc_resolve(const char *name);
 const char *runtime_file_user_dir(void);
+/* The character save the game uses: its slot (userdataNNNN, 0..9) and host folder; -1 before any. */
+int runtime_savedata_active_slot(char *dir, size_t size);
 void runtime_savedata_configure(const char *title);
 uintptr_t runtime_savedata_resolve(const char *name);
 void runtime_savedata_report(void);
