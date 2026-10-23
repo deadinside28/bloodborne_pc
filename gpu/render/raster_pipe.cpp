@@ -354,10 +354,11 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
         }
         VAddr address;
         u64 size;
+        Gcn::Buffer vsharp;
         {
             BB_SECTION(ARingSharp);
-            const auto vsharp = prepared_stage ? prepared_stage->buffer_sharps[index]
-                                               : desc.GetSharp(stage);
+            vsharp = prepared_stage ? prepared_stage->buffer_sharps[index]
+                                    : desc.GetSharp(stage);
             address = vsharp.base_address;
             if (address == 0 || vsharp.GetSize() == 0) {
                 continue;
@@ -377,6 +378,13 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
                 }
             } else {
                 NotePendingGpuWrite(address, size);
+            }
+            continue;
+        }
+        if (Shader::IsPagedBuffer(VideoCore::BufferCache::LayerPagedActive(), vsharp,
+                                  stage.pgm_hash, Game::BufferCopyShader())) {
+            if (size <= 16_MB) {
+                NotePendingRead(address, size);
             }
             continue;
         }

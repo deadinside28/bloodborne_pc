@@ -103,12 +103,34 @@ void Runtime::TickFrame() {
 bool Runtime::IsBufferAccessed(const VideoCore::Buffer* buffer, u64 offset, u64 size,
                                bool check_read) {
     if (global_write) {
+        pending_buffer_hazard = true;
         return true; // a paged write may have touched it (AccessGlobal)
     }
     const u64 id = reinterpret_cast<u64>(buffer);
     const u64 last = offset + size - 1;
-    return accesses.Overlaps(id, offset, last, AccessTracker::Kind::Write) ||
-           (check_read && accesses.Overlaps(id, offset, last, AccessTracker::Kind::Read));
+    const bool write_hazard = accesses.Overlaps(id, offset, last, AccessTracker::Kind::Write);
+    const bool read_hazard =
+        check_read && accesses.Overlaps(id, offset, last, AccessTracker::Kind::Read);
+    if (read_hazard) {
+        pending_war_hazard = true;
+    }
+    const bool accessed = write_hazard || read_hazard;
+    if (accessed) {
+        pending_buffer_hazard = true;
+    }
+    return accessed;
+}
+
+bool Runtime::IsGlobalAccessed(bool check_read) {
+    const bool read_hazard = check_read && bool(pending_stages);
+    if (read_hazard) {
+        pending_war_hazard = true;
+    }
+    const bool accessed = global_write || bool(pending_writes) || read_hazard;
+    if (accessed) {
+        pending_buffer_hazard = true;
+    }
+    return accessed;
 }
 
 void Runtime::AccessBuffer(const VideoCore::Buffer* buffer, u64 offset, u64 size,
@@ -118,10 +140,10 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* buffer, u64 offset, u64 size
     u64 last = offset + size - 1;
     if (access & WriteAccesses) {
         accesses.Insert(id, first, last, AccessTracker::Kind::Write);
+        pending_write_stages |= stage;
+        pending_writes |= access & WriteAccesses;
     }
     if (access & ReadAccesses) {
-        // Reads at 4 KiB granularity: ring allocations of neighbouring draws join into one
-        // range. Wider read ranges only add barriers, never drop one.
         if (!BbToggle::Disabled(BbToggle::CoarseReadTracking)) {
             first &= ~u64{0xFFF};
             last |= 0xFFF;
@@ -129,12 +151,12 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* buffer, u64 offset, u64 size
         accesses.Insert(id, first, last, AccessTracker::Kind::Read);
     }
     pending_stages |= stage;
-    pending_writes |= access & WriteAccesses;
 }
 
 void Runtime::AccessGlobal(vk::PipelineStageFlags2 stage, vk::AccessFlags2 access) {
     pending_stages |= stage;
     if (access & AccessBit::eShaderWrite) {
+        pending_write_stages |= stage;
         pending_writes |= AccessBit::eShaderWrite;
         global_write = true;
     }
@@ -142,16 +164,21 @@ void Runtime::AccessGlobal(vk::PipelineStageFlags2 stage, vk::AccessFlags2 acces
 
 void Runtime::FlushBarriers() {
     BeforeImageAccess();
-    const bool memory = bool(pending_stages);
+    const auto src_stages =
+        pending_write_stages | (pending_war_hazard ? pending_stages : vk::PipelineStageFlags2{});
+    const bool has_writes = bool(pending_writes);
+    const bool memory = has_writes || (pending_buffer_hazard && bool(src_stages));
     if (!memory && image_barriers.empty()) {
         return;
     }
     scheduler.EndRendering();
     scheduler.Record([barrier = vk::MemoryBarrier2{
-                          .srcStageMask = pending_stages,
+                          .srcStageMask = src_stages,
                           .srcAccessMask = pending_writes,
-                          .dstStageMask = Stage::eAllCommands,
-                          .dstAccessMask = AccessBit::eMemoryRead | AccessBit::eMemoryWrite,
+                          .dstStageMask = Stage::eAllGraphics | Stage::eComputeShader | Stage::eTransfer,
+                          .dstAccessMask = has_writes
+                                               ? (AccessBit::eMemoryRead | AccessBit::eMemoryWrite)
+                                               : AccessBit::eNone,
                       },
                       memory,
                       images = scheduler.RecordData(std::span<const vk::ImageMemoryBarrier2>(
@@ -163,11 +190,21 @@ void Runtime::FlushBarriers() {
             .pImageMemoryBarriers = images.data(),
         });
     });
-    pending_stages = {};
-    pending_writes = {};
     image_barriers.clear();
-    accesses.Clear();
-    global_write = false;
+    if (memory) {
+        if (pending_war_hazard) {
+            pending_stages = {};
+            accesses.Clear();
+        } else {
+            pending_stages &= ~src_stages;
+            accesses.ClearWrites();
+        }
+        pending_write_stages = {};
+        pending_writes = {};
+        pending_buffer_hazard = false;
+        pending_war_hazard = false;
+        global_write = false;
+    }
 }
 
 bool Runtime::Transit(VideoCore::Image* image, vk::ImageLayout dst_layout,
@@ -324,9 +361,8 @@ void Runtime::UploadImage(VideoCore::Image* dst, const VideoCore::Buffer* src,
     bool needs_flush =
         Transit(dst, Layout::eTransferDstOptimal, Stage::eCopy, AccessBit::eTransferWrite);
     for (const auto& copy : copies) {
-        needs_flush = needs_flush ||
-                      IsBufferAccessed(src, copy.bufferOffset,
-                                       BufferImageCopySize(copy, dst->info.pixel_format));
+        needs_flush |= IsBufferAccessed(src, copy.bufferOffset,
+                                        BufferImageCopySize(copy, dst->info.pixel_format));
     }
     if (needs_flush) {
         FlushBarriers();
@@ -351,9 +387,8 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
     bool needs_flush =
         Transit(src, Layout::eTransferSrcOptimal, Stage::eCopy, AccessBit::eTransferRead);
     for (const auto& copy : copies) {
-        needs_flush = needs_flush ||
-                      IsBufferAccessed(dst, copy.bufferOffset,
-                                       BufferImageCopySize(copy, src->info.pixel_format), true);
+        needs_flush |= IsBufferAccessed(dst, copy.bufferOffset,
+                                        BufferImageCopySize(copy, src->info.pixel_format), true);
     }
     if (needs_flush) {
         FlushBarriers();

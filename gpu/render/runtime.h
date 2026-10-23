@@ -107,12 +107,17 @@ public:
     /// Whether a barrier must come before reading (or with `check_read`, writing) the range.
     bool IsBufferAccessed(const VideoCore::Buffer* buffer, u64 offset, u64 size,
                           bool check_read = false);
+    /// Whether a barrier must come before a paged binding (reads any buffer; with `check_read`, writes).
+    bool IsGlobalAccessed(bool check_read = false);
     /// BB_LAYER_MEMORY: a shader reached memory through the page table (any buffer of the
     /// game's memory). A write there makes every later access wait for a barrier.
     void AccessGlobal(vk::PipelineStageFlags2 stage, vk::AccessFlags2 access);
 
     /// Records the queued barriers (memory and image layouts).
     void FlushBarriers();
+    [[nodiscard]] bool HasPendingBarriers() const noexcept {
+        return bool(pending_writes) || !image_barriers.empty();
+    }
 
     /// Runs before this thread changes image state (layouts, pending image barriers): the
     /// rasterizer joins its texture binding helper there (BindHelper).
@@ -145,9 +150,12 @@ private:
     StagingBufferPool staging_pool;
     AccessTracker accesses;
     VideoCore::Image::Barriers image_barriers;
-    vk::PipelineStageFlags2 pending_stages{};  ///< of accesses since the last barrier
-    vk::AccessFlags2 pending_writes{};         ///< their write accesses
-    bool global_write = false;                 ///< AccessGlobal wrote since the last barrier
+    vk::PipelineStageFlags2 pending_stages{};       ///< of accesses since the last barrier
+    vk::PipelineStageFlags2 pending_write_stages{}; ///< of write accesses since the last barrier
+    vk::AccessFlags2 pending_writes{};              ///< their write accesses
+    bool pending_buffer_hazard = false;             ///< IsBufferAccessed matched since the last barrier
+    bool pending_war_hazard = false;                ///< write-after-read matched since the last barrier
+    bool global_write = false;                      ///< AccessGlobal wrote since the last barrier
 };
 
 } // namespace Vulkan

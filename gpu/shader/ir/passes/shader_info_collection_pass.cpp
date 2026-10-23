@@ -223,7 +223,9 @@ void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
         for (const auto& buffer : info.buffers) {
             if (buffer.buffer_type == BufferType::Guest) {
                 guest_buffers = true;
-                info.uses_paged_buffers |= IsPagedBuffer(true, buffer.GetSharp(info));
+                info.uses_paged_buffers |=
+                    IsPagedBuffer(true, buffer.GetSharp(info), info.pgm_hash,
+                                  profile.buffer_copy_shader_hash);
             }
         }
         if (guest_buffers && !info.uses_dma) {

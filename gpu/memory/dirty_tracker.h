@@ -326,6 +326,7 @@ public:
                 flush = EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Disabled &&
                         r.Modified<Side::Gpu>(offset, bytes);
                 if (!flush) {
+                    r.Change<Side::Gpu, false>(r.Base() + offset, bytes);
                     r.Change<Side::Cpu, true>(r.Base() + offset, bytes);
                 }
             }
@@ -362,7 +363,14 @@ public:
                 return;
             }
             r.lock.lock();
-            r.ForEachModified<Side::Cpu, true>(r.Base() + offset, s64(bytes), func);
+            r.ForEachModified<Side::Cpu, true>(
+                r.Base() + offset, s64(bytes), [&](VAddr up_addr, u64 up_size) {
+                    if (!is_written &&
+                        EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Disabled) {
+                        r.Change<Side::Gpu, false>(up_addr, up_size);
+                    }
+                    func(up_addr, up_size);
+                });
             if (!is_written) {
                 r.lock.unlock();
             }

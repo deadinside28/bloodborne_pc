@@ -7,6 +7,7 @@
 #include <string>
 #include <filesystem>
 #include "render/raster_internal.h"
+#include "render/shader_hle.h"
 #include <vk_mem_alloc.h>
 
 namespace Vulkan {
@@ -399,6 +400,31 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             return;
         }
     }
+    const auto is_attachmentless_noop = [&] {
+        const auto& key = pipeline->GetGraphicsKey();
+        if (regs.color_control.mode != Gcn::ColorControl::OperationMode::Disable) {
+            for (s32 cb = 0; cb < std::bit_width(key.mrt_mask); ++cb) {
+                if (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb) &&
+                    (key.mrt_mask & (1 << cb)) != 0) {
+                    return false;
+                }
+            }
+        }
+        if ((regs.depth_control.depth_enable && regs.depth_buffer.DepthValid()) ||
+            (regs.depth_control.stencil_enable && regs.depth_buffer.StencilValid())) {
+            return false;
+        }
+        if (pipeline->GetStages()[u32(Shader::SwStage::Fragment)] != nullptr) {
+            return false;
+        }
+        const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+        return vs.pgm_hash == 0x89cda9e4ull && !vs.uses_dma &&
+               !std::ranges::any_of(vs.buffers, [](const auto& b) { return b.is_written; }) &&
+               !std::ranges::any_of(vs.images, [](const auto& i) { return i.is_written; });
+    }();
+    if (is_attachmentless_noop) {
+        return;
+    }
     // bbport: the key guide icons for the device in use (a change: uploaded before this draw).
     prompts->Update();
     bind_prepared = used_prepared;
@@ -486,12 +512,15 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             ResolveIndexBuffer(index_offset);
         }
     }
+    if (HasPendingHleCopies() && scheduler.WillBeginRendering(state)) {
+        FlushPendingHleCopies(*this);
+    }
     EmitVertexBuffers();
     if (is_indexed) {
         EmitIndexBuffer();
     }
 
-    if (needs_barrier) {
+    if (needs_barrier || (scheduler.WillBeginRendering(state) && runtime.HasPendingBarriers())) {
         runtime.FlushBarriers();
     }
 
@@ -896,10 +925,39 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     // Indirect arguments may be GPU-written: leave these draws on camera fallback.
     motion_draw = false;
     motion_geometry = 0;
+    {
+        const auto& regs = Regs();
+        const auto& key = pipeline->GetGraphicsKey();
+        bool has_color = false;
+        if (regs.color_control.mode != Gcn::ColorControl::OperationMode::Disable) {
+            for (s32 cb = 0; cb < std::bit_width(key.mrt_mask); ++cb) {
+                if (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb) &&
+                    (key.mrt_mask & (1 << cb)) != 0) {
+                    has_color = true;
+                    break;
+                }
+            }
+        }
+        const bool has_depth_stencil =
+            (regs.depth_control.depth_enable && regs.depth_buffer.DepthValid()) ||
+            (regs.depth_control.stencil_enable && regs.depth_buffer.StencilValid());
+        if (!has_color && !has_depth_stencil &&
+            pipeline->GetStages()[u32(Shader::SwStage::Fragment)] == nullptr) {
+            const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+            if (vs.pgm_hash == 0x89cda9e4ull && !vs.uses_dma &&
+                !std::ranges::any_of(vs.buffers, [](const auto& b) { return b.is_written; }) &&
+                !std::ranges::any_of(vs.images, [](const auto& i) { return i.is_written; })) {
+                return;
+            }
+        }
+    }
     PrepareRenderState(pipeline);
     NoteUpscalerDraw(pipeline);
     if (!BindResources(pipeline)) {
         return;
+    }
+    if (HasPendingHleCopies() && PendingHleCopiesConflict(indirect.args, stride * max_count)) {
+        FlushPendingHleCopies(*this);
     }
     const auto [buffer, base] =
         buffer_cache.ObtainBuffer(indirect.args, stride * max_count, false);
@@ -930,11 +988,17 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     const VideoCore::Buffer* count_buffer;
     u64 count_offset;
     if (count_address != 0) {
+        if (HasPendingHleCopies() && PendingHleCopiesConflict(count_address, 4)) {
+            FlushPendingHleCopies(*this);
+        }
         std::tie(count_buffer, count_offset) = buffer_cache.ObtainBuffer(count_address, 4, false);
         needs_barrier |= runtime.IsBufferAccessed(count_buffer, count_offset, 4);
     }
+    if (HasPendingHleCopies() && scheduler.WillBeginRendering(state)) {
+        FlushPendingHleCopies(*this);
+    }
 
-    if (needs_barrier) {
+    if (needs_barrier || (scheduler.WillBeginRendering(state) && runtime.HasPendingBarriers())) {
         runtime.FlushBarriers();
     }
 
@@ -1039,6 +1103,9 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (hle) {
         return;
     }
+    if (HasPendingHleCopies()) {
+        FlushPendingHleCopies(*this);
+    }
     // bbport: the game's copy shader running as itself (BB_COPY_SHADER_NATIVE): its destinations stay in
     // the game's memory. They hold data our translator reads on the CPU (next to shader code the
     // game uploads this way); a VRAM copy of them showed it a stale copy (a black scene). The
@@ -1048,23 +1115,27 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     // What it writes, from its control list: GPU-written marks on those bytes only (the bound
     // destination spans tens of MiB, marked whole it kept the constants there in place).
     thread_local std::vector<std::pair<unsigned long long, unsigned long long>> copy_writes;
+    thread_local std::vector<std::pair<unsigned long long, unsigned long long>> copy_reads;
     copy_writes.clear();
+    copy_reads.clear();
     if (buffer_cache.force_writes_in_place && CopyDestinationsPrecise() &&
-        CopyShaderDestinations(cs, cs_program.dim_x, CopyDestinationGap(), copy_writes)) {
+        CopyShaderDestinations(cs, cs_program.dim_x, CopyDestinationGap(), copy_writes,
+                               &copy_reads)) {
         buffer_cache.precise_writes = &copy_writes;
+        buffer_cache.precise_reads = &copy_reads;
     }
     const bool bound = BindResources(pipeline);
     buffer_cache.force_writes_in_place = false;
     buffer_cache.precise_writes = nullptr;
+    buffer_cache.precise_reads = nullptr;
     if (!bound) {
         return;
     }
 
-    if (needs_barrier) {
+    scheduler.EndRendering();
+    if (needs_barrier || runtime.HasPendingBarriers()) {
         runtime.FlushBarriers();
     }
-
-    scheduler.EndRendering();
     mark();
     // BB_DISPATCH_LOG=1 (diagnostics): the shape of each kind of real compute dispatch, once: the
     // buffers (size, formatted, written), the groups, and what the image clear detector thinks.
@@ -1118,6 +1189,17 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
         cmdbuf.dispatch(dim_x, dim_y, dim_z);
     });
+    // BB_TRACE_SHADER with BB_GPU_PROFILE: a mark right after the traced compute shader's
+    // dispatch, so the profile splits its label into the dispatch itself and what follows it
+    // (barriers, unlabeled commands) up to the next mark.
+    if (auto* profiler = GpuProfiler::Get()) {
+        static const char* traced = std::getenv("BB_TRACE_SHADER");
+        if (traced && std::strtoull(traced, nullptr, 16) == cs.pgm_hash) {
+            profiler->Mark(cs.pgm_hash ^ 0xAF7D'0000ull, [&] {
+                return fmt::format("after the dispatch of cs {:016x}", cs.pgm_hash);
+            });
+        }
+    }
 
     ResetBindings(true);
     scheduler.KickRecording();
@@ -1143,6 +1225,9 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
 
 void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr address,
                                         u32 size) {
+    if (HasPendingHleCopies()) {
+        FlushPendingHleCopies(*this);
+    }
     buffer_cache.NewPacket();
     scheduler.PopPendingOperations();
     if (!BindResources(pipeline)) {
@@ -1151,11 +1236,16 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const auto [buffer, base] = buffer_cache.ObtainBuffer(address, size, false);
     needs_barrier |= runtime.IsBufferAccessed(buffer, base, size);
 
-    if (needs_barrier) {
+    scheduler.EndRendering();
+    if (needs_barrier || runtime.HasPendingBarriers()) {
         runtime.FlushBarriers();
     }
-
-    scheduler.EndRendering();
+    const auto& cs_crumb = pipeline->GetStage(Shader::SwStage::Compute);
+    if (auto* profiler = GpuProfiler::Get()) {
+        profiler->Mark(cs_crumb.pgm_hash ^ 0xD15B0000ull, [&] {
+            return fmt::format("dispatch indirect cs {:016x}", cs_crumb.pgm_hash);
+        });
+    }
     // Group counts checked on the GPU first (vk_indirect_guard.h); recorded before the
     // pipeline's bindings, which the check's own pipeline would disturb.
     vk::Buffer args = buffer->Handle();
@@ -1172,7 +1262,6 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const vk::Pipeline handle = pipeline->Handle();
     const vk::Buffer raw_args = buffer->Handle();
     const u64 raw_offset = base;
-    const auto& cs_crumb = pipeline->GetStage(Shader::SwStage::Compute);
     const u32 args_slot = Breadcrumbs::ArgsSlot();
     const Breadcrumbs::Crumb crumb{
         .kind = Breadcrumbs::Kind::DispatchIndirect,
@@ -1195,6 +1284,9 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
 u64 Rasterizer::Flush() {
     BB_SECTION(Flush);
     DrainDrawPipe();
+    if (HasPendingHleCopies()) {
+        FlushPendingHleCopies(*this);
+    }
     PublishSignals(); // the recording thread's (it is idle here, or this is it)
     last_flush_ns.store(std::chrono::steady_clock::now().time_since_epoch().count(),
                         std::memory_order_relaxed);
@@ -1207,6 +1299,9 @@ u64 Rasterizer::Flush() {
 
 void Rasterizer::Finish() {
     DrainDrawPipe();
+    if (HasPendingHleCopies()) {
+        FlushPendingHleCopies(*this);
+    }
     PublishSignals();
     scheduler.Finish();
 }
@@ -1258,6 +1353,9 @@ void Rasterizer::MarkPass(const GraphicsPipeline* pipeline, const RenderState& s
 }
 
 void Rasterizer::NoteFrameStart() {
+    if (HasPendingHleCopies()) {
+        FlushPendingHleCopies(*this);
+    }
     if (auto* profiler = GpuProfiler::Get()) {
         profiler->BeginFrame();
     }

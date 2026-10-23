@@ -563,6 +563,9 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
     }
     for (auto& range : ranges) {
         const u64 size = memory->ClampRangeSize(range.begin, range.end - range.begin);
+        if (HasPendingHleCopies() && PendingHleCopiesConflict(range.begin, size)) {
+            FlushPendingHleCopies(*this);
+        }
         std::tie(range.buffer, range.offset) = buffer_cache.ObtainBuffer(range.begin, size, false);
         if (InPlaceReads::Enabled()) {
             InPlaceReads::Note(range.begin, size, scheduler.CurrentTick(), 0, 2);
@@ -610,6 +613,7 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
             }
         }
         needs_barrier |= runtime.IsBufferAccessed(range.buffer, range.offset, size);
+        bound_buffers.emplace_back(range.buffer, range.offset, size, false);
     }
 
     // Each stream at its offset in its range's buffer (null for streams without memory).
@@ -653,6 +657,9 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset) {
     const u32 index_size = index16 ? sizeof(u16) : sizeof(u32);
     const VAddr address = regs.index_base_address.Address<VAddr>() + u64(index_offset) * index_size;
     const u32 size = regs.num_indices * index_size;
+    if (HasPendingHleCopies() && PendingHleCopiesConflict(address, size)) {
+        FlushPendingHleCopies(*this);
+    }
     const auto [buffer, offset] = buffer_cache.ObtainBuffer(address, size, false);
     needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size);
     if (InPlaceReads::Enabled()) {
@@ -812,6 +819,9 @@ void Rasterizer::BindSpecialBuffer(const Shader::BufferResource& desc, const Sha
     case Shader::BufferType::BdaPagetable: {
         const auto* table = buffer_cache.GetBdaPageTableBuffer();
         buffer_infos.emplace_back(table->Handle(), 0, table->SizeBytes());
+        if (stage.uses_paged_buffers) {
+            needs_barrier |= runtime.IsBufferAccessed(table, 0, table->SizeBytes(), false);
+        }
         break;
     }
     case Shader::BufferType::FaultBuffer: {
@@ -864,7 +874,8 @@ void Rasterizer::BindGuestBuffer(const Shader::BufferResource& desc, const Gcn::
         buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
         return;
     }
-    if (Shader::IsPagedBuffer(VideoCore::BufferCache::LayerPagedActive(), vsharp)) {
+    if (Shader::IsPagedBuffer(VideoCore::BufferCache::LayerPagedActive(), vsharp, stage.pgm_hash,
+                              Game::BufferCopyShader())) {
         // BB_LAYER_MEMORY: nearly all memory as one buffer. The shader reaches it through the
         // page table and the descriptor holds its record; it may touch any buffer of the game's
         // memory: barriers before it, and after it if it writes.
@@ -876,18 +887,36 @@ void Rasterizer::BindGuestBuffer(const Shader::BufferResource& desc, const Gcn::
         }
         push_data.AddOffset(slot, 0);
         buffer_infos.emplace_back(record->Handle(), record_offset, 32);
+        const auto* precise =
+            desc.is_written ? buffer_cache.precise_writes : buffer_cache.precise_reads;
+        if (precise) {
+            for (const auto& [p_addr, p_size] : *precise) {
+                if (desc.is_written) {
+                    texture_cache.InvalidateMemoryFromGPU(p_addr, p_size);
+                }
+                buffer_cache.ForEachLayerBuffer(
+                    p_addr, p_size, [&](const VideoCore::Buffer* buf, u64 off, u64 sz) {
+                        bound_buffers.emplace_back(buf, off, sz, desc.is_written);
+                        needs_barrier |= runtime.IsBufferAccessed(buf, off, sz, desc.is_written);
+                    });
+            }
+            return;
+        }
         bound_buffers.emplace_back(nullptr, 0, 0, desc.is_written);
         if (desc.is_written) {
             texture_cache.InvalidateMemoryFromGPU(
                 address, memory->ClampRangeSize(address, vsharp.GetSize()));
         }
-        needs_barrier = true;
+        needs_barrier |= runtime.IsGlobalAccessed(desc.is_written);
         return;
     }
     const u64 size = memory->ClampRangeSize(address, vsharp.GetSize());
     if (size != vsharp.GetSize()) {
         LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}", vsharp.GetSize(), size,
                   stage.pgm_hash);
+    }
+    if (HasPendingHleCopies() && PendingHleCopiesConflict(address, size)) {
+        FlushPendingHleCopies(*this);
     }
     const auto [buffer, offset] =
         buffer_cache.ObtainBuffer(address, size, desc.is_written, desc.is_formatted);
@@ -906,6 +935,26 @@ void Rasterizer::BindGuestBuffer(const Shader::BufferResource& desc, const Gcn::
     // BB_LAYER_MEMORY: a huge binding may end at the end of its guest chunk's buffer.
     buffer_infos.emplace_back(buffer->Handle(), offset_aligned,
                               std::min<u64>(size + adjust, buffer->SizeBytes() - offset_aligned));
+    const auto* precise = desc.is_written
+                              ? buffer_cache.precise_writes
+                              : (vsharp.GetStride() == 4 ? buffer_cache.precise_reads : nullptr);
+    if (precise) {
+        for (const auto& [p_addr, p_size] : *precise) {
+            const VAddr p_from = std::max<VAddr>(address, p_addr);
+            const VAddr p_to = std::min<VAddr>(address + size, p_addr + p_size);
+            if (p_from >= p_to) {
+                continue;
+            }
+            const u64 p_off = offset + (p_from - address);
+            const u64 p_len = p_to - p_from;
+            bound_buffers.emplace_back(buffer, p_off, p_len, desc.is_written);
+            if (desc.is_written) {
+                texture_cache.InvalidateMemoryFromGPU(p_from, p_len);
+            }
+            needs_barrier |= runtime.IsBufferAccessed(buffer, p_off, p_len, desc.is_written);
+        }
+        return;
+    }
     bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
     if (desc.is_written) {
         // Raw storage-buffer writes can also make an aliased cached image stale.

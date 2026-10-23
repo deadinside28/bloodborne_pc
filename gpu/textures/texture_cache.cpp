@@ -359,7 +359,8 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     return new_id;
 }
 
-ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure_valid) {
+ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure_valid,
+                                         size_t max_tail) {
     ImageIds candidates;
     ForEachImageInRegion(address, size, [&](ImageId id, Image& image) {
         if (image.info.guest_address == address && (!ensure_valid || image.SafeToDownload())) {
@@ -375,10 +376,43 @@ ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure
             return id;
         }
     }
+    if (max_tail != 0) {
+        ImageId best{};
+        size_t best_size = 0;
+        for (const ImageId id : candidates) {
+            const size_t guest_size = slot_images[id].info.guest_size;
+            if (guest_size <= size && size - guest_size <= max_tail && guest_size > best_size) {
+                best = id;
+                best_size = guest_size;
+            }
+        }
+        if (best) {
+            return best;
+        }
+    }
     if (!candidates.empty()) {
         LOG_WARNING(Render_Vulkan, "No image of exactly {:#x}+{:#x}", address, size);
     }
     return {};
+}
+
+std::pair<ImageId, s32> TextureCache::FindImageSliceFromRange(VAddr address, size_t size) {
+    std::pair<ImageId, s32> found{{}, -1};
+    ForEachImageInRegion(address, size, [&](ImageId id, Image& image) {
+        if (image.info.resources.levels == 1 && image.info.resources.layers > 1) {
+            const size_t slice_size = image.info.guest_size / image.info.resources.layers;
+            if (slice_size == size && address >= image.info.guest_address) {
+                const u64 offset = address - image.info.guest_address;
+                if (offset % slice_size == 0) {
+                    const u64 layer = offset / slice_size;
+                    if (layer < image.info.resources.layers) {
+                        found = {id, static_cast<s32>(layer)};
+                    }
+                }
+            }
+        }
+    });
+    return found;
 }
 
 void TextureCache::QueueDownload(ImageId image_id) {

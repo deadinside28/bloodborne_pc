@@ -94,8 +94,8 @@ bool Rasterizer::InvalidateMemory(VAddr addr, u64 size, bool assume_locks) {
 }
 
 void Rasterizer::NoteAssetWrite(VAddr addr, u64 size) {
-    buffer_cache.NoteAssetWrite(addr, size);
     InvalidateAfterWrite(addr, size);
+    buffer_cache.NoteAssetWrite(addr, size);
 }
 
 void Rasterizer::InvalidateAfterWrite(VAddr addr, u64 size) {

@@ -105,7 +105,10 @@ public:
     /// image of the very format.
     [[nodiscard]] ImageId FindImage(ImageDesc& desc, bool exact_fmt = false);
     /// The image starting at `address` (`ensure_valid`: written by the GPU and clean).
-    [[nodiscard]] ImageId FindImageFromRange(VAddr address, size_t size, bool ensure_valid = true);
+    [[nodiscard]] ImageId FindImageFromRange(VAddr address, size_t size, bool ensure_valid = true,
+                                             size_t max_tail = 0);
+    /// Single-level array/cubemap slice covering `[address, address + size)`: `(image_id, layer)`.
+    [[nodiscard]] std::pair<ImageId, s32> FindImageSliceFromRange(VAddr address, size_t size);
     /// The view a texture or storage binding uses; `refresh` false: an image found out of date is
     /// used as is (the caller checked it).
     [[nodiscard]] ImageView& FindTexture(ImageId image_id, const ImageDesc& desc,

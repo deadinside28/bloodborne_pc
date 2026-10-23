@@ -547,10 +547,10 @@ private:
     struct BoundBuffer {
         const VideoCore::Buffer* buffer;
         u64 offset;
-        u32 size;
+        u64 size;
         bool is_written;
     };
-    boost::container::static_vector<BoundBuffer, Shader::NUM_BUFFERS> bound_buffers;
+    boost::container::small_vector<BoundBuffer, Shader::NUM_BUFFERS> bound_buffers;
 
     u32 set_write_index{};
     Pipeline::DescriptorWrites set_writes;

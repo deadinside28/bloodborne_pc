@@ -117,8 +117,15 @@ using BufferResourceList = boost::container::static_vector<BufferResource, NUM_B
 /// buffer) is reached through the page table, not as one bound range: the game's memory is in
 /// several buffers (its chunks, VRAM mirrors). docs/MEMORY_MODULE_PLAN.ru.md.
 constexpr u64 PagedBufferMinSize = u64{64} << 20;
-inline bool IsPagedBuffer(bool enabled, const ::Gcn::Buffer& sharp) {
-    return enabled && sharp.base_address != 0 && u64(sharp.GetSize()) >= PagedBufferMinSize;
+inline bool IsPagedBuffer(bool enabled, const ::Gcn::Buffer& sharp, u64 pgm_hash = 0,
+                          u64 copy_shader_hash = 0) {
+    if (!enabled || sharp.base_address == 0) {
+        return false;
+    }
+    if (copy_shader_hash != 0 && pgm_hash == copy_shader_hash && sharp.GetStride() == 4) {
+        return true;
+    }
+    return u64(sharp.GetSize()) >= PagedBufferMinSize;
 }
 
 /// Storage access to one mip level where the host cannot address levels in image operations:

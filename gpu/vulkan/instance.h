@@ -104,6 +104,9 @@ public:
     vk::DeviceSize StorageMinAlignment() const {
         return properties.limits.minStorageBufferOffsetAlignment;
     }
+    vk::DeviceSize MaxStorageBufferRange() const {
+        return properties.limits.maxStorageBufferRange;
+    }
     vk::DeviceSize NonCoherentAtomSize() const {
         return properties.limits.nonCoherentAtomSize;
     }

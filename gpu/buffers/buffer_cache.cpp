@@ -1172,7 +1172,10 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         if (const auto bound = LayerBind(device_addr, size, is_written, is_texel_buffer)) {
             return *bound;
         }
-        NoteLayerMiss(device_addr, size, is_written);
+        if (is_written || size > STREAM_THRESHOLD || ConstantsInPlace() ||
+            IsRegionGpuModified(device_addr, size)) {
+            NoteLayerMiss(device_addr, size, is_written);
+        }
     }
     thread_local std::array<InPlaceMemo, 256> in_place_reads{};
     const u64 memo_first = device_addr >> block_shift;
@@ -1246,7 +1249,10 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     // BB_EXP_NO_STREAM=1 (experiment, the flicker): never through the stream buffer.
     static const bool no_stream = std::getenv("BB_EXP_NO_STREAM") != nullptr;
     // For read-only buffers use device local stream buffer to reduce renderpass breaks.
-    if (!is_written && size <= STREAM_THRESHOLD && !IsRegionGpuModified(device_addr, size) &&
+    const bool gpu_modified =
+        !GuestInPlace() ? gpu_modified_ranges.Intersects(device_addr, size)
+                        : IsRegionGpuModified(device_addr, size);
+    if (!is_written && size <= STREAM_THRESHOLD && !gpu_modified &&
         !no_stream) {
         BB_SECTION(ObtainStream);
         if (stats) {
@@ -2222,6 +2228,11 @@ void BufferCache::NoteCpuWrite(VAddr address, u64 guest_rip) {
     // heap at its first write (others after Frames writes in Window frames).
     const bool dynamic_writer = Game::IsDynamicWriter(guest_rip);
     const u64 block = address >> block_shift;
+    const VAddr block_addr = block << block_shift;
+    if (LayerMode() && gpu_written_bytes.Overlaps(block_addr, block_addr + block_size) &&
+        !gpu_written_bytes.Overlaps(address, address + 16)) {
+        return;
+    }
     const u32 frame = static_cast<u32>(BbStats::frame_number.load(std::memory_order_relaxed));
     std::scoped_lock lk{dynamic_mutex};
     auto& [last, frames] = cpu_write_frames[block];
@@ -2270,6 +2281,12 @@ void BufferCache::ProcessDemotions() {
             return false; // its uploads are still being recorded
         }
         const VAddr address = block << block_shift;
+        if (LayerMode() && cpu_written &&
+            gpu_written_bytes.Overlaps(address, address + block_size) &&
+            !gpu_written_bytes.Contains(address, address + block_size)) {
+            layer_edge_blocks.Add({block, block + 1});
+            return true;
+        }
         if (cpu_written) {
             dynamic_blocks.Add({block, block + 1}); // bound in place when it is next used
             if (LayerMode()) {
@@ -2493,6 +2510,12 @@ void BufferCache::NoteCpuWriteRange(VAddr addr, u64 size) {
         return;
     }
     for (VAddr block = addr >> block_shift; block <= (addr + size - 1) >> block_shift; ++block) {
+        const VAddr b_start = block << block_shift, b_end = (block + 1) << block_shift;
+        const VAddr w_start = std::max(addr, b_start), w_end = std::min(addr + size, b_end);
+        if (LayerMode() && gpu_written_bytes.Overlaps(b_start, b_end) &&
+            !gpu_written_bytes.Overlaps(w_start, w_end)) {
+            continue;
+        }
         NoteCpuWrite(block << block_shift, 0);
     }
 }
@@ -2506,6 +2529,9 @@ void BufferCache::ProcessPendingAssets() {
         std::scoped_lock lk{pending_assets_mutex};
         ranges.swap(pending_assets);
         assets_pending.store(false, std::memory_order_release);
+    }
+    if (LayerMode()) {
+        LayerProcessTraps();
     }
     for (const auto& [addr, size, fresh] : ranges) {
         const u64 first = addr >> block_shift, end = (addr + size + block_size - 1) >> block_shift;
@@ -2525,11 +2551,13 @@ void BufferCache::ProcessPendingAssets() {
             gpu_modified_ranges.Subtract(addr, size);
             memory_tracker->UnmarkRegionAsGpuModified(addr, size);
             if (LayerMode()) {
+                gpu_write_pending_blocks.Subtract(first, end);
                 // Blocks whole in it start over: the GPU may keep its data there in VRAM again (CPU
                 // writes still queued mark them again, LayerForgetGpuData).
                 const u64 whole_first = (addr + block_size - 1) >> block_shift;
                 const u64 whole_end = (addr + size) >> block_shift;
                 if (whole_first < whole_end) {
+                    layer_edge_blocks.Subtract(whole_first, whole_end);
                     layer_cpu_blocks.Subtract(whole_first, whole_end);
                 }
             }
@@ -2537,6 +2565,14 @@ void BufferCache::ProcessPendingAssets() {
                 const VAddr block_addr = block << block_shift;
                 const VAddr from = std::max<VAddr>(addr, block_addr);
                 const VAddr to = std::min<VAddr>(addr + size, block_addr + block_size);
+                if (LayerMode() && gpu_written_bytes.Overlaps(block_addr, block_addr + block_size)) {
+                    layer_edge_blocks.Add({block, block + 1});
+                    memory_tracker->MarkRegionAsCpuModified(from, to - from);
+                    continue;
+                }
+                if (LayerMode()) {
+                    layer_edge_blocks.Subtract(block, block + 1);
+                }
                 const bool in_vram =
                     LayerMode() ? BbLayer::GpuMemory::Get().AnyValid(block, block + 1)
                                 : resident_ranges.Contains(block) && !in_place_blocks.Contains(block);
@@ -2556,6 +2592,18 @@ void BufferCache::ProcessPendingAssets() {
             continue;
         }
         asset_bytes.Add({addr, addr + size});
+        gpu_written_bytes.Subtract(addr, addr + size);
+        if (LayerMode()) {
+            for (u64 block = first; block < end; ++block) {
+                const VAddr block_addr = block << block_shift;
+                if (gpu_written_bytes.Overlaps(block_addr, block_addr + block_size)) {
+                    layer_edge_blocks.Add({block, block + 1});
+                } else {
+                    layer_edge_blocks.Subtract(block, block + 1);
+                }
+            }
+            gpu_write_pending_blocks.Subtract(first, end);
+        }
         // bbport: a block the GPU once wrote in place (dynamic for good) that the loaders have now
         // written whole holds the CPU's data only: it may have a VRAM copy again. Kept, such
         // blocks piled up as areas were loaded over memory the last one's GPU buffers had used
@@ -2815,9 +2863,15 @@ bool BufferCache::UpdateGpuWritten(VAddr addr, std::span<const u8> data) {
 }
 
 void BufferCache::NoteGpuWrite(VAddr addr, u64 size) {
-    if (size == 0 || gpu_written_bytes.Contains(addr, addr + size)) {
+    if (size == 0) {
         return;
     }
+    const u64 first_block = addr >> block_shift;
+    const u64 last_block = (addr + size - 1) >> block_shift;
+    if (gpu_written_bytes.Contains(addr, addr + size)) {
+        return;
+    }
+    gpu_write_pending_blocks.Add({first_block, last_block + 1});
     // Only what the GPU writes regularly (in 3 frames of 60) is its data, like a default heap: a
     // buffer the GPU writes only now and then stays in place, where writes by the CPU are seen
     // (0x104ff30000, 192 KiB, written by the GPU every few seconds: in VRAM the picture smeared
@@ -2836,9 +2890,23 @@ void BufferCache::NoteGpuWrite(VAddr addr, u64 size) {
         }
         return;
     }
+    gpu_write_pending_blocks.Subtract(first_block, last_block + 1);
     gpu_written_bytes.Add({addr, addr + size});
     // Blocks the GPU already writes in place move to VRAM once they are all known data.
-    for (u64 block = addr >> block_shift; block <= (addr + size - 1) >> block_shift; ++block) {
+    if (LayerMode()) {
+        for (u64 block = first_block; block <= last_block; ++block) {
+            const VAddr b_start = block << block_shift;
+            const bool partial = b_start < addr || b_start + block_size > addr + size;
+            if (partial && !layer_cpu_hot.Contains(block, block + 1) &&
+                !layer_watch_failed.Contains(block, block + 1) &&
+                !dynamic_blocks.Contains(block)) {
+                layer_cpu_blocks.Subtract(block, block + 1);
+                layer_edge_blocks.Add({block, block + 1});
+            }
+        }
+        ++layer_generation;
+    }
+    for (u64 block = first_block; block <= last_block; ++block) {
         const bool in_place =
             LayerMode() ? !BbLayer::GpuMemory::Get().AnyValid(block, block + 1)
                         : in_place_blocks.Contains(block) && resident_ranges.Contains(block);
@@ -3242,6 +3310,9 @@ void BufferCache::UnmapInPlace(VAddr addr, u64 size) {
 
 void BufferCache::Maintain() {
     maintained_epoch = packet_epoch;
+    if (LayerMode()) {
+        LayerProcessTraps();
+    }
     if (VramTrapsEnabled()) {
         ReportVramTraps();
     }
@@ -3275,6 +3346,8 @@ void BufferCache::ProcessPendingUnmaps() {
         }
         asset_bytes.Subtract(first << block_shift, end << block_shift);
         gpu_written_bytes.Subtract(first << block_shift, end << block_shift);
+        gpu_write_pending_blocks.Subtract(first, end);
+        layer_edge_blocks.Subtract(first, end);
         // bbport: blocks wholly unmapped hold nobody's data: whatever kept them in place (the
         // CPU wrote them, the GPU wrote them in place, their watch failed) is over. Memory mapped
         // there again starts as new. BB_LAYER_UNMAP_RESET=0: as before.
@@ -3399,6 +3472,9 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     memory_tracker->ForEachUploadRange(
         device_addr, size, is_written,
         [&](u64 addr, u64 size) {
+            if (!TwinsEnabled()) {
+                gpu_modified_ranges.Subtract(addr, size);
+            }
             copies.emplace_back(total_size_bytes, addr, size);
             total_size_bytes += size;
         },

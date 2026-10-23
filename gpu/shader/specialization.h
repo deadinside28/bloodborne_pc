@@ -116,9 +116,10 @@ struct StageSpecialization {
         }
         u32 binding{};
         ForEachSharp(binding, buffers, info->buffers,
-                     [&profile_](auto& spec, const auto& desc, ::Gcn::Buffer sharp) {
+                     [&profile_, &info_](auto& spec, const auto& desc, ::Gcn::Buffer sharp) {
                          spec.stride = sharp.GetStride();
-                         spec.paged = IsPagedBuffer(profile_.paged_buffers, sharp);
+                         spec.paged = IsPagedBuffer(profile_.paged_buffers, sharp, info_.pgm_hash,
+                                                    profile_.buffer_copy_shader_hash);
                          spec.is_formatted = desc.is_formatted;
                          spec.swizzle_enable = sharp.swizzle_enable;
                          if (spec.is_formatted) {

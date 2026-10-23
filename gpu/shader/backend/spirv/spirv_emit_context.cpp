@@ -873,7 +873,8 @@ void EmitContext::DefineBuffers() {
         auto& spv_buffer = buffers.emplace_back(binding.buffer++, desc.buffer_type);
         // BB_LAYER_MEMORY: the descriptor holds the page table record (read as U32).
         spv_buffer.paged = desc.buffer_type == BufferType::Guest &&
-                           IsPagedBuffer(profile.paged_buffers, buf_sharp);
+                           IsPagedBuffer(profile.paged_buffers, buf_sharp, info.pgm_hash,
+                                         profile.buffer_copy_shader_hash);
         if (spv_buffer.paged) {
             spv_buffer.Alias(PointerType::U32) =
                 DefineBuffer(false, false, 2, desc.buffer_type, U32[1]);

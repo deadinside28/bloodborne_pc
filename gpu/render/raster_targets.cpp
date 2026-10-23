@@ -300,10 +300,15 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
                       !regs.depth_render_control.depth_clear_enable &&
                       !regs.depth_render_control.stencil_clear_enable &&
                       signature == begin_memo.signature;
-        for (const auto id : signature.ids) {
+        for (u32 i = 0; i < signature.ids.size(); ++i) {
+            const auto id = signature.ids[i];
             if (usable && id) {
                 const auto& image = texture_cache.GetImage(id);
-                usable = !image.binding.is_bound && !image.binding.needs_rebind;
+                const bool is_readonly_depth =
+                    (i == Gcn::NUM_COLOR_BUFFERS) && !db_desc.second.view_info.is_storage &&
+                    !(image.info.props.has_stencil && regs.depth_control.stencil_enable);
+                usable = (!image.binding.is_bound || is_readonly_depth) &&
+                         !image.binding.needs_rebind;
             }
         }
         if (usable) {
@@ -509,17 +514,25 @@ void Rasterizer::BindDepthAttachment(RenderState& state, bool reduced, TargetRed
     const bool has_stencil = image.info.props.has_stencil;
     const bool storage = desc.view_info.is_storage;
     const bool stencil_write = has_stencil && regs.depth_control.stencil_enable && !storage;
+    const bool readonly_depth = !storage && !stencil_write;
     const auto layout = storage ? (has_stencil ? vk::ImageLayout::eDepthStencilAttachmentOptimal
                                                : vk::ImageLayout::eDepthAttachmentOptimal)
                         : stencil_write ? vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal
-                        : has_stencil   ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
-                                        : vk::ImageLayout::eDepthReadOnlyOptimal;
+                                        : vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+    const auto dst_stage =
+        readonly_depth
+            ? (vk::PipelineStageFlagBits2::eAllGraphics |
+               vk::PipelineStageFlagBits2::eComputeShader)
+            : (vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+               vk::PipelineStageFlagBits2::eLateFragmentTests);
+    const auto dst_access =
+        readonly_depth
+            ? (vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+               vk::AccessFlagBits2::eShaderRead)
+            : (vk::AccessFlagBits2::eDepthStencilAttachmentWrite |
+               vk::AccessFlagBits2::eDepthStencilAttachmentRead);
     if (!reduced) {
-        needs_barrier |= runtime.Transit(&image, layout,
-                                         vk::PipelineStageFlagBits2::eEarlyFragmentTests |
-                                             vk::PipelineStageFlagBits2::eLateFragmentTests,
-                                         vk::AccessFlagBits2::eDepthStencilAttachmentWrite |
-                                             vk::AccessFlagBits2::eDepthStencilAttachmentRead,
+        needs_barrier |= runtime.Transit(&image, layout, dst_stage, dst_access,
                                          desc.view_info.range);
     }
     state.width = std::min<u32>(state.width, image.info.size.width);
@@ -647,6 +660,12 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     ApplyTargetRedirect(state, redirect);
     if (state.num_layers == std::numeric_limits<u16>::max()) {
         state.num_layers = 1;
+    }
+    if (state.num_color_attachments == 0 && !state.depth_stencil_attachment.has_depth &&
+        !state.depth_stencil_attachment.has_stencil) {
+        const auto size = scene_targets ? scene_targets->Size() : SceneResolution::Size{1920, 1080};
+        state.width = size.width ? size.width : 1920;
+        state.height = size.height ? size.height : 1080;
     }
     if (reduced) {
         // Half-resolution passes keep the scene's factor (proxy / native = scene / 1920).

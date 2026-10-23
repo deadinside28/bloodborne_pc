@@ -27,12 +27,18 @@ bool ExecuteShaderHLE(const Shader::Info& info, const Gcn::Regs& regs,
 /// control list names for `groups` work groups, sorted and merged where less than `gap` bytes
 /// apart, into `out`. False (nothing added) for another shader or an unexpected shape. Its bound
 /// destination spans tens of MiB while each dispatch writes a few KiB.
-bool CopyShaderDestinations(const Shader::Info& info, u32 groups, u64 gap,
-                            std::vector<std::pair<unsigned long long, unsigned long long>>& out);
+bool CopyShaderDestinations(
+    const Shader::Info& info, u32 groups, u64 gap,
+    std::vector<std::pair<unsigned long long, unsigned long long>>& out,
+    std::vector<std::pair<unsigned long long, unsigned long long>>* reads_out = nullptr);
 
 /// BB_COPY_DEST_GAP: the merge gap for CopyShaderDestinations (default 256 bytes, the granule of the
 /// queued-write table); BB_COPY_DEST_PRECISE=0: the whole bound destination counts as written.
 bool CopyDestinationsPrecise();
 unsigned long long CopyDestinationGap();
+
+void FlushPendingHleCopies(Rasterizer& rasterizer);
+bool HasPendingHleCopies();
+bool PendingHleCopiesConflict(unsigned long long addr, unsigned long long size);
 
 } // namespace Vulkan

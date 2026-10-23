@@ -47,7 +47,7 @@ s64 NowNs() {
 bool IndirectGuard::Enabled() {
     static const bool enabled = [] {
         const char* v = std::getenv("BB_INDIRECT_GUARD");
-        return !(v && v[0] == '0');
+        return v && v[0] == '1';
     }();
     return enabled;
 }

@@ -43,6 +43,15 @@ public:
         empty = true;
     }
 
+    void ClearWrites() {
+        if (empty) {
+            return;
+        }
+        for (u32 i = 0; i < used; ++i) {
+            resources[i].ranges[u32(Kind::Write)].clear();
+        }
+    }
+
     bool Empty() const {
         return empty;
     }

@@ -164,6 +164,11 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     if (!LoadShaderMeta(ar, program->info, spec, perm_idx)) {
         return false;
     }
+    if (profile.paged_buffers && program->info.pgm_hash == profile.buffer_copy_shader_hash &&
+        (!program->info.uses_paged_buffers || perm_idx != 0 || spec.buffers.size() < 3 ||
+         !spec.buffers[1].paged || !spec.buffers[2].paged)) {
+        return false;
+    }
     if (spec.fetch_shader_data) {
         sel.fetch_shader = spec.fetch_shader_data; // the vertex stage's (as when selected)
     }

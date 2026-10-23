@@ -1292,8 +1292,13 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         perm_idx = modules.size();
         auto new_info = Shader::Info(hw_stage, sw_stage, params);
         const auto module = CompileModule(new_info, runtime_info, params.code, perm_idx, binding);
-        PipelineStore::SaveShaderMeta(info, spec, HashCombine(params.hash, perm_idx), perm_idx);
         std::unique_lock lk{programs_mutex};
+        if (new_info.uses_paged_buffers && !info.uses_paged_buffers) {
+            info.uses_paged_buffers = true;
+            info.buffers = new_info.buffers;
+            program.info_template = std::make_unique<Shader::Info>(info);
+        }
+        PipelineStore::SaveShaderMeta(new_info, spec, HashCombine(params.hash, perm_idx), perm_idx);
         program.AddPermut(module, std::move(spec));
     }
     return {&info, modules[perm_idx].module, modules[perm_idx].spec.fetch_shader_data,

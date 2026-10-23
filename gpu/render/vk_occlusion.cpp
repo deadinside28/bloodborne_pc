@@ -32,13 +32,15 @@ struct EventEntry {
     u32 upto;
 };
 
-/// Everything before it before everything after it (resolves are a few per frame).
-void FullBarrier(vk::CommandBuffer cmdbuf) {
+/// Transfer/compute barrier for occlusion query resolve (replaces eAllCommands FullBarrier).
+void ResolveBarrier(vk::CommandBuffer cmdbuf, vk::PipelineStageFlags2 src_stage,
+                    vk::AccessFlags2 src_access, vk::PipelineStageFlags2 dst_stage,
+                    vk::AccessFlags2 dst_access) {
     const vk::MemoryBarrier2 barrier{
-        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead,
-        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-        .dstAccessMask = vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead,
+        .srcStageMask = src_stage,
+        .srcAccessMask = src_access,
+        .dstStageMask = dst_stage,
+        .dstAccessMask = dst_access,
     };
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
         .memoryBarrierCount = 1,
@@ -208,7 +210,12 @@ void OcclusionQueries::Resolve() {
                                         vk::QueryResultFlagBits::e64 |
                                             vk::QueryResultFlagBits::eWait);
         }
-        FullBarrier(cmdbuf);
+        ResolveBarrier(cmdbuf,
+                       vk::PipelineStageFlagBits2::eCopy | vk::PipelineStageFlagBits2::eClear |
+                           vk::PipelineStageFlagBits2::eComputeShader,
+                       vk::AccessFlagBits2::eTransferWrite | vk::AccessFlagBits2::eShaderWrite,
+                       vk::PipelineStageFlagBits2::eComputeShader,
+                       vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
         const std::array<vk::DescriptorBufferInfo, 4> infos{{
             {results->Handle(), 0, NumSlots * sizeof(u64)},
             {total->Handle(), 0, 8},
@@ -228,7 +235,12 @@ void OcclusionQueries::Resolve() {
         cmdbuf.pushConstants(*pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push),
                              &push);
         cmdbuf.dispatch(1, 1, 1);
-        FullBarrier(cmdbuf);
+        ResolveBarrier(cmdbuf, vk::PipelineStageFlagBits2::eComputeShader,
+                       vk::AccessFlagBits2::eShaderWrite,
+                       vk::PipelineStageFlagBits2::eComputeShader |
+                           vk::PipelineStageFlagBits2::eHost,
+                       vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite |
+                           vk::AccessFlagBits2::eHostRead);
     });
     resolved = ended;
     pending.clear();
@@ -247,7 +259,7 @@ void OcclusionQueries::WriteBeforeLabel() {
     // the event and finds them written either way: BB_OCCLUSION_READ_TRACE.)
     static const bool ordered = [] {
         const char* env = std::getenv("BB_OCCLUSION_LABEL_ORDER");
-        return !env || env[0] != '0';
+        return env && env[0] == '1';
     }();
     if (!ordered) {
         return;

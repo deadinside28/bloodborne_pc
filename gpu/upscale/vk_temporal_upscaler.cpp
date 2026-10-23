@@ -1646,8 +1646,12 @@ void TemporalUpscaler::PrepareUiDepth(VideoCore::ImageId depth_id) {
     const auto aspect = vk::ImageAspectFlagBits::eDepth |
         (ui_depth_format == vk::Format::eD32SfloatS8Uint ? vk::ImageAspectFlagBits::eStencil
                                                       : vk::ImageAspectFlags{});
-    // Copy depth if blit is supported; otherwise just clear it (UI depth test still works).
-    const bool copy = depth_id && depth_blit &&
+    // Copy depth if blit is supported and explicitly requested; otherwise just clear it (UI depth test still works).
+    static const bool copy_ui_depth = [] {
+        const char* env = std::getenv("BB_COPY_UI_DEPTH");
+        return env && env[0] == '1';
+    }();
+    const bool copy = copy_ui_depth && depth_id && depth_blit &&
         texture_cache.GetImage(depth_id).info.pixel_format == ui_depth_format;
     if (copy) {
         runtime.Transit(&texture_cache.GetImage(depth_id), vk::ImageLayout::eTransferSrcOptimal,

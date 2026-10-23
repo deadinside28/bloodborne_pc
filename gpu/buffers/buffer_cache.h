@@ -144,6 +144,9 @@ public:
     /// bbport: with force_writes_in_place, the bytes the bindings now resolved really write (the copy
     /// shader's control list, CopyShaderDestinations: address, size); null: all of each binding.
     const std::vector<std::pair<unsigned long long, unsigned long long>>* precise_writes = nullptr;
+    const std::vector<std::pair<unsigned long long, unsigned long long>>* precise_reads = nullptr;
+    void ForEachLayerBuffer(VAddr address, u64 size,
+                            const std::function<void(const Buffer*, u64, u64)>& fn);
 
     /// Finds a buffer for the specified region.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBuffer(VAddr device_addr, u32 size,
@@ -650,6 +653,7 @@ private:
     IntervalList<> promote_candidates; ///< in-place blocks that may get a VRAM copy again
     IntervalList<> copy_back_blocks;   ///< VRAM blocks with GPU data, handed out again in part
     IntervalList<> gpu_written_bytes;  ///< bound for GPU writes since handed out (known data too)
+    IntervalList<> gpu_write_pending_blocks; ///< blocks with GPU writes warming up toward 3 frames
     u64 promoted_bytes = 0;
     /// VRAM slots of blocks that left VRAM, for the next blocks moved there (in their chunks).
     u64 free_slot_count = 0;

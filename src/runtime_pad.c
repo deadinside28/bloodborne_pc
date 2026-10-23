@@ -633,7 +633,32 @@ static uint8_t look_axis(float value, uint8_t stick, int deadzone) {
  * far as the mouse moved: MOUSE_RAD_PER_PIXEL at sensitivity 1 (1000 pixels: 1.5 rad, 86 degrees).
  * The stick below only without that hook (another game version, BB_NATIVE_MOUSE=0). */
 #define MOUSE_RAD_PER_PIXEL 0.0015f
+#include <sys/mman.h>
+static void sync_mouse_auto_rotation_hold(int hold) {
+    static int held_state = -1;
+    if (hold == held_state) return;
+    static const struct { uintptr_t va; uint8_t game[9]; } sites[3] = {
+        {0x80143c6e8ULL, {0xc4, 0xc1, 0x7a, 0x11, 0x85, 0x44, 0x01, 0x00, 0x00}},
+        {0x80143c984ULL, {0xc4, 0xc1, 0x7a, 0x11, 0x8d, 0x30, 0x01, 0x00, 0x00}},
+        {0x80143dde6ULL, {0xc4, 0xc1, 0x7a, 0x11, 0x85, 0x94, 0x02, 0x00, 0x00}},
+    };
+    static const uint8_t nop9[9] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+    for (int i = 0; i < 3; ++i) {
+        uint8_t *p = (uint8_t *)sites[i].va;
+        const uint8_t *expect = hold ? sites[i].game : nop9;
+        const uint8_t *write_bytes = hold ? nop9 : sites[i].game;
+        if (memcmp(p, expect, 9) != 0 && memcmp(p, write_bytes, 9) != 0) return;
+        uintptr_t lo = sites[i].va & ~0xfffULL;
+        uintptr_t hi = (sites[i].va + 9 + 0xfffULL) & ~0xfffULL;
+        if (mprotect((void *)lo, hi - lo, PROT_READ | PROT_WRITE | PROT_EXEC) == 0) {
+            memcpy(p, write_bytes, 9);
+            mprotect((void *)lo, hi - lo, PROT_READ | PROT_EXEC);
+        }
+    }
+    held_state = hold;
+}
 static void apply_mouse_look(PadData *d, double dx, double dy, uint64_t now, int captured) {
+    sync_mouse_auto_rotation_hold(mouse_look && captured && !bbgpu_free_camera());
     /* The free camera (patch) takes the mouse through the right stick below. */
     if (captured && (dx!=0 || dy!=0) && !bbgpu_free_camera()) {
         const float k=MOUSE_RAD_PER_PIXEL*mouse_sensitivity;
