@@ -99,16 +99,36 @@ static void *allocate(size_t size) {
     return p;
 }
 static void protect(void *p, size_t size, unsigned flags) {
-#ifdef _WIN32
-    DWORD old, mode = PAGE_NOACCESS;
+    DWORD mode = PAGE_NOACCESS;
     if (flags & 1) mode = (flags & 2) ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_READ;
     else if (flags & 2) mode = PAGE_READWRITE;
     else if (flags & 4) mode = PAGE_READONLY;
-    if (!VirtualProtect(p, size, mode, &old)) fail("VirtualProtect failed");
+#ifdef _WIN32
+    /* The loader patches the image, which the memory layer maps in pieces with placeholder
+     * gaps between the segments: one VirtualProtect over the whole range fails at them.
+     * Protect the mapped runs only. */
+    unsigned char *at = p, *end = (unsigned char *)p + size;
+    while (at < end) {
+        MEMORY_BASIC_INFORMATION info;
+        if (!VirtualQuery(at, &info, sizeof(info))) fail("VirtualQuery failed");
+        unsigned char *next = (unsigned char *)info.BaseAddress + info.RegionSize;
+        if (next > end) next = end;
+        DWORD old;
+        if (info.State == MEM_COMMIT && !VirtualProtect(at, next - at, mode, &old)) {
+            char message[192];
+            snprintf(message, sizeof message,
+                     "VirtualProtect failed: range %p+%#zx state %lu type %lu protect %lu -> %lu, error %lu",
+                     at, (size_t)(next - at), (unsigned long)info.State, (unsigned long)info.Type,
+                     (unsigned long)info.Protect, (unsigned long)mode, (unsigned long)GetLastError());
+            fail(message);
+        }
+        at = next;
+    }
     FlushInstructionCache(GetCurrentProcess(), p, size);
 #else
-    int mode = ((flags & 4) ? PROT_READ : 0) | ((flags & 2) ? PROT_WRITE : 0) | ((flags & 1) ? PROT_EXEC : 0);
-    if (mprotect(p, size, mode)) fail("mprotect failed");
+    if (mprotect(p, size, ((flags & 4) ? PROT_READ : 0) | ((flags & 2) ? PROT_WRITE : 0) |
+                          ((flags & 1) ? PROT_EXEC : 0)))
+        fail("mprotect failed");
 #endif
 }
 static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argument) {
@@ -437,6 +457,14 @@ void runtime_restart(void) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    /* The guest's thread pointer needs a TEB TLS slot below 64 (gs:[0x1480 + slot*8]): DLLs
+     * loaded later (SDL, the Vulkan driver) take those, so claim ours before anything else. */
+    {
+        extern int bb_guest_tls_slot(void);
+        bb_guest_tls_slot();
+    }
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
@@ -502,6 +530,9 @@ int main(int argc, char **argv) {
     struct sigaction alarm_action = {0}; alarm_action.sa_sigaction = watchdog; alarm_action.sa_flags = SA_SIGINFO;
     sigemptyset(&alarm_action.sa_mask); sigaction(SIGALRM, &alarm_action, NULL);
     alarm(timeout_seconds); /* 0 disables the watchdog */
+#endif
+#ifdef _WIN32
+    (void)timeout_seconds; /* the watchdog (alarm) is Linux-only */
 #endif
     FILE *f = fopen(argv[1], "rb");
     if (!f) fail("cannot open boot file; run prepare.py first");

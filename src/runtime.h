@@ -4,8 +4,27 @@
 #include <time.h>
 #include <stdint.h>
 #include <stddef.h>
+#ifdef _WIN32
+/* The win32 platform layer (gpu/platform/win32): the recovery jump, the C helpers the 0.6
+ * runtime sources use (localtime_r, memfd_create, getrandom, the bb_* calls) and sigaction.
+ * It replaces the old win32_compat.h renames (its own pread/pwrite/fsync/... land here). */
+#include <bbport_jmp.h>
+#include <bbport_posix_c.h>
+#include <bbport_signal.h>
+#include "win32_compat.h"
+#ifndef _SC_PAGESIZE
+#define _SC_PAGESIZE 30
+long sysconf(int name);
+#endif
+/* win32_compat.c: CPU time, the UTC offset, randomness (its POSIX renames are the platform's). */
+int64_t runtime_utc_offset(time_t when);
+void runtime_cpu_times(int thread, int64_t *user_us, int64_t *system_us);
+int runtime_random(void *buffer, size_t size);
+#endif
+#include "host_sync.h"
 #include <setjmp.h>
-/* Recovery point for speculative guest memory reads on this thread (probe.c fault handler). */
+/* Recovery point for speculative guest memory reads on this thread (probe.c fault handler);
+ * sigsetjmp/siglongjmp come from the win32 platform layer's POSIX shim on Windows. */
 extern __thread sigjmp_buf *runtime_fault_recover;
 /* Restarts the game (in-game settings menu, render resolution change). */
 void runtime_restart(void);

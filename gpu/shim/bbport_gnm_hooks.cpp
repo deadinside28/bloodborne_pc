@@ -97,7 +97,8 @@ u64* CounterAt(std::size_t i) {
 u8* MapNear(unsigned char* image, std::uint64_t image_size, std::size_t size) {
     const u64 base = reinterpret_cast<u64>(image);
     for (u64 k = 1; k <= 64; ++k) {
-        for (const u64 hint : {base - k * (16ull << 20), base + image_size + k * (16ull << 20)}) {
+        for (const u64 hint : {(base - k * (16ull << 20)) & ~0xFFFFull,
+                              (base + image_size + k * (16ull << 20)) & ~0xFFFFull}) {
             void* p = mmap(reinterpret_cast<void*>(hint), size, PROT_READ | PROT_WRITE,
                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
             if (p != MAP_FAILED) {

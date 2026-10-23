@@ -72,8 +72,13 @@ bool InArena(uintptr_t a, uintptr_t b) {
 
 void MapView(uintptr_t start, uintptr_t end, int fd, uint64_t offset, DWORD protect) {
     const Section& section = sections.at(fd);
-    // A view cannot start without access; protections change after.
-    const DWORD initial = protect == PAGE_NOACCESS ? PAGE_READWRITE : protect;
+    // A view cannot start without access; protections change after. Windows also refuses a
+    // later VirtualProtect to an execute mode unless the view was mapped execute-capable
+    // (error 87): the section is PAGE_EXECUTE_READWRITE, so the initial mapping is too.
+    const DWORD initial = protect == PAGE_NOACCESS  ? PAGE_EXECUTE_READWRITE
+                          : protect == PAGE_READWRITE ? PAGE_EXECUTE_READWRITE
+                          : protect == PAGE_READONLY   ? PAGE_EXECUTE_READ
+                                                       : protect;
     if (!MapViewOfFile3(section.handle, GetCurrentProcess(), reinterpret_cast<void*>(start), offset,
                         end - start, MEM_REPLACE_PLACEHOLDER, initial, nullptr, 0)) {
         std::fprintf(stderr, "Memory: view of section %d offset %#llx (of %#llx) at %#llx failed\n", fd,
@@ -229,6 +234,12 @@ int fallocate(int fd, int mode, off_t offset, off_t length) {
 
 void* mmap(void* address, size_t size, int prot, int flags, int fd, off_t offset) {
     std::scoped_lock lock{memory_mutex};
+    // The arena's placeholder splits are 64 KiB granular: an unrounded size fails them
+    // (error 87). Round up here for every caller, as Linux rounds to the page.
+    if ((reinterpret_cast<uintptr_t>(address) + size) & 0xFFFF)
+        std::fprintf(stderr, "mmap arena sub-64K end: %#llx +%#zx flags %#x\n",
+                     (unsigned long long)(uintptr_t)address, size, flags);
+    size = (size + 0xFFFFull) & ~0xFFFFull;
     const auto start = reinterpret_cast<uintptr_t>(address);
     const bool fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
     const bool section = fd >= SectionFdBase && sections.count(fd);
@@ -237,6 +248,10 @@ void* mmap(void* address, size_t size, int prot, int flags, int fd, off_t offset
         return MAP_FAILED;
     }
     if (fixed && InArena(start, start + size)) {
+        if (start & 0xFFFF)
+            std::fprintf(stderr,
+                         "mmap fixed in arena at sub-64K address %#llx size %#zx flags %#x\n",
+                         (unsigned long long)start, size, flags);
         if ((flags & MAP_FIXED_NOREPLACE)) {
             auto it = pieces.upper_bound(start);
             --it;
@@ -284,6 +299,11 @@ void* mmap(void* address, size_t size, int prot, int flags, int fd, off_t offset
 
 int munmap(void* address, size_t size) {
     std::scoped_lock lock{memory_mutex};
+    // As in mmap: the placeholder splits are 64 KiB granular.
+    if ((reinterpret_cast<uintptr_t>(address) + size) & 0xFFFF)
+        std::fprintf(stderr, "munmap sub-64K end: %#llx +%#zx\n",
+                     (unsigned long long)(uintptr_t)address, size);
+    size = (size + 0xFFFFull) & ~0xFFFFull;
     const auto start = reinterpret_cast<uintptr_t>(address);
     if (InArena(start, start + size)) {
         Carve(start, start + size);

@@ -4,8 +4,17 @@
  * versions (runtime_services.c). Trophies, voice and the store/profile dialogs always stay here. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "gpu/bbnet/bbnet.h"
+#ifndef _WIN32
 #include <dlfcn.h>
+#else
+/* The online modules (gpu/bbnet*, Linux .so builds) are not loaded on Windows: module_handle
+ * stays 0 and these lookups compile away. */
+#define dlsym(handle, name) NULL
+#endif
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,13 +84,22 @@ static BbNetResolveFn module_resolve(void) {
         snprintf(path,sizeof(path),"%s",forced);
     } else {
         char exe[PATH_MAX-32];
+#ifdef _WIN32
+        DWORD n=GetModuleFileNameA(NULL,exe,sizeof(exe)-1);
+        if (!n) return NULL;
+#else
         const ssize_t n=readlink("/proc/self/exe",exe,sizeof(exe)-1);
         if (n<=0) return NULL;
-        exe[n]=0;
+#endif
         char *slash=strrchr(exe,'/');
         if (slash) *slash=0;
-        snprintf(path,sizeof(path),"%s/gpu/libbbnet.so",exe);
+        snprintf(path,sizeof(path),"%s/gpu/libbbnet.so",exe); /* Windows: the DLL would sit beside bb-probe; shadNet is optional */
     }
+#ifdef _WIN32
+    /* shadNet is a Linux-side module (libbbnet.so); on Windows the game plays offline. */
+    printf("Online: the online module is off on Windows: offline play\n");
+    return NULL;
+#else
     /* RTLD_LOCAL: its C++ (network and NP libraries) stays out of the process's symbol scope. */
     void *module=dlopen(path,RTLD_NOW|RTLD_LOCAL);
     if (!module) {
@@ -104,6 +122,7 @@ static BbNetResolveFn module_resolve(void) {
     printf("Online: module %s\n",path);
     resolve=found;
     return resolve;
+#endif
 }
 
 uintptr_t runtime_net_resolve(const char *name) {

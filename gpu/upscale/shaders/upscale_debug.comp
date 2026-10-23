@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: the menu's motion vector view for outputs other than 1080p, where the upscaler writes
+// the 8-bit UI image directly (no merge pass, see upscale_merge.comp mode 2): red/green |x|/|y|
+// (8 render pixels = full), blue where the pixel has an object motion vector.
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba8) uniform image2D target;
+layout(binding = 1) uniform texture2D motion;  // render pixels, previous - current
+layout(binding = 2) uniform texture2D objects; // b = object motion (or the motion image)
+layout(push_constant) uniform Params {
+    uint bgra; // the UI image stores B, G, R: it is written through an RGBA view
+};
+
+void main() {
+    const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(target)))) {
+        return;
+    }
+    vec4 color = imageLoad(target, pixel);
+    if (bgra != 0) {
+        color.rgb = color.bgr;
+    }
+    const ivec2 size = textureSize(motion, 0);
+    const ivec2 source = min(pixel * size / imageSize(target), size - 1);
+    const vec2 mv = texelFetch(motion, source, 0).rg;
+    const ivec2 object_size = textureSize(objects, 0);
+    const bool object = object_size == size && texelFetch(objects, source, 0).b > 0.99;
+    const float luma = dot(color.rgb, vec3(0.3, 0.6, 0.1));
+    vec3 view = vec3(luma * 0.3) + vec3(clamp(abs(mv) / 8.0, 0.0, 1.0), object ? 0.6 : 0.0);
+    if (bgra != 0) {
+        view = view.bgr;
+    }
+    imageStore(target, pixel, vec4(view, color.a));
+}

@@ -12,6 +12,13 @@
 #pragma once
 
 #include <cstdlib>
+#ifdef _WIN32
+#include <windows.h>
+// windows.h macros collide with names the video core uses (vk::MemoryBarrier, near, far).
+#undef MemoryBarrier
+#undef near
+#undef far
+#endif
 #include "bbport_threads.h"
 #include "bbport_sections.h"
 #include "bbport_timeline.h"
@@ -256,7 +263,11 @@ private:
         Common::SetCurrentThreadName("bb:DrawRec");
         on_stage_b = true;
         BbSections::recording_thread = true;
+        #ifdef _WIN32
+        stage_b_tid.store(static_cast<u32>(GetCurrentThreadId()), std::memory_order_release);
+#else
         stage_b_tid.store(static_cast<u32>(gettid()), std::memory_order_release);
+#endif
         u64 at = 0;
         while (true) {
             // Packets follow each other within microseconds while a frame is decoded: spin,

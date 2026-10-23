@@ -23,6 +23,7 @@ perf.data
 /bloodborne_upscalers_*.md
 mods.json
 patches.json
+/Bloodborne.cmd
 # Local: game logs, messages and archives from users, internal plans
 /logs/
 /message*.txt
@@ -30,3 +31,13 @@ patches.json
 /docs/ISSUE_ACTION_PLAN_*.md
 # AMD FidelityFX DLLs (FSR 4.1.1 is built from the user's own): never in the repository
 *.dll
+
+# Windows local runtime: the game dump, bundled Python and DLLs, build caches
+/Games/
+/python/
+/runtime/
+/local_deps/
+/start_lazy_local.bat
+/Bloodborne PC.exe
+/Bloodborne PC.lnk
+/MOD*

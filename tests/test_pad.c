@@ -2,11 +2,29 @@
 #include <assert.h>
 #include <unistd.h>
 #include "../src/runtime_pad.c"
+#ifdef _WIN32
+/* POSIX temp paths and setenv: the native Windows build runs from the repo root. */
+#define TEST_TMP "pad-test-"
+#else
+#define TEST_TMP "/tmp/bbport-pad-"
+#endif
 
 static int capture;
 int bbgpu_overlay_captures_input(void) { return capture; }
 void bbgpu_mouse_take(double *dx, double *dy, int *up, int *down) { *dx=*dy=0; *up=*down=0; }
 int bbgpu_mouse_captured(void) { return 0; }
+/* bb_stat (the platform's is in libbbgpu, C++): the fields read_inject needs, from _stat64. */
+int bb_stat(const char *path, struct bb_stat *out) {
+    struct _stat64 st;
+    if (_stat64(path, &st) != 0) return -1;
+    out->st_mtim.tv_sec = st.st_mtime;
+    out->st_mtim.tv_nsec = 0;
+    out->st_size = st.st_size;
+    return 0;
+}
+int bbgpu_pointer_wanted(void) { return 0; }
+int bb_close(int fd) { return _close(fd); }
+int bbgpu_free_camera(void) { return 0; }
 void bbgpu_mouse_look_enable(int enabled) { (void)enabled; }
 void bbgpu_mouse_capture(void) {}
 int bbgpu_camera_look(float yaw, float pitch) { (void)yaw; (void)pitch; return 0; }
@@ -23,17 +41,21 @@ static void inject(const char *path, const char *tokens) {
     assert(f);
     fputs(tokens,f);
     fclose(f);
+#ifdef _WIN32
+    usleep(1100000); /* the Windows stat has no nanoseconds: same-second writes look unchanged */
+#else
     usleep(25000);
+#endif
 }
 
 int main(void) {
-    char path[]="/tmp/bbport-pad-test-XXXXXX";
+    char path[]=TEST_TMP "test-XXXXXX";
     int fd=mkstemp(path);
     assert(fd>=0);
     close(fd);
     setenv("BB_PAD_FILE",path,1);
     /* bbport.ini controls: buttons moved, a trigger as a button and a button as a trigger. */
-    char config[]="/tmp/bbport-pad-config-XXXXXX";
+    char config[]=TEST_TMP "config-XXXXXX";
     int config_fd=mkstemp(config);
     assert(config_fd>=0);
     const char controls[]="upscaler=fsr3\npad.cross=b\npad.circle=a\npad.r2=rightshoulder\n"

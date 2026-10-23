@@ -53,7 +53,7 @@ std::uintptr_t MapNear(std::uintptr_t code) {
             if (at <= 0) {
                 continue;
             }
-            void* p = mmap(reinterpret_cast<void*>(at & ~std::int64_t(page - 1)), AreaSize,
+            void* p = mmap(reinterpret_cast<void*>(at & ~std::int64_t(0xFFFF)), AreaSize,
                            PROT_READ | PROT_WRITE | PROT_EXEC,
                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
             if (p != MAP_FAILED) {

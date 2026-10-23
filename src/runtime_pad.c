@@ -41,6 +41,16 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#ifdef _WIN32
+#include <strings.h>
+/* strcasestr is POSIX; a small case-insensitive version (Windows). */
+static const char *strcasestr_local(const char *haystack, const char *needle) {
+    const size_t n=strlen(needle);
+    for (; *haystack; ++haystack) if (!strncasecmp(haystack,needle,n)) return haystack;
+    return NULL;
+}
+#define strcasestr strcasestr_local
+#endif
 #include <SDL3/SDL.h>
 #include <sys/stat.h>
 
@@ -380,12 +390,20 @@ static int key_from_name(const char *name) {
  * ~1000 pixels/s turn the camera at full speed), mouse_invert_y=1. */
 static int mouse_look=1, mouse_invert_y;
 static float mouse_sensitivity=1.0f;
+/* Walk (bbport.ini, windows-port): walk_key held, the move keys tilt the stick only
+ * walk_percent % of the way - the game's slow, silent walk for sneaking up on a back
+ * (a pad does it with a gentle stick tilt). Look keys are never slowed. */
+static int walk_keys[MAX_BIND], walk_key_count=-1, walk_percent=35;
+/* Which face button the dodge/sprint keys (and the menu's way back) stand for: circle in the
+ * Western builds (their default), cross in the Asian ones (CUSA03023 &c: the pair swaps). */
+static int dodge_is_cross;
 /* key.<input>= / pad.<input>= lines of the settings file. */
 /* Motion emulation (apply_motion): -1 unknown yet, from bbport.ini pad_motion; BB_PAD_MOTION wins. */
 static int motion_enabled = -1;
 static void load_bindings(void) {
     bind_defaults();
     mouse_look=1; mouse_invert_y=0; mouse_sensitivity=1.0f;
+    walk_key_count=-1; walk_percent=35; dodge_is_cross=0;
     const char *path=getenv("BB_CONFIG");
     FILE *f=path ? fopen(path,"r") : NULL;
     if (!f) return;
@@ -401,6 +419,27 @@ static void load_bindings(void) {
             else if (!strncmp(line,"mouse_sensitivity=",18)) {
                 const float v=strtof(value,NULL);
                 if (v>=0.05f && v<=20.0f) mouse_sensitivity=v;
+            }
+            else if (!strncmp(line,"walk_key=",9)) {
+                walk_key_count=0;
+                for (char *name=strtok(eq+1,",\r\n"); name; name=strtok(NULL,",\r\n")) {
+                    while (*name==' ') ++name;
+                    for (char *end=name+strlen(name); end>name && end[-1]==' ';) *--end=0;
+                    if (!*name) continue;
+                    const int s=key_from_name(name);
+                    if (s<0) printf("Runtime: controls: unknown key \"%s\" for walk_key\n",name);
+                    else if (walk_key_count<MAX_BIND) walk_keys[walk_key_count++]=s;
+                }
+            }
+            else if (!strncmp(line,"walk_percent=",13)) {
+                const int v=atoi(value);
+                if (v>=5 && v<=100) walk_percent=v;
+                else puts("Runtime: controls: walk_percent stays (5..100)");
+            }
+            else if (!strncmp(line,"dodge_button=",13)) {
+                if (!strncasecmp(value,"cross",5)) dodge_is_cross=1;
+                else if (!strncasecmp(value,"circle",6)) dodge_is_cross=0;
+                else puts("Runtime: controls: dodge_button stays (circle or cross)");
             }
             continue;
         }
@@ -519,7 +558,7 @@ static float key_tunable(const char *name, float def) {
     const float v=(float)atof(env);
     return v>0 ? v : def;
 }
-static int key_stick(KeyStick *st, uint64_t now, int left, int right, int up, int down, uint8_t *x, uint8_t *y) {
+static int key_stick(KeyStick *st, uint64_t now, int left, int right, int up, int down, uint8_t *x, uint8_t *y, float max_mag) {
     static float rise_ms, fall_ms, turn_dps;
     if (rise_ms==0) {
         rise_ms=key_tunable("BB_KEY_RISE_MS",70.0f); fall_ms=key_tunable("BB_KEY_FALL_MS",45.0f);
@@ -529,7 +568,7 @@ static int key_stick(KeyStick *st, uint64_t now, int left, int right, int up, in
     float dt=st->last_us && now>st->last_us ? (float)(now-st->last_us)*1e-6f : 0.0f;
     st->last_us=now;
     if (dt>0.05f) dt=0.05f;
-    const float target_mag=(tx || ty) ? 1.0f : 0.0f;
+    const float target_mag=(tx || ty) ? max_mag : 0.0f;
     if (tx || ty) {
         const float target=atan2f((float)ty,(float)tx);
         if (st->mag<0.12f) st->angle=target;
@@ -587,6 +626,14 @@ static int keyboard_circle(const bool *k, uint64_t now, int menu) {
 }
 
 
+static int walk_down(const bool *k) {
+    if (walk_key_count<0) { walk_keys[0]=SDL_SCANCODE_LCTRL; walk_key_count=1; }
+    for (int i=0;i<walk_key_count;++i) {
+        const int code=walk_keys[i];
+        if (code>=MOUSE_KEY ? mouse_key_down(code) : k && k[code]) return 1;
+    }
+    return 0;
+}
 static void apply_keyboard(PadData *d, const bool *k) {
     key_watch_start();
     const int menu=bbgpu_pointer_wanted()!=0;
@@ -598,18 +645,20 @@ static void apply_keyboard(PadData *d, const bool *k) {
     else if (!menu) options_latched=1;
     for (int i=IN_CROSS;i<=IN_RIGHT;++i) {
         if (i==IN_TOUCHPAD || i==IN_TOUCHPAD_RIGHT || !key_down(k,i)) continue;
-        d->buttons |= (i==IN_OPTIONS && menu && !options_latched) ? BTN_CIRCLE : input_buttons[i];
+        d->buttons |= (i==IN_OPTIONS && menu && !options_latched)
+                          ? (dodge_is_cross ? BTN_CROSS : BTN_CIRCLE) : input_buttons[i];
     }
-    if (keyboard_circle(k,d->timestamp,menu)) d->buttons|=BTN_CIRCLE;
+    if (keyboard_circle(k,d->timestamp,menu)) d->buttons|=(dodge_is_cross ? BTN_CROSS : BTN_CIRCLE);
     if (key_down(k,IN_TOUCHPAD)) touch_click(d,0);
     if (key_down(k,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
     if (key_down(k,IN_L2)) d->l2=255;
     if (key_down(k,IN_R2)) d->r2=255;
     /* A gamepad's stick is kept while no key moves it. */
+    const float walk=walk_down(k) ? (float)walk_percent/100.0f : 1.0f;
     key_stick(&move_stick,d->timestamp,key_down(k,IN_MOVE_LEFT),key_down(k,IN_MOVE_RIGHT),
-              key_down(k,IN_MOVE_UP),key_down(k,IN_MOVE_DOWN),&d->left_x,&d->left_y);
+              key_down(k,IN_MOVE_UP),key_down(k,IN_MOVE_DOWN),&d->left_x,&d->left_y,walk);
     key_stick(&look_stick,d->timestamp,key_down(k,IN_LOOK_LEFT),key_down(k,IN_LOOK_RIGHT),
-              key_down(k,IN_LOOK_UP),key_down(k,IN_LOOK_DOWN),&d->right_x,&d->right_y);
+              key_down(k,IN_LOOK_UP),key_down(k,IN_LOOK_DOWN),&d->right_x,&d->right_y,1.0f);
     memset((void *)key_latch,0,sizeof(key_latch));
 }
 

@@ -15,6 +15,11 @@
 
 namespace BbThreads {
 
+#ifdef _WIN32
+// Windows (bbport_platform.cpp): the process affinity mask; THREAD_PRIORITY_IDLE.
+unsigned Available();
+void MakeBackground();
+#else
 /// Hardware threads available to the process.
 inline unsigned Available() {
 #ifdef _WIN32
@@ -40,6 +45,7 @@ inline void MakeBackground() {
     }
 #endif
 }
+#endif
 
 /// Helper threads of the GPU side that the GPU command thread's progress depends on (Vulkan
 /// recording threads, guest memory copy threads): a fault there must never wait for that thread

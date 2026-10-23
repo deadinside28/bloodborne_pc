@@ -443,35 +443,44 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
 ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc) {
     Image& image = slot_images[image_id];
     WatchImage(image, "depth target");
-    image.flags |= ImageFlagBits::GpuModified;
-    image.gpu_write_tick = CurrentTick();
-    image.usage.depth_target = 1;
-    UpdateImage(image_id);
-    if (const VAddr htile = desc.info.meta_info.htile_addr) {
-        surface_metas.emplace(htile, MetaInfo{.type = MetaType::HTile,
-                                              .clear_mask = image.info.meta_info.htile_clear_mask});
-        image.info.meta_info.htile_addr = htile;
-    }
-    // The stencil surface: an image of its own (a placeholder of no format) linked to the depth.
-    if (desc.info.stencil_addr != 0) {
-        ImageId stencil_id{};
-        ForEachImageInRegion(desc.info.stencil_addr, desc.info.stencil_size,
-                             [&](ImageId id, Image& candidate) {
-                                 if (candidate.info.guest_address == desc.info.stencil_addr) {
-                                     stencil_id = id;
-                                 }
-                             });
-        if (!stencil_id) {
-            ImageInfo info{};
-            info.guest_address = desc.info.stencil_addr;
-            info.guest_size = desc.info.stencil_size;
-            info.size = desc.info.size;
-            stencil_id = InsertImage(info);
+    // bbport(windows-port): all of this ran without the cache mutex, from the draw threads,
+    // while the submit thread's garbage collector walked the same LRU / page table under it:
+    // under memory pressure (evictions on every submission) a stencil registration racing the
+    // collector corrupted the lists and the game died of heap corruption (0xc0000005 in
+    // ucrtbase, twice mid-printf in m24). UpdateImage locks the mutex on its slow path, so it
+    // stays out of this critical section.
+    {
+        std::scoped_lock lock{mutex};
+        image.flags |= ImageFlagBits::GpuModified;
+        image.gpu_write_tick = CurrentTick();
+        image.usage.depth_target = 1;
+        if (const VAddr htile = desc.info.meta_info.htile_addr) {
+            surface_metas.emplace(htile, MetaInfo{.type = MetaType::HTile,
+                                                  .clear_mask = image.info.meta_info.htile_clear_mask});
+            image.info.meta_info.htile_addr = htile;
         }
-        Image& stencil = slot_images[stencil_id];
-        TouchImage(stencil);
-        stencil.AssociateDepth(image_id, image.image_uid);
+        // The stencil surface: an image of its own (a placeholder of no format) linked to the depth.
+        if (desc.info.stencil_addr != 0) {
+            ImageId stencil_id{};
+            ForEachImageInRegion(desc.info.stencil_addr, desc.info.stencil_size,
+                                 [&](ImageId id, Image& candidate) {
+                                     if (candidate.info.guest_address == desc.info.stencil_addr) {
+                                         stencil_id = id;
+                                     }
+                                 });
+            if (!stencil_id) {
+                ImageInfo info{};
+                info.guest_address = desc.info.stencil_addr;
+                info.guest_size = desc.info.stencil_size;
+                info.size = desc.info.size;
+                stencil_id = InsertImage(info);
+            }
+            Image& stencil = slot_images[stencil_id];
+            TouchImage(stencil);
+            stencil.AssociateDepth(image_id, image.image_uid);
+        }
     }
+    UpdateImage(image_id);
     return image.FindView(desc.view_info, false);
 }
 

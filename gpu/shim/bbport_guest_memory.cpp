@@ -1,4 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#ifdef _WIN32
+// Windows keeps this Linux-mmap-based feature off for now; the interface stays.
+#include "bbport_guest_memory.h"
+
+#include <vulkan/vulkan.hpp>
+namespace BbGuestMemory {
+bool Usable(const Vulkan::Instance&) { return false; }
+bool PcModelGpu(const Vulkan::Instance&) { return false; }
+bool HostImported() { return false; }
+bool LayerMemory() { return false; }
+vk::ExternalMemoryHandleTypeFlagBits HandleType() { return {}; }
+void Install(const Vulkan::Instance&) {}
+const Chunk* Find(std::uint64_t) { return nullptr; }
+} // namespace BbGuestMemory
+#else
 #include "bbport_guest_memory.h"
 
 #include <array>
@@ -772,3 +787,5 @@ const Chunk* Find(std::uint64_t phys) {
     return phys < c->phys + c->size ? c : nullptr;
 }
 } // namespace BbGuestMemory
+
+#endif
