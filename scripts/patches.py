@@ -82,6 +82,17 @@ def gx_command_heap(env=os.environ):
     return env.get('BB_GX_COMMAND_HEAP','1')!='0'
 
 
+# The game's two graphics heaps (2287 and 886 MiB) made 3952 and 2560 MiB: the scene's targets
+# above 1080p, and texture packs (--large-heaps from run.sh: game_check.texture_pack, #240), do not
+# fit the retail sizes. They need BB_DMEM_MB=9152 (run.sh).
+GRAPHICS_HEAPS='Increased Graphics Heap Sizes'
+
+
+def graphics_heaps(size, large_heaps):
+    """Whether the larger graphics heaps go in: a scene above 1080p or a texture pack."""
+    return large_heaps or bool(size and size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1])
+
+
 def intel_tonemap_fix(env=os.environ, cpuinfo='/proc/cpuinfo'):
     forced=env.get('BB_INTEL_TONEMAP_FIX')
     return forced=='1' if forced in ('0','1') else intel_cpu(cpuinfo)
@@ -359,6 +370,8 @@ def main():
     p.add_argument('--output-res',default='',help='output resolution WxH (the upscaler\'s; the UI stays 1920x1080)')
     p.add_argument('--print-scaled',action='store_true',
                    help='print "RENDER OUTPUT" (WxH) when bbport.ini selects an output other than 1080p')
+    p.add_argument('--large-heaps',choices=('0','1'),default='0',
+                   help='1: the larger graphics heaps whatever the resolution (a texture pack)')
     a=p.parse_args()
     if a.print_scaled:
         sizes=scaled_sizes(read_settings(a.settings))
@@ -391,10 +404,11 @@ def main():
     ui=OUTPUT_SIZE
     if size:
         writes+=resolution_writes(a.xml,size,a.app_version,segments,ui)
-        if size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1]:
-            heap='Increased Graphics Heap Sizes'
-            writes+=compile_patches(a.xml,[heap],a.app_version,segments)
-            names.append(heap)
+    # BB_PATCHES may name it already: its writes go in once.
+    if graphics_heaps(size,a.large_heaps=='1') and GRAPHICS_HEAPS not in names:
+        writes+=compile_patches(a.xml,[GRAPHICS_HEAPS],a.app_version,segments)
+        names.append(GRAPHICS_HEAPS)
+    if size:
         print(f'Patches: scene {size[0]}x{size[1]}; UI {ui[0]}x{ui[1]}')
     if a.patches_dir:
         # After the built-in ones: an external patch of the same bytes wins.

@@ -213,7 +213,9 @@ temporal accumulation and leaves its history and HUD unchanged.
 **Mods:** the launcher accepts separate loose-file mod folders (with `dvdroot_ps4/`, an extra
 wrapper folder, or the game folders such as `chr/` directly; file name case does not matter),
 with enable switches and load order. A sibling `CUSA03173-mods/` overlay also works.
-The original game is preserved; later mods override conflicting files.
+The original game is preserved; later mods override conflicting files. Texture packs with
+upscaled map textures (from the mods folder or already in the game folder) get larger graphics
+heaps by themselves (`BB_LARGE_HEAPS=1/0` forces it on or off).
 **Third-party patches:** shadPS4-format XML patch files in the data directory's `patches/`,
 switched on and off in the launcher. See [mods and patches](docs/MODS.md).
 **DLC:** put your add-on dumps in `user/addcont/<title id>/<entitlement label>/` (shadPS4's
