@@ -127,8 +127,22 @@ elif [[ -n ${scaled_output:-} ]]; then
     export BB_DMEM_MB=${BB_DMEM_MB:-9152}
     echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB} MiB (live_resolution=1: live changes)"
 fi
+# Texture packs (upscaled map textures, baked into the game folder or from the mods folder) fill
+# the game's graphics heaps where the retail game fits: its GPU allocations fail, textures flicker,
+# then it crashes (139 at Iosefka's Clinic, #240). They get the larger heaps of the resolution
+# patches above 1080p and the direct memory those need. scripts/game_check.py finds a map texture
+# larger than the retail game's (once, kept in out/); BB_LARGE_HEAPS=1/0 forces it on or off.
+large_heaps=${BB_LARGE_HEAPS:-} pack=
+if [[ $large_heaps != [01] ]]; then
+    read -r large_heaps pack < <("$PYTHON" scripts/game_check.py --texture-pack "$game" "$out/texture-pack.json") || true
+    [[ $large_heaps == 1 ]] || large_heaps=0
+fi
+if [[ $large_heaps == 1 ]]; then
+    export BB_DMEM_MB=${BB_DMEM_MB:-9152}
+    echo "Graphics heaps: larger (${pack:-BB_LARGE_HEAPS=1}), direct memory ${BB_DMEM_MB} MiB (BB_LARGE_HEAPS=0: the game's own sizes)"
+fi
 "$PYTHON" scripts/patches.py --out "$out" --fps "$fps" --extra "${BB_PATCHES:-}" --settings "$BB_CONFIG" --game-dir "$game" --render-res "${BB_RENDER_RES:-}" --output-res "${BB_OUTPUT_RES:-}" \
-    --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}"
+    --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}" --large-heaps "$large_heaps"
 # Background upload of the game's GPU memory into VRAM ahead of use (BufferCache::Preupload):
 # 1 = only memory already in VRAM that the game rewrote (no new VRAM), 2 = all of it (~3 GB more
 # VRAM), 0 = off. BB_GUEST_GPU_MEMORY=1 puts guest direct memory in GPU-visible dma-buf chunks

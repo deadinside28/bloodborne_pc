@@ -221,5 +221,19 @@ class GxCommandHeapTests(unittest.TestCase):
         self.assertEqual(writes, expected)
 
 
+class GraphicsHeapTests(unittest.TestCase):
+    def test_above_1080p_or_for_a_texture_pack(self):
+        self.assertFalse(patches.graphics_heaps(None, False))
+        self.assertFalse(patches.graphics_heaps((1706, 960), False))
+        self.assertTrue(patches.graphics_heaps((2560, 1440), False))
+        # #240: live resolution (no scene patch) with a texture pack.
+        self.assertTrue(patches.graphics_heaps(None, True))
+
+    def test_compiled_patch_grows_the_two_graphics_heaps(self):
+        # The size table's 2287 MiB (0x8ef00000) and 886 MiB (0x37600000) entries: 3952, 2560 MiB.
+        writes = dict(compile_patches(XML, [patches.GRAPHICS_HEAPS], '01.09', SEGMENTS))
+        self.assertEqual(writes, {0x4736dda: b'\x00\xf7', 0x4736de2: b'\x00\xa0'})
+
+
 if __name__ == '__main__':
     unittest.main()
