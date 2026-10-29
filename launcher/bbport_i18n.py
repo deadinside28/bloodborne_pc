@@ -460,6 +460,14 @@ EN = {
     "Золотой": "Gold",
     "Серебряный": "Silver",
     "Бронзовый": "Bronze",
+    "Качество текстур": "Texture quality",
+    "Крупные текстуры в видеопамяти": "Large textures in VRAM",
+    "Полное": "Full",
+    "Половина": "Half",
+    "Четверть": "Quarter",
+    "Половина при 3 ГБ видеопамяти и меньше": "Half with 3 GB of VRAM or less",
+    "Вдвое меньше по каждой стороне": "Half as big per side",
+    "Вчетверо меньше по каждой стороне": "A quarter per side",
 }
 
 PT_BR = {
@@ -743,6 +751,14 @@ PT_BR = {
     "Слои валидации Vulkan": "Camadas de validação do Vulkan",
     "Сильно замедляет": "Muito mais lento",
     "Доп. переменные (ИМЯ=значение через пробел)": "Variáveis extras (NOME=valor, separadas por espaço)",
+    "Качество текстур": "Qualidade das texturas",
+    "Крупные текстуры в видеопамяти": "Texturas grandes na VRAM",
+    "Полное": "Completa",
+    "Половина": "Metade",
+    "Четверть": "Um quarto",
+    "Половина при 3 ГБ видеопамяти и меньше": "Metade com 3 GB de VRAM ou menos",
+    "Вдвое меньше по каждой стороне": "Metade do tamanho por lado",
+    "Вчетверо меньше по каждой стороне": "Um quarto por lado",
 }
 
 
@@ -1122,6 +1138,14 @@ ZH_CN = {
     "Слои валидации Vulkan": "Vulkan 验证层",
     "Сильно замедляет": "会大幅降低速度",
     "Доп. переменные (ИМЯ=значение через пробел)": "附加环境变量（用空格分隔的 名称=值）",
+    "Качество текстур": "纹理质量",
+    "Крупные текстуры в видеопамяти": "显存中的大纹理",
+    "Полное": "完整",
+    "Половина": "一半",
+    "Четверть": "四分之一",
+    "Половина при 3 ГБ видеопамяти и меньше": "显存 3 GB 及以下时为一半",
+    "Вдвое меньше по каждой стороне": "每边缩小一半",
+    "Вчетверо меньше по каждой стороне": "每边缩小到四分之一",
 }
 
 # New French Translation by @Sarxzer
@@ -1486,6 +1510,14 @@ FR_FR = {
     "Слои валидации Vulkan": "Couches de validation Vulkan",
     "Сильно замедляет": "Ralentit beaucoup",
     "Доп. переменные (ИМЯ=значение через пробел)": "Variables supplémentaires (NOM=valeur, séparées par des espaces)",
+    "Качество текстур": "Qualité des textures",
+    "Крупные текстуры в видеопамяти": "Les grandes textures en VRAM",
+    "Полное": "Pleine",
+    "Половина": "Moitié",
+    "Четверть": "Quart",
+    "Половина при 3 ГБ видеопамяти и меньше": "La moitié avec 3 Go de VRAM ou moins",
+    "Вдвое меньше по каждой стороне": "Deux fois plus petites par côté",
+    "Вчетверо меньше по каждой стороне": "Un quart par côté",
 }
 
 
