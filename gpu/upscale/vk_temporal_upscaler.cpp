@@ -370,7 +370,10 @@ bool TemporalUpscaler::OnFrameStart() {
                         any ? "on" : "off");
             return any;
         }();
-        HdrChannel::SetNative16Active(chain_scaled || Scaled() || ui_phase);
+        // Off unless asked (BB_HDR_CHAIN=1): the game still reads some of these targets
+        // back, and float data where it expects 8-bit ends in a guest panic.
+        static const bool chain_opt_in = std::getenv("BB_HDR_CHAIN") != nullptr;
+        HdrChannel::SetNative16Active(chain_opt_in && (chain_scaled || Scaled() || ui_phase));
     }
     HdrChannel::SetDisplayRedirect(ui_phase);
     ui_phase = false;
