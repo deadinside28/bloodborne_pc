@@ -875,9 +875,19 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         const auto& settings = BbSettings::Get();
         const float bloom =
             std::clamp(settings.hdr_bloom.load(std::memory_order_relaxed), 0.0f, 100.0f) / 50.0f;
+        // The game's shaders write the guest's BGR order; the port's float images hold RGBA.
+        // Bit 5 (32): the target is float this frame — flip the stage's order back.
+        u32 swap = u32(std::clamp(int(settings.hdr_swap.load(std::memory_order_relaxed)), 0, 15));
+        if (regs.color_buffers[0]) {
+            const auto& cb = regs.color_buffers[0];
+            const vk::Format target = GcnToVk::SurfaceFormat(cb.GetDataFmt(), cb.GetNumberFmt());
+            if (HdrChannel::Upgraded(cb.Address(), cb.Pitch(), cb.Height(), target) ||
+                HdrChannel::DisplayUpgraded(cb.Address(), target)) {
+                swap |= 32u;
+            }
+        }
         const std::array<u32, 4> chain_reg{
-            u32(std::clamp(int(settings.hdr_swap.load(std::memory_order_relaxed)), 0, 15)),
-            std::bit_cast<u32>(HdrChannel::Knee()), HdrChannel::ChainProbe(),
+            swap, std::bit_cast<u32>(HdrChannel::Knee()), HdrChannel::ChainProbe(),
             std::bit_cast<u32>(bloom)};
         scheduler.Record([layout = pipeline->GetLayout(), chain_reg](vk::CommandBuffer cmdbuf) {
             cmdbuf.pushConstants(layout, AllGraphicsStageBits,

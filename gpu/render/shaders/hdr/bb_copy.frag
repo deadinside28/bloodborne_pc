@@ -38,7 +38,8 @@ layout(location = 0) out vec4 frag_color0;
 
 void main() {
     vec4 c = textureLod(sampler2D(fs_img0, fs_samp0), BB_UV(fs_in_attr0), 0.0);
-    frag_color0 = vec4((push_data.bb_hdr.x & 2u) != 0u ? c.xyz : c.zyx, c.w);
+    const bool swap = (push_data.bb_hdr.x & (2u | 32u)) != 0u;
+    frag_color0 = vec4(swap ? c.xyz : c.zyx, c.w);
     if (push_data.bb_hdr.z == 5u && max(max(c.x, c.y), c.z) > 1.001) {
         frag_color0 = vec4(1.0, 0.0, 1.0, c.w);
     }
