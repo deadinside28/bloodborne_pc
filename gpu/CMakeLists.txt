@@ -155,6 +155,9 @@ add_own_shader(render/shaders/hdr/bb_display_copy.frag bb_display_copy_frag)
 # The HUD's mask (the upscaler's pre-UI snapshot against the finished frame): the present shows
 # the HUD at UI Brightness through it.
 add_own_shader(render/shaders/hdr/hdr_ui_mask.comp hdr_ui_mask_comp)
+# Compile check of hdr/renodx.glsl (every function used once; MIT port verified by the source
+# repo's shader-check against RenoDX's own code). Not part of the game.
+add_own_shader(render/shaders/hdr/renodx_check.frag renodx_check_frag)
 add_own_shader(upscale/shaders/camera_motion.comp camera_motion_comp)
 # GT-VBAO in place of the game's SSAO (upscale/vk_vbao.cpp, docs/vbao.md; contributed by redditor69).
 add_own_shader(upscale/shaders/vbao.comp vbao_comp)
@@ -370,6 +373,14 @@ set_source_files_properties(../tests/test_taa_shader.cpp PROPERTIES
     COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
 target_link_libraries(taa-shader-test PRIVATE bbgpu)
 add_dependencies(taa-shader-test host_shaders)
+
+# The HDR output encode on a synthetic row (self-contained: raw Vulkan, only the generated
+# shader headers).
+add_executable(hdr-output-test EXCLUDE_FROM_ALL ../tests/test_hdr_output.cpp)
+target_include_directories(hdr-output-test PRIVATE ${SHADER_INCLUDE})
+target_compile_options(hdr-output-test PRIVATE -UNDEBUG)
+target_link_libraries(hdr-output-test PRIVATE Vulkan::Vulkan)
+add_dependencies(hdr-output-test host_shaders)
 
 add_executable(camera-motion-test EXCLUDE_FROM_ALL ../tests/test_camera_motion.cpp ../tests/test_gpu_runtime_stubs.cpp)
 target_include_directories(camera-motion-test PRIVATE . shim ${SHADER_INCLUDE} third_party/gcn/include)
