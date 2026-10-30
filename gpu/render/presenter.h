@@ -72,6 +72,9 @@ struct Frame {
     VideoCore::HostImage hdr_snapshot{};
     vk::UniqueImageView hdr_snapshot_view{};
     bool hdr_snapshot_ui_mask = false;
+    /// Native+ HDR: the frame image holds LINEAR values (an sRGB view decoded the game's
+    /// encoding when it was sampled), so the present must not decode them again.
+    bool hdr_linear = false;
     /// Low latency: the frame's ID for the driver (0: a blank frame).
     u64 present_id = 0;
 };

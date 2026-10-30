@@ -353,6 +353,14 @@ Frame* Presenter::PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute
                        ? std::clamp(BbSettings::Get().sharpness.load(), 0.0f, 2.0f)
                        : 0.0f,
     };
+    // Native+ with the HDR output: the frame image holds what the sampler returned. An sRGB view
+    // (the guest's 8-bit buffers, the port's 8-bit display image) decoded the game's encoding to
+    // linear already; the chain's float values stay as the game encoded them, for the present's
+    // 2.2 decode. (Without it the present decoded twice: a dark picture.)
+    const vk::Format frame_source_format =
+        upscaled && HdrChannel::Native16() ? display.format : view_info.format;
+    frame->hdr_linear = frame_source_format == vk::Format::eR8G8B8A8Srgb ||
+                        frame_source_format == vk::Format::eB8G8R8A8Srgb;
     // Numbered here, in command order; marked where the commands are recorded.
     const u32 stream = draw_scheduler.CrumbStream();
     const u32 crumb = Breadcrumbs::Enabled()
@@ -857,6 +865,7 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
                  (overlay ? HdrOutputPass::FlagOverlay : 0u) |
                  (debug ? HdrOutputPass::FlagDebug : 0u) |
                  (native16 ? HdrOutputPass::FlagNative16 : 0u) |
+                 (native16 && frame && frame->hdr_linear ? HdrOutputPass::FlagLinearFrame : 0u) |
                  (native16 && frame && frame->hdr_snapshot_ui_mask
                       ? HdrOutputPass::FlagUiMask
                       : 0u) |

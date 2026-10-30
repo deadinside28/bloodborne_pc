@@ -11,7 +11,9 @@
 
 #include "vulkan/instance.h"
 
-extern "C" void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z);
+// The FFX backend's per-job marker hook; defined here (null until installed below): with the
+// library as a static one on Windows the linker needs the definition.
+extern "C" void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z) = nullptr;
 
 namespace FgProfile {
 

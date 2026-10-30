@@ -345,7 +345,7 @@ void HdrChannel::NoteGameShader(u64 pgm_hash, std::span<const u32> spv) {
     }
     if (fresh) {
         it->second.spv = std::move(*built);
-        LOG_INFO(Render_Vulkan, "HDR pass: composite variant {:08x} ready ({}{}, {})",
+        std::printf("HDR pass: composite variant %08x ready (%s%s, %s)\n",
                  u32(pgm_hash), CurveNames[v->curve < 4 ? v->curve : 3],
                  v->luminance ? " on luminance" : "",
                  per_vertex ? "inputs per vertex" : "inputs interpolated by the GPU");
@@ -372,7 +372,12 @@ vk::ShaderModule HdrChannel::CompositeModule(const Instance& instance, u64 pgm_h
 
 bool HdrChannel::Enabled() {
     const auto& s = BbSettings::Get();
-    static const bool enabled = s.hdr.load() && s.hdr_mode.load() == BbSettings::HdrModeScene;
+    static const bool enabled = [&] {
+        const bool on = s.hdr.load() && s.hdr_mode.load() == BbSettings::HdrModeScene;
+        std::printf("HDR 16-bit: the chain is %s (hdr %d hdr_mode %d)\n",
+                 on ? "on" : "off", int(s.hdr.load()), int(s.hdr_mode.load()));
+        return on;
+    }();
     return enabled;
 }
 
@@ -480,7 +485,7 @@ std::vector<u32> HdrChannel::ChainReplacement(u64 pgm_hash, std::span<const u32>
                     pgm_hash);
         return {};
     }
-    LOG_INFO(Render_Vulkan, "HDR 16-bit: shader {:08x} replaced ({}{})", pgm_hash,
+    std::printf("HDR 16-bit: shader %08x replaced (%s%s)\n", u32(pgm_hash),
              pgm_hash == 0x57f3b8c2        ? "glow source clamped"
              : pgm_hash == 0xf7229091      ? "copy (chain probe)"
              : pgm_hash == ColorGradingHash ? "color table kept above white"
@@ -498,11 +503,11 @@ bool HdrChannel::Trace() {
 void HdrChannel::OnDisplayCopy() {
     static const bool trace_env = std::getenv("BB_HDR_TRACE") != nullptr;
     if (trace_active.exchange(false)) {
-        LOG_INFO(Render_Vulkan, "HDR trace: end of the traced frame");
+        std::printf("HDR trace: end of the traced frame\n");
     }
     if (Native16() && trace_env) {
         trace_active = true;
-        LOG_INFO(Render_Vulkan, "HDR trace: frame start (16-bit chain active {})",
+        std::printf("HDR trace: frame start (16-bit chain active %d)\n",
                  Native16Active());
     }
 }
@@ -531,7 +536,7 @@ bool HdrChannel::Native16Active() {
 
 void HdrChannel::SetNative16Active(bool active) {
     if (Native16() && native16_active.exchange(active) != active) {
-        LOG_INFO(Render_Vulkan, "HDR 16-bit: {}", active ? "on (output-size images)"
+        std::printf("HDR 16-bit: %s\n", active ? "on (output-size images)"
                                                           : "off (no output-size images)");
     }
 }
@@ -543,6 +548,18 @@ void HdrChannel::NoteTarget(u64 ps_hash, VAddr address, u32 width, u32 height,
     }
     const TonemapVariant* v = FindVariant(ps_hash);
     if (!(v && v->standard) && !ChainShader(ps_hash)) {
+        // Diagnostic: a scene-sized 8-bit target drawn by a shader the chain does not know —
+        // the composite's hash missing from the table, or another pass. The first few tell
+        // which (the composite's hash is what the table holds).
+        if (ChainSize(width, height) && ChainFormat(format)) {
+            static std::mutex told_mutex;
+            static std::unordered_set<u64> told;
+            std::scoped_lock lock{told_mutex};
+            if (told.size() < 24 && told.insert(ps_hash).second) {
+                std::printf("HDR 16-bit: ps %08x draws into a %ux%u target the chain does not know\n",
+                        u32(ps_hash), width, height);
+            }
+        }
         return;
     }
     if (!ChainSize(width, height) || !ChainFormat(format)) {
@@ -550,15 +567,16 @@ void HdrChannel::NoteTarget(u64 ps_hash, VAddr address, u32 width, u32 height,
         static std::unordered_set<u64> logged;
         std::scoped_lock lock{logged_mutex};
         if (logged.insert(ps_hash).second) {
-            LOG_INFO(Render_Vulkan, "HDR 16-bit: target {:#x} of ps {:08x} left 8-bit ({}x{} {})",
-                     address, ps_hash, width, height, vk::to_string(format));
+            std::printf("HDR 16-bit: target %#llx of ps %08x left 8-bit (%ux%u %s)\n",
+                        (unsigned long long)address, u32(ps_hash), width, height,
+                        vk::to_string(format).c_str());
         }
         return;
     }
     std::scoped_lock lock{native16_mutex};
     if (native16_targets.insert(address).second) {
         native16_count.store(u32(native16_targets.size()), std::memory_order_release);
-        LOG_INFO(Render_Vulkan, "HDR 16-bit: target {:#x} (from ps {:08x}) is RGBA16F", address,
+        std::printf("HDR 16-bit: target %#llx (from ps %08x) is RGBA16F\n", (unsigned long long)address,
                  ps_hash);
     }
 }
@@ -570,7 +588,7 @@ void HdrChannel::NoteCopyTarget(VAddr address, u32 width, u32 height, vk::Format
     std::scoped_lock lock{native16_mutex};
     if (native16_targets.insert(address).second) {
         native16_count.store(u32(native16_targets.size()), std::memory_order_release);
-        LOG_INFO(Render_Vulkan, "HDR 16-bit: target {:#x} (copy of the chain) is RGBA16F",
+        std::printf("HDR 16-bit: target %#llx (copy of the chain) is RGBA16F\n",
                  address);
     }
 }

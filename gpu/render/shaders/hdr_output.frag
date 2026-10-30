@@ -37,6 +37,9 @@ const uint FLAG_NATIVE16 = 16u;
 // Native+: the snapshot's alpha is the HUD's mask (hdr_ui_mask.comp); the HUD is shown at UI
 // Brightness (ui_white).
 const uint FLAG_UI_MASK = 32u;
+// Native+: the frame is linear already (an sRGB view decoded the game's encoding when it was
+// sampled): the present must not decode it again.
+const uint FLAG_LINEAR_FRAME = 64u;
 
 // Linear brightness (SDR white = 1) above which the highlights are expanded: high, so large
 // bright areas (fog, sky) stay near paper white and only lamps, fire and sparks reach the peak.
@@ -90,7 +93,9 @@ void main() {
     vec3 game_srgb = texelFetch(game, pixel, 0).rgb;
     float peak_white = max(hdr.peak / hdr.paper_white, 1.0);
     float white = max(mix(1.0, peak_white, clamp(hdr.boost, 0.0, 1.0)), 1.0);
-    vec3 sdr_linear = SdrToLinear(game_srgb);
+    vec3 sdr_linear = (hdr.flags & FLAG_LINEAR_FRAME) != 0u
+                          ? clamp(game_srgb, 0.0, 1.0)
+                          : SdrToLinear(game_srgb);
     vec3 linear;
     if ((hdr.flags & FLAG_NATIVE16) != 0u) {
         // The 16-bit chain's frame: the game's encoded picture with the HDR delta above its

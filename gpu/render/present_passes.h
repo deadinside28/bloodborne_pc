@@ -63,6 +63,7 @@ public:
     static constexpr u32 FlagCompare = 8;   ///< the left half as SDR (the menu's comparison)
     static constexpr u32 FlagNative16 = 16; ///< Native+: the composite carries the scene's HDR
     static constexpr u32 FlagUiMask = 32;   ///< Native+: the snapshot's alpha is the HUD's mask
+    static constexpr u32 FlagLinearFrame = 64; ///< Native+: the frame is linear already (sRGB view)
 
     /// `output_format`: the HDR swapchain's format.
     void Create(vk::Device device, vk::Format output_format);
