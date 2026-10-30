@@ -916,6 +916,8 @@ void HdrSection(BbSettings::Values& s) {
             "игры). Держите на значении по умолчанию (203), если интерфейс не выглядит "
             "неправильно. Применяется сразу."));
         ImGui::SeparatorText(BbSettings::MenuText("Grading", "Градация"));
+        // The labels below repeat elsewhere in the menu ("Contrast" does): their own ID scope.
+        ImGui::PushID("hdr_grading");
         Slider(BbSettings::MenuText("Exposure", "Экспозиция"), s.hdr_exposure,
                BbSettings::HdrGradeMin, BbSettings::HdrGradeMax);
         Slider(BbSettings::MenuText("Contrast", "Контраст"), s.hdr_contrast,
@@ -951,6 +953,7 @@ void HdrSection(BbSettings::Values& s) {
                 ImGui::EndCombo();
             }
         }
+        ImGui::PopID();
         ImGui::EndDisabled();
     }
     {

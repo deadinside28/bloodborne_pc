@@ -548,16 +548,16 @@ void HdrChannel::NoteTarget(u64 ps_hash, VAddr address, u32 width, u32 height,
     }
     const TonemapVariant* v = FindVariant(ps_hash);
     if (!(v && v->standard) && !ChainShader(ps_hash)) {
-        // Diagnostic: a scene-sized 8-bit target drawn by a shader the chain does not know —
-        // the composite's hash missing from the table, or another pass. The first few tell
-        // which (the composite's hash is what the table holds).
-        if (ChainSize(width, height) && ChainFormat(format)) {
+        // Diagnostic: anything drawn at the render size by a shader the chain does not know —
+        // the composite's hash missing from the table, or the size/format gate keeping it out.
+        // The first few tell which (and the format the scene target really has).
+        if (ChainSize(width, height)) {
             static std::mutex told_mutex;
             static std::unordered_set<u64> told;
             std::scoped_lock lock{told_mutex};
             if (told.size() < 24 && told.insert(ps_hash).second) {
-                std::printf("HDR 16-bit: ps %08x draws into a %ux%u target the chain does not know\n",
-                        u32(ps_hash), width, height);
+                std::printf("HDR 16-bit: ps %08x draws into a %ux%u %s target the chain does not take\n",
+                            u32(ps_hash), width, height, vk::to_string(format).c_str());
             }
         }
         return;
