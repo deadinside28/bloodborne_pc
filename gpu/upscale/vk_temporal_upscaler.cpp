@@ -357,7 +357,21 @@ bool TemporalUpscaler::OnFrameStart() {
     // Native+ HDR (render/hdr_channel.cpp): the port's output-size images are in use — the
     // chain's proxies carry the frame, the display redirect floats it. Known before the frame's
     // draws: the pipeline keys and the proxy formats engage from this frame on.
-    HdrChannel::SetNative16Active(ui_phase);
+    // The chain needs the port's images: they exist while the upscaler runs at a size
+    // other than the game's own (an output-size UI alone is not enough: gameplay
+    // frames end without one, and the chain stayed off with them).
+    // The chain's proxies live in the port's images, which exist while an upscaler runs from
+    // the game's size to the output: engage from the setting, not from a per-frame guess.
+    {
+        static const bool chain_scaled = [] {
+            const bool any = BbSettings::Get().upscaler.load() != BbSettings::UpscalerOff;
+            std::printf("HDR 16-bit: the chain's images %s (upscaler %s)\n",
+                        any ? "in use" : "not in use (no upscaler)",
+                        any ? "on" : "off");
+            return any;
+        }();
+        HdrChannel::SetNative16Active(chain_scaled || Scaled() || ui_phase);
+    }
     HdrChannel::SetDisplayRedirect(ui_phase);
     ui_phase = false;
     ui_read_barrier = false;

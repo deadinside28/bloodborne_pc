@@ -267,6 +267,9 @@ struct Values {
     std::atomic<bool> hdr{false};
     std::atomic<float> hdr_paper_white{HdrPaperWhiteDefault}, hdr_peak{HdrPeakDefault},
         hdr_boost{HdrBoostDefault};
+    /// The chain's channel-order test (0..15; bit 0 the composite, 1 the copy, 2 the colour
+    /// table, 3 the display copy — each swaps red and blue). A diagnostic; saved.
+    std::atomic<int> hdr_swap{0};
     /// Native+ (live): the knee below the game's white, the glow's strength, the black floor,
     /// and the HUD's white (UI Brightness; the masked pixels of the scene chain's frame).
     std::atomic<float> hdr_knee{HdrKneeDefault}, hdr_bloom{HdrBloomDefault},

@@ -167,6 +167,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.hdr_saturation = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
     } else if (key == "hdr_scene_grading") {
         v.hdr_scene_grading = Clamp(std::isfinite(f) ? f : HdrSceneGradingDefault, 0.0f, 100.0f);
+    } else if (key == "hdr_swap") {
+        v.hdr_swap = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 15);
     } else if (key == "hdr_lut_bridge") {
         const bool reno = value == "renodx" || value == "1";
         v.hdr_lut_bridge = reno ? HdrLutBridgeRenoDx : HdrLutBridgeExact;
@@ -386,7 +388,7 @@ void Load() {
         {"BB_HDR_EXPOSURE", "hdr_exposure"},        {"BB_HDR_CONTRAST", "hdr_contrast"},
         {"BB_HDR_HIGHLIGHTS", "hdr_highlights"},    {"BB_HDR_SHADOWS", "hdr_shadows"},
         {"BB_HDR_SATURATION", "hdr_saturation"},    {"BB_HDR_SCENE_GRADING", "hdr_scene_grading"},
-        {"BB_HDR_LUT_BRIDGE", "hdr_lut_bridge"},
+        {"BB_HDR_LUT_BRIDGE", "hdr_lut_bridge"},  {"BB_HDR_SWAP", "hdr_swap"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -579,6 +581,7 @@ void Save() {
     put("hdr_shadows", fixed(v.hdr_shadows, 2));
     put("hdr_saturation", fixed(v.hdr_saturation, 2));
     put("hdr_scene_grading", fixed(v.hdr_scene_grading, 0));
+    put("hdr_swap", std::to_string(v.hdr_swap.load()));
     put("hdr_lut_bridge", v.hdr_lut_bridge == HdrLutBridgeRenoDx ? "renodx" : "exact");
     if (v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));

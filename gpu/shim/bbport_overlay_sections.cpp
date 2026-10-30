@@ -954,6 +954,15 @@ void HdrSection(BbSettings::Values& s) {
             }
         }
         ImGui::PopID();
+        // Diagnostic: which chain stage keeps the game's channel order (red <-> blue).
+        // 0 is the game's own order everywhere; each bit flips one stage.
+        {
+            int swap = s.hdr_swap.load(std::memory_order_relaxed);
+            if (ImGui::SliderInt(BbSettings::MenuText("Channel order (test)", "Порядок каналов (тест)"),
+                                 &swap, 0, 15)) {
+                Store(s.hdr_swap, swap, true);
+            }
+        }
         ImGui::EndDisabled();
     }
     {

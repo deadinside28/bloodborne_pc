@@ -411,11 +411,11 @@ std::pair<u32, u32> FixedRenderSize() {
 // The chain's targets, 8-bit RGBA: 1920x1080 (the registers give the height padded to whole
 // 8-row tiles), or with the startup patch the patched render size (padded, e.g. 3840x2176).
 bool ChainSize(u32 width, u32 height) {
-    const auto [rw, rh] = FixedRenderSize();
-    if (rw != 0) {
-        return width >= rw && width < rw + 64 && height >= rh && height < rh + 64;
-    }
-    return width == 1920 && height >= 1080 && height <= 1088;
+    // The scene's own target, whatever size the game renders it at: the launcher's output
+    // presets (and its live resolution changes) move it freely, and a size fence against
+    // BB_RENDER_RES silently kept the whole chain off when they disagreed. The shaders' hashes
+    // identify the chain; the bounds only keep stray small or absurd targets out.
+    return width >= 320 && width <= 8192 && height >= 180 && height <= 8192;
 }
 
 constexpr bool ChainFormat(vk::Format format) {
@@ -512,6 +512,15 @@ void HdrChannel::OnDisplayCopy() {
     }
 }
 
+bool HdrChannel::IsCompositeVariant(u64 pgm_hash) {
+    const TonemapVariant* v = FindVariant(pgm_hash);
+    return v != nullptr && v->standard;
+}
+
+bool HdrChannel::ChainShaderHash(u64 pgm_hash) {
+    return ChainShader(pgm_hash);
+}
+
 bool HdrChannel::ChainImage(VAddr address, u32 width, u32 height, vk::Format format) {
     return Upgraded(address, width, height, format);
 }
@@ -582,7 +591,7 @@ void HdrChannel::NoteTarget(u64 ps_hash, VAddr address, u32 width, u32 height,
 }
 
 void HdrChannel::NoteCopyTarget(VAddr address, u32 width, u32 height, vk::Format format) {
-    if (!Native16Fixed() || !ChainSize(width, height) || !ChainFormat(format)) {
+    if (!Native16() || !ChainSize(width, height) || !ChainFormat(format)) {
         return;
     }
     std::scoped_lock lock{native16_mutex};

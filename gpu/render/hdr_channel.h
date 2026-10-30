@@ -68,6 +68,11 @@ public:
     /// The game's second glow, added after its tone mapping (a blur of the 960x540 glow
     /// targets, additive); in the chain weighted by the Bloom slider (blend constant).
     static constexpr u64 GlowAddHash = 0x8c08444c;
+    /// Is the shader one of the composite's variants (its tonemap is recognized)? And one of the
+    /// chain's own shaders (the copy, the glow's source, the colour table, the display copy)?
+    /// For the draw-time diagnostics only.
+    static bool IsCompositeVariant(u64 pgm_hash);
+    static bool ChainShaderHash(u64 pgm_hash);
     /// bbport's version of a game shader of the chain (glow source, copy, color table, display
     /// copy) with the game shader's bindings and locations, or empty to keep the game's.
     static std::vector<u32> ChainReplacement(u64 pgm_hash, std::span<const u32> game);
