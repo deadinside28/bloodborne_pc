@@ -95,6 +95,12 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         for (int g = 0; g < FrameGenCount; ++g) {
             if (value == FrameGenName(g)) v.frame_generation = g;
         }
+        // FSR 3.1 is hidden until its artifacts are fixed (the header's note): only BB_FRAME_GEN
+        // turns it on — the menu has no entry, and a file that says fsr3 loads as off. The env
+        // branch below calls this after the file did, so an env fsr3 stays.
+        if (v.frame_generation == FrameGenFsr3 && !std::getenv("BB_FRAME_GEN")) {
+            v.frame_generation = FrameGenOff;
+        }
     } else if (key == "frame_generation_multiplier") {
         v.frame_generation_multiplier = std::clamp(i, 2, 4);
     } else if (key == "low_latency") {
