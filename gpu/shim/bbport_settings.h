@@ -69,6 +69,11 @@ inline constexpr float HdrKneeDefault = 0.60f, HdrKneeMin = 0.10f, HdrKneeMax = 
 inline constexpr float HdrBloomDefault = 50.0f;
 inline constexpr float HdrBlackFloorDefault = 0.0f, HdrBlackFloorMax = 2.0f;
 inline constexpr float HdrUiNitsDefault = 203.0f, HdrUiNitsMin = 48.0f, HdrUiNitsMax = 500.0f;
+/// Native+: the RenoDX-style user grading (neutral at 1) and the colour table's own knobs:
+/// its strength (0..100 %, the game's at 100) and the LUT bridge (0 Exact, 1 RenoDX).
+inline constexpr float HdrGradeDefault = 1.0f, HdrGradeMin = 0.0f, HdrGradeMax = 2.0f;
+inline constexpr float HdrSceneGradingDefault = 100.0f, HdrLutBridgeExact = 0.0f,
+                       HdrLutBridgeRenoDx = 1.0f;
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
 /// menu label, default (the game's own behaviour).
@@ -266,6 +271,13 @@ struct Values {
     /// and the HUD's white (UI Brightness; the masked pixels of the scene chain's frame).
     std::atomic<float> hdr_knee{HdrKneeDefault}, hdr_bloom{HdrBloomDefault},
         hdr_black_floor{HdrBlackFloorDefault}, hdr_ui_nits{HdrUiNitsDefault};
+    /// The RenoDX-style user grading (live; neutral at 1): exposure, contrast, highlights,
+    /// shadows, saturation — and the colour table's strength (0..100 %) and LUT bridge
+    /// (0 Exact, 1 RenoDX).
+    std::atomic<float> hdr_exposure{HdrGradeDefault}, hdr_contrast{HdrGradeDefault},
+        hdr_highlights{HdrGradeDefault}, hdr_shadows{HdrGradeDefault},
+        hdr_saturation{HdrGradeDefault}, hdr_scene_grading{HdrSceneGradingDefault},
+        hdr_lut_bridge{HdrLutBridgeExact};
     /// Peak Brightness from the display (shim/window.cpp's DXGI probe) while the display
     /// reports one; hdr_peak is the fallback and the manual value.
     std::atomic<bool> hdr_peak_auto{true};

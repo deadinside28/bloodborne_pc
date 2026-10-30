@@ -56,6 +56,13 @@ public:
         /// Native+: the HUD's white as a factor of paper white (hdr_ui_nits / paper white);
         /// the masked pixels are brightened by it.
         float ui_white = 1.0f;
+        /// Native+: the RenoDX-style user grading, neutral at 1: exposure, contrast,
+        /// highlights, shadows, saturation.
+        float exposure = 1.0f;
+        float contrast = 1.0f;
+        float highlights = 1.0f;
+        float shadows = 1.0f;
+        float saturation = 1.0f;
     };
     static constexpr u32 FlagScRgb = 1;     ///< scRGB (linear BT.709) output, else HDR10 PQ
     static constexpr u32 FlagOverlay = 2;   ///< the menu layer is drawn

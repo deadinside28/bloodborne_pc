@@ -256,6 +256,7 @@ int main() {
         float paper_white, peak, boost;
         u32 flags;
         float black_floor, ui_white;
+        float exposure, contrast, highlights, shadows, saturation;
     };
     constexpr u32 FlagScRgb = 1u, FlagOverlay = 2u, FlagNative16 = 16u, FlagUiMask = 32u;
 
@@ -301,7 +302,7 @@ int main() {
         .pPoolSizes = &pool_size};
     VkDescriptorPool pool{};
     CHECK(vkCreateDescriptorPool(vk.device, &pool_create, nullptr, &pool));
-    const VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 6 * 4};
+    const VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 11 * 4};
     const VkPipelineLayoutCreateInfo layout_info{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1,
@@ -517,7 +518,8 @@ int main() {
 
     const auto settings = [&](u32 flags, float boost, float black_floor, float ui_white) {
         // The menu layer is always uploaded (white at its pixel): its flag is on throughout.
-        return HdrPush{paper, peak, boost, flags | FlagOverlay, black_floor, ui_white};
+        return HdrPush{paper, peak, boost, flags | FlagOverlay, black_floor, ui_white,
+                       1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     };
     // Expand, boost 0 (the SDR picture at paper white).
     run(hdr10_pipeline, out_hdr10, settings(0, 0.0f, 0.0f, 1.0f),

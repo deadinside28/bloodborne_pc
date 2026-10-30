@@ -883,6 +883,17 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
                                      BbSettings::HdrUiNitsMin, BbSettings::HdrUiNitsMax) /
                               std::max(paper_white, 1.0f)
                         : 1.0f,
+        // Native+: the RenoDX-style user grading (live; neutral at 1).
+        .exposure = std::clamp(settings.hdr_exposure.load(std::memory_order_relaxed),
+                               BbSettings::HdrGradeMin, BbSettings::HdrGradeMax),
+        .contrast = std::clamp(settings.hdr_contrast.load(std::memory_order_relaxed),
+                               BbSettings::HdrGradeMin, BbSettings::HdrGradeMax),
+        .highlights = std::clamp(settings.hdr_highlights.load(std::memory_order_relaxed),
+                                 BbSettings::HdrGradeMin, BbSettings::HdrGradeMax),
+        .shadows = std::clamp(settings.hdr_shadows.load(std::memory_order_relaxed),
+                              BbSettings::HdrGradeMin, BbSettings::HdrGradeMax),
+        .saturation = std::clamp(settings.hdr_saturation.load(std::memory_order_relaxed),
+                                 BbSettings::HdrGradeMin, BbSettings::HdrGradeMax),
     };
     const vk::ImageMemoryBarrier2 to_attachment{
         .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,

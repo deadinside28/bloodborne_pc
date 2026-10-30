@@ -155,6 +155,21 @@ void Set(Values& v, const std::string& key, const std::string& value) {
             Clamp(std::isfinite(f) ? f : HdrBlackFloorDefault, 0.0f, HdrBlackFloorMax);
     } else if (key == "hdr_ui_nits") {
         v.hdr_ui_nits = Clamp(std::isfinite(f) ? f : HdrUiNitsDefault, HdrUiNitsMin, HdrUiNitsMax);
+    } else if (key == "hdr_exposure") {
+        v.hdr_exposure = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_contrast") {
+        v.hdr_contrast = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_highlights") {
+        v.hdr_highlights = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_shadows") {
+        v.hdr_shadows = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_saturation") {
+        v.hdr_saturation = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_scene_grading") {
+        v.hdr_scene_grading = Clamp(std::isfinite(f) ? f : HdrSceneGradingDefault, 0.0f, 100.0f);
+    } else if (key == "hdr_lut_bridge") {
+        const bool reno = value == "renodx" || value == "1";
+        v.hdr_lut_bridge = reno ? HdrLutBridgeRenoDx : HdrLutBridgeExact;
     } else if (key == "hdr_mode") {
         // "psychov30": lantern.ini's value of the native+ mode in the source port (a file copied
         // from there keeps working). Unknown values stay native+ (the point of the port).
@@ -368,6 +383,10 @@ void Load() {
         {"BB_HDR_PEAK", "hdr_peak"},                {"BB_HDR_BOOST", "hdr_boost"},
         {"BB_HDR_MODE", "hdr_mode"},                {"BB_HDR_BLOOM", "hdr_bloom"},
         {"BB_HDR_BLACK_FLOOR", "hdr_black_floor"},  {"BB_HDR_UI_NITS", "hdr_ui_nits"},
+        {"BB_HDR_EXPOSURE", "hdr_exposure"},        {"BB_HDR_CONTRAST", "hdr_contrast"},
+        {"BB_HDR_HIGHLIGHTS", "hdr_highlights"},    {"BB_HDR_SHADOWS", "hdr_shadows"},
+        {"BB_HDR_SATURATION", "hdr_saturation"},    {"BB_HDR_SCENE_GRADING", "hdr_scene_grading"},
+        {"BB_HDR_LUT_BRIDGE", "hdr_lut_bridge"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -554,6 +573,13 @@ void Save() {
     put("hdr_bloom", fixed(v.hdr_bloom, 0));
     put("hdr_black_floor", fixed(v.hdr_black_floor, 2));
     put("hdr_ui_nits", fixed(v.hdr_ui_nits, 0));
+    put("hdr_exposure", fixed(v.hdr_exposure, 2));
+    put("hdr_contrast", fixed(v.hdr_contrast, 2));
+    put("hdr_highlights", fixed(v.hdr_highlights, 2));
+    put("hdr_shadows", fixed(v.hdr_shadows, 2));
+    put("hdr_saturation", fixed(v.hdr_saturation, 2));
+    put("hdr_scene_grading", fixed(v.hdr_scene_grading, 0));
+    put("hdr_lut_bridge", v.hdr_lut_bridge == HdrLutBridgeRenoDx ? "renodx" : "exact");
     if (v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));
     }

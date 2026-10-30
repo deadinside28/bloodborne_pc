@@ -23,6 +23,13 @@ layout(push_constant) uniform Settings {
     uint flags;
     float black_floor; // Native+: the game's darkest greys taken down to true black (of its white)
     float ui_white;    // Native+: the HUD's white as a factor of paper white
+    // Native+: the RenoDX-style user grading, neutral at 1 (exposure, contrast, highlights,
+    // shadows, saturation).
+    float exposure;
+    float contrast;
+    float highlights;
+    float shadows;
+    float saturation;
 } hdr;
 
 const uint FLAG_SCRGB = 1u;   // scRGB output, else HDR10
@@ -88,6 +95,20 @@ vec3 Heat(float t) {
                       1.5 - abs(4.0 * t - 1.0)), 0.0, 1.0);
 }
 
+// The RenoDX-style user grading on the linear scene (native+): exposure, contrast about the
+// 0.18 grey, highlights and shadows by luminance, saturation. All neutral at 1.
+vec3 Grade(vec3 c) {
+    c = max(c, vec3(0.0)) * max(hdr.exposure, 0.0);
+    c = (c - 0.18) * max(hdr.contrast, 0.0) + 0.18;
+    const float luma = dot(max(c, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+    const float high = smoothstep(0.4, 1.0, luma);
+    const float low = 1.0 - smoothstep(0.0, 0.6, luma);
+    c *= mix(1.0, hdr.highlights, high);
+    c *= mix(1.0, hdr.shadows, low);
+    c = mix(vec3(dot(max(c, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722))), c, hdr.saturation);
+    return max(c, vec3(0.0));
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     vec3 game_srgb = texelFetch(game, pixel, 0).rgb;
@@ -106,6 +127,8 @@ void main() {
         if (hdr.black_floor > 0.0) {
             linear = max(linear - vec3(hdr.black_floor), vec3(0.0)) / (1.0 - hdr.black_floor);
         }
+        // The user grading (the menu's sliders), before the HUD and the display encode.
+        linear = Grade(linear);
         // The HUD (the mask in the snapshot's alpha): shown at UI Brightness — its pixels
         // brightened by the HUD's white over the game's — while the scene stays as it is.
         if ((hdr.flags & FLAG_UI_MASK) != 0u) {

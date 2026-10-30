@@ -848,6 +848,22 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                                  game_reg.data());
         });
     }
+    // Native+ HDR: the colour table's replacement reads the menu's strength and LUT bridge
+    // from bb_hdr.y/.w of its own draw (the composite's delta draws push their own values).
+    if (ps_info && HdrChannel::Native16() && ps_info->pgm_hash == HdrChannel::ColorGradingHash) {
+        const auto& settings = BbSettings::Get();
+        const float strength =
+            std::clamp(settings.hdr_scene_grading.load(std::memory_order_relaxed), 0.0f, 100.0f) /
+            100.0f;
+        const std::array<u32, 4> grading{
+            0u,
+            u32(std::clamp(int(settings.hdr_lut_bridge.load(std::memory_order_relaxed)), 0, 1)) + 1u,
+            HdrChannel::ChainProbe(), std::bit_cast<u32>(strength) + 1u};
+        scheduler.Record([layout = pipeline->GetLayout(), grading](vk::CommandBuffer cmdbuf) {
+            cmdbuf.pushConstants(layout, AllGraphicsStageBits,
+                                 u32(offsetof(Shader::PushData, bb_hdr)), 16u, grading.data());
+        });
+    }
     // The draw's color target joins the 16-bit chain (composite variants and the chain's
     // shaders): from the next frame on it is drawn as RGBA16F.
     if (ps_info && HdrChannel::Native16() && regs.color_buffers[0]) {

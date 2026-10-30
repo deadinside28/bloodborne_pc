@@ -915,6 +915,42 @@ void HdrSection(BbSettings::Values& s) {
             "кадра с кадром до отрисовки интерфейса; нетронутые пиксели остаются при белом "
             "игры). Держите на значении по умолчанию (203), если интерфейс не выглядит "
             "неправильно. Применяется сразу."));
+        ImGui::SeparatorText(BbSettings::MenuText("Grading", "Градация"));
+        Slider(BbSettings::MenuText("Exposure", "Экспозиция"), s.hdr_exposure,
+               BbSettings::HdrGradeMin, BbSettings::HdrGradeMax);
+        Slider(BbSettings::MenuText("Contrast", "Контраст"), s.hdr_contrast,
+               BbSettings::HdrGradeMin, BbSettings::HdrGradeMax);
+        Slider(BbSettings::MenuText("Highlights", "Света"), s.hdr_highlights,
+               BbSettings::HdrGradeMin, BbSettings::HdrGradeMax);
+        Slider(BbSettings::MenuText("Shadows", "Тени"), s.hdr_shadows, BbSettings::HdrGradeMin,
+               BbSettings::HdrGradeMax);
+        Slider(BbSettings::MenuText("Saturation", "Насыщенность"), s.hdr_saturation,
+               BbSettings::HdrGradeMin, BbSettings::HdrGradeMax);
+        Hint(BbSettings::MenuText(
+            "RenoDX's user grading on the scene, neutral at 1: exposure, contrast about the "
+            "0.18 grey, highlights and shadows by luminance, saturation. Live.",
+            "Пользовательская градация в духе RenoDX, нейтрально при 1: экспозиция, контраст "
+            "вокруг серого 0.18, света и тени по яркости, насыщенность. Применяется сразу."));
+        Slider(BbSettings::MenuText("Colour table strength", "Сила цветовой таблицы"),
+               s.hdr_scene_grading, 0.0f, 100.0f);
+        {
+            const bool reno = s.hdr_lut_bridge.load(std::memory_order_relaxed) ==
+                              BbSettings::HdrLutBridgeRenoDx;
+            if (ImGui::BeginCombo(BbSettings::MenuText("Colour table bridge", "Мост таблицы"),
+                                  BbSettings::MenuText(reno ? "RenoDX" : "Exact",
+                                                       reno ? "RenoDX" : "Точный"))) {
+                for (const bool choice : {false, true}) {
+                    if (ImGui::Selectable(BbSettings::MenuText(choice ? "RenoDX" : "Exact",
+                                                               choice ? "RenoDX" : "Точный"),
+                                          choice == reno)) {
+                        Store(s.hdr_lut_bridge,
+                              choice ? BbSettings::HdrLutBridgeRenoDx : BbSettings::HdrLutBridgeExact,
+                              choice != reno);
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
         ImGui::EndDisabled();
     }
     {
