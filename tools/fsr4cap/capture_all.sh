@@ -100,7 +100,11 @@ capture() {
     if [[ $status == 3 ]]; then
         return 3
     fi
-    [[ $(tail -1 "$R/fsr4cap.log" 2>/dev/null || true) == *"frames done"* ]]
+    [[ $(tail -1 "$R/fsr4cap.log" 2>/dev/null || true) == *"frames done"* ]] || return 1
+    # The FSR version that ran ("provider: 4.1.2 (0x...)"): extract.py writes it into the set.
+    local dir=$R/capture_$1_$2
+    [[ $variant != fp8 ]] || dir=$R/fp8/capture_$1_$2
+    grep -m1 '^provider:' "$R/fsr4cap.log" > "$dir/provider.txt" 2>/dev/null || true
 }
 progress() {
     done_count=$((done_count + 1))

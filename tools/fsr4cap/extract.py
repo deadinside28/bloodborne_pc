@@ -165,8 +165,17 @@ for variant, cap in captures:
     if variant == 'lite':
         names = [n for n, *_ in LITE]
     key = f'{tier}_{model}'
-    entry = sets.setdefault(key, {'shaders': {}, 'init': None, 'caps': []})
+    entry = sets.setdefault(key, {'shaders': {}, 'init': None, 'caps': [], 'version': None})
     entry['caps'].append(os.path.basename(cap))
+    # The FSR version that ran (capture_all.sh: "provider: 4.1.2 (0x...)"), for the game's label.
+    try:
+        provider = re.match(r'provider: (\d+\.\d+\.\d+)', open(os.path.join(cap, 'provider.txt')).read())
+    except OSError:
+        provider = None
+    if provider:
+        if entry['version'] and entry['version'] != provider[1]:
+            fail(f'{cap}: FSR {provider[1]}, other captures of {key} FSR {entry["version"]}')
+        entry['version'] = provider[1]
     for index, ((h, gx, gy, gz, body), name) in enumerate(zip(disp, names)):
         groups = (int(gx), int(gy), int(gz))
         want = (lite_groups(index, rw, rh, ow, oh) if variant == 'lite'
@@ -254,6 +263,8 @@ def write_set(d, entry, variant, flags, env):
             subprocess.run(['spirv-as', '--target-env', 'spv1.3', '-', '-o', spv], input=lds, check=True,
                            text=True)
     open(os.path.join(d, 'initializer.bin'), 'wb').write(entry['init'])
+    if entry.get('version'):   # fsr411.cpp: the label ("FSR 4.1.2") of the DLL the set came from
+        open(os.path.join(d, 'version'), 'w').write(entry['version'] + '\n')
 
 
 for variant, sets in sorted(variants.items()):

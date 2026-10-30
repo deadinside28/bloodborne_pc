@@ -338,21 +338,21 @@ class LauncherWindow(ContentPages, OnlinePage, TrophiesPage, LogPage, UpscalerFi
         self.upscaler_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
         upscaler.add(self.upscaler_row)
         # FSR 4.1.1 is built from the user's own AMD DLL (nothing of AMD's is shipped).
-        self.fsr411_row = Adw.ActionRow(title=tr("FSR 4.1.1 из своей DLL AMD"))
+        self.fsr411_row = Adw.ActionRow(title=tr("FSR 4.1.x из своей DLL AMD"))
         self.fsr411_button = Gtk.Button(valign=Gtk.Align.CENTER)
         self.fsr411_button.connect("clicked", self.on_fsr411_button)
         self.fsr411_row.add_suffix(self.fsr411_button)
         self.fsr411_row.set_visible((FSR4CAP_DIR / "build_assets.sh").is_file())
         libraries.add(self.fsr411_row)
         # FSR 4.1.2's models (INT8 RDNA2, INT8 Lite) from AMD's driver, also the user's own.
-        self.fsr412_row = Adw.ActionRow(title=tr("FSR 4.1.2 из драйвера AMD"))
+        self.fsr412_row = Adw.ActionRow(title=tr("Модели FSR 4.1.2 (INT8 RDNA2, INT8 Lite)"))
         self.fsr412_button = Gtk.Button(valign=Gtk.Align.CENTER, label=tr("Выбрать файл…"))
         self.fsr412_button.connect("clicked", self.on_fsr412_button)
         self.fsr412_row.add_suffix(self.fsr412_button)
         self.fsr412_row.set_subtitle(tr(
-            "Модели INT8 RDNA2 и INT8 Lite: установщик AMD Adrenalin 26.10.1+ (.exe) или "
-            "amdxcffx64.dll из него. Нужна и DLL FSR 4.1.x (как для FSR 4.1.1); ~4 минуты. "
-            "Модель выбирается в меню игры"))
+            "Одна amd_fidelityfx_upscaler_dx12.dll из AMD FSR SDK 2.4 или DLL 4.1.x вместе с драйверным "
+            "amdxcffx64.dll (Adrenalin 26.10.1+, или его установщик .exe); ~4 минуты. Модель выбирается "
+            "в меню игры"))
         self.fsr412_row.set_visible((FSR4CAP_DIR / "driver_model.py").is_file())
         libraries.add(self.fsr412_row)
         self.update_fsr411_row()

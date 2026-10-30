@@ -91,8 +91,9 @@ GTX 1050 и GeForce 930MX; другие видеокарты NVIDIA и Intel —
     мост, собираемый с SDK NVIDIA (см. «Сборка»). Генерация кадров делает кадры между двумя
     кадрами игры (2x на RTX 40, до 4x на RTX 50) из готового кадра, кадра до интерфейса, глубины
     сцены, векторов движения и матриц камеры игры; *меню-оверлей → Генерация кадров* или лаунчер.
-  - **Модели FSR 4.1.2 из драйвера AMD** (INT8 на RDNA2/3 и модель *Lite*) — из драйверного
-    `amdxcffx64.dll` вместе с DLL апскейлера (*Модель FSR 4* в меню).
+  - **Модели FSR 4.1.2** (INT8 RDNA2 и модель *Lite*): одна `amd_fidelityfx_upscaler_dx12.dll` из
+    AMD FSR SDK 2.4 или DLL 4.1.x вместе с драйверным `amdxcffx64.dll` (Adrenalin 26.10.1+)
+    (*Модель FSR 4* в меню).
   - **FSR 1** (пространственный, без векторов движения) для слабых видеокарт и **генерация кадров
     FSR 3.1** (экспериментально, на любой видеокарте; свои шейдеры оптического потока и
     интерполяции).
@@ -442,9 +443,9 @@ shadPS4 (`srv.shadps4.net`) принимает только сборки shadPS4
 **Апскейлеры:** FSR 3.1 и FSR 4 — как на Linux. FSR 4.1.1: «Собрать из DLL AMD…» и выбрать
 `amd_fidelityfx_upscaler_dx12.dll` 4.1.x; запись идёт на vkd3d-proton и DXVK из пакета
 (`tools\fsr4cap\bin`), так что набор соберёт любая видеокарта с Vulkan (минута-две, в
-`fsr4_411\`). Модели FSR 4.1.2 (INT8 для RDNA2/3, *Lite*): выбрать драйверный `amdxcffx64.dll`
-(Adrenalin 26.10.1 и новее, `C:\Windows\System32\DriverStore\FileRepository\u0*\`) вместе с DLL
-апскейлера. DLSS и DLSS Frame Generation (GeForce RTX): когда в пакете есть `bin\bbport_dlss.dll`
+`fsr4_411\`). Модели FSR 4.1.2 (INT8 RDNA2, *Lite*): одна `amd_fidelityfx_upscaler_dx12.dll` из
+AMD FSR SDK 2.4 или DLL 4.1.x вместе с драйверным `amdxcffx64.dll` (Adrenalin 26.10.1 и новее,
+`C:\Windows\System32\DriverStore\FileRepository\u0*\`). DLSS и DLSS Frame Generation (GeForce RTX): когда в пакете есть `bin\bbport_dlss.dll`
 и `nvngx_dlss.dll` / `nvngx_dlssg.dll` от NVIDIA.
 
 **NVIDIA:** при запуске порт добавляет в драйвер профиль питания *максимальная

@@ -151,7 +151,7 @@ class UpscalerFiles:
         if self.fsr411_build:
             self.stop_fsr411_build()
             return
-        dialog = Gtk.FileDialog(title=tr("Драйвер AMD: установщик Adrenalin (.exe) или amdxcffx64.dll"))
+        dialog = Gtk.FileDialog(title=tr("DLL AMD FSR SDK 2.4 (amd_fidelityfx_upscaler_dx12.dll 4.1.2), установщик Adrenalin (.exe) или amdxcffx64.dll"))
         files = Gtk.FileFilter()
         files.set_name("EXE, DLL")
         for pattern in ("*.exe", "*.EXE", "*.dll", "*.DLL"):
@@ -171,16 +171,22 @@ class UpscalerFiles:
         dialog.open(self, None, finish)
 
     def on_fsr412_driver(self, driver):
-        """The driver's FSR 4 module answers through AMD's upscaler DLL: the one FSR 4.1.1 was
+        """FSR 4.1.2's models: AMD's FSR SDK 2.4 upscaler DLL holds them itself (built from it
+        alone); the driver's FSR 4 module answers through AMD's upscaler DLL: the one FSR 4.1.1 was
         built from, else chosen now."""
+        if Path(driver).name.lower() == "amd_fidelityfx_upscaler_dx12.dll":
+            # build_assets.sh's driver form reads its second file as the upscaler DLL (not a
+            # loader); with BB_FSR412=1 the first is this DLL too: it is both, holding the models.
+            self.start_fsr411_build(driver, driver, version="4.1.2", fsr412=True)
+            return
         upscaler = self.settings.get("fsr411_dll", "")
         if upscaler and Path(upscaler).is_file():
-            self.start_fsr411_build(driver, upscaler)
+            self.start_fsr411_build(driver, upscaler, version="4.1.2")
             return
         self.toasts.add_toast(Adw.Toast(title=tr(
             "Ещё нужна DLL FSR 4.1.x: выберите amd_fidelityfx_upscaler_dx12.dll"), timeout=8))
         self.choose_dll(tr("DLL апскейлера AMD (amd_fidelityfx_upscaler_dx12.dll)"),
-                        lambda path: self.start_fsr411_build(driver, path))
+                        lambda path: self.start_fsr411_build(driver, path, version="4.1.2"))
 
     def on_fsr411_dll(self, upscaler, loader=None):
         import dll_info
@@ -233,8 +239,13 @@ class UpscalerFiles:
             return
         self.start_fsr411_build(upscaler, details.get("loader"))
 
-    def start_fsr411_build(self, upscaler, loader):
+    def start_fsr411_build(self, upscaler, loader, version="4.1.1", fsr412=False):
+        """version: what the log and toasts call the build (4.1.2: its models from SDK 2.4 or the
+        driver); fsr412: the upscaler DLL itself holds FSR 4.1.2's models (BB_FSR412=1)."""
         command, env = fsr411_build_command(upscaler, loader)
+        if fsr412:
+            env["BB_FSR412"] = "1"
+        self.fsr411_version = version
         launcher = Gio.SubprocessLauncher.new(
             Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
         launcher.set_environ([f"{k}={v}" for k, v in env.items()])
@@ -245,7 +256,7 @@ class UpscalerFiles:
         except GLib.Error as error:
             self.toasts.add_toast(Adw.Toast(title=tr("Не удалось запустить: {}").format(error.message)))
             return
-        self.append_log(tr("\n— сборка FSR 4.1.1 из {} —\n").format(upscaler))
+        self.append_log(self.fsr_text("\n— сборка FSR 4.1.1 из {} —\n").format(upscaler))
         stream = Gio.DataInputStream.new(self.fsr411_build.get_stdout_pipe())
         stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self.on_fsr411_line)
         self.fsr411_build.wait_async(None, self.on_fsr411_built)
@@ -287,16 +298,21 @@ class UpscalerFiles:
         self.fsr411_build = None
         self.update_fsr411_row()
         self.update_launch_button()
-        self.append_log(tr("— сборка FSR 4.1.1 завершилась (код {}) —\n").format(status))
+        self.append_log(self.fsr_text("— сборка FSR 4.1.1 завершилась (код {}) —\n").format(status))
         if status == 0:
             for index, (_label, value) in enumerate(UPSCALERS):
                 if value == "fsr411":
                     self.upscaler_row.set_selected(index)
             self.update_upscaler_status()
             self.store()
-            self.toasts.add_toast(Adw.Toast(title=tr("FSR 4.1.1 собран и выбран")))
+            self.toasts.add_toast(Adw.Toast(title=self.fsr_text("FSR 4.1.1 собран и выбран")))
         elif cancelled:
-            self.toasts.add_toast(Adw.Toast(title=tr("Сборка FSR 4.1.1 отменена")))
+            self.toasts.add_toast(Adw.Toast(title=self.fsr_text("Сборка FSR 4.1.1 отменена")))
         else:
             message = FSR411_BUILD_ERRORS.get(status, "Сборка не удалась (код {}): подробности в журнале")
-            self.alert(tr("FSR 4.1.1 не собран"), tr(message).format(status))
+            self.alert(self.fsr_text("FSR 4.1.1 не собран"), tr(message).format(status))
+
+    def fsr_text(self, text):
+        """A FSR 4.1.1 build message, translated, with the version of this build (4.1.2 models).
+        The five build messages' translations must keep the literal "4.1.1" for this."""
+        return tr(text).replace("4.1.1", getattr(self, "fsr411_version", "4.1.1"))

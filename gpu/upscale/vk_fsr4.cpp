@@ -391,8 +391,9 @@ struct Fsr4Upscaler::Impl {
         fsr411_ticks.push_back(scheduler.CurrentTick());
         if (const std::string d = fsr411->Describe(); d != fsr411_described) {
             fsr411_described = d;
-            std::printf("Upscaler: FSR 4.1.1 replay, %s\n", d.c_str());
+            std::printf("Upscaler: %s replay, %s\n", fsr411->VersionName(), d.c_str());
             BbSettings::Get().fsr4_model_active.store(fsr411->ModelName(), std::memory_order_relaxed);
+            BbSettings::Get().fsr4_version_active.store(fsr411->VersionName(), std::memory_order_relaxed);
         }
         problem.clear();
         return true;

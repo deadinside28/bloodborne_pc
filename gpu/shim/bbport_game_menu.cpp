@@ -317,7 +317,7 @@ void DefineTexts() {
     }
     row(Upscaler, "Upscaler", "Апскейлер", "Temporal upscaler and anti-aliasing",
         "Временной апскейлер и сглаживание",
-        {off, AddText("FSR 3.1", "FSR 3.1"), AddText("FSR 4", "FSR 4"), AddText("FSR 4.1.1", "FSR 4.1.1"),
+        {off, AddText("FSR 3.1", "FSR 3.1"), AddText("FSR 4", "FSR 4"), AddText("FSR 4.1.x", "FSR 4.1.x"),
          AddText("TAA", "TAA"), AddText("DLSS", "DLSS"), AddText("FSR 1", "FSR 1"),
          AddText("FSR 4 (AMD DLL)", "FSR 4 (DLL AMD)")},
         Kind::Select);

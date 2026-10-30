@@ -79,7 +79,7 @@ const char* AntiAliasingName(int mode);
 enum TextureQuality : int { TqAuto = 0, TqFull = 1, TqHalf = 2, TqQuarter = 3, TqCount };
 const char* TextureQualityName(int quality);
 /// FSR 4.1's model (fsr4_model in bbport.ini), from the asset sets built (fsr4_411/: tools/fsr4cap,
-/// the 4.1.1 DLL and AMD's driver DLL for 4.1.2): auto by the GPU (FP8 on RDNA4, INT8 Lite on an
+/// the 4.1.1 DLL; for 4.1.2 AMD's FSR SDK 2.4 DLL, or a 4.1.x DLL with the driver's): auto by the GPU (FP8 on RDNA4, INT8 Lite on an
 /// RDNA2 APU such as the Steam Deck, INT8 RDNA2 on other GPUs without matrix cores, else INT8);
 /// FP8 runs emulated (slower) without FP8 matrices.
 enum Fsr4Model : int {
@@ -173,6 +173,8 @@ struct Values {
     std::atomic<unsigned> fsr4_models_available{0};
     /// The model the replay runs, for the menu ("INT8 (RDNA2)"); null before its first frame.
     std::atomic<const char*> fsr4_model_active{nullptr};
+    /// The FSR version of that model ("FSR 4.1.2"), for the menu and the FPS line; null before.
+    std::atomic<const char*> fsr4_version_active{nullptr};
     /// What anti_aliasing comes to (SyncAntiAliasing): the game's FXAA forced (effects[GameAaEffect]
     /// holds the game's own AA).
     std::atomic<bool> fxaa_forced{false};

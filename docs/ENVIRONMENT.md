@@ -617,7 +617,7 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_WRITE_VERIFY` | =1: page protection to catch writes nothing announced |
 | `BB_ZERO_SCAN` | =seconds: that long after the first mapping, how much direct memory is zero |
 
-## Internal (30)
+## Internal (31)
 
 Passed between the launchers, run.py / run.sh and the game. Not meant to be set by hand.
 
@@ -628,6 +628,7 @@ Passed between the launchers, run.py / run.sh and the game. Not meant to be set 
 | `BB_CLIENT_VERSION` | the online client's name for the server (bbport VERSION, set by run.py) |
 | `BB_DATA_DIR` | the port's data folder (set by run.py) |
 | `BB_FSR411_OUT` | where the launcher's FSR 4.1.1 build puts its assets |
+| `BB_FSR412` | =1: the FSR 4 build takes FSR 4.1.2's models from the upscaler DLL it is given (AMD FSR SDK 2.4; set by the launcher) |
 | `BB_FSR4CAP_CLEAN` | =1: the FSR 4.1.1 build removes its work folder afterwards (set by the launcher) |
 | `BB_FSR4CAP_TOOLS` | the FSR 4.1.1 build's tools folder (set by the launcher) |
 | `BB_FSR4CAP_WORK` | the FSR 4.1.1 build's work folder (set by the launcher) |

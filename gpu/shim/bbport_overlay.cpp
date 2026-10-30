@@ -372,7 +372,10 @@ void FpsCounter() {
     ImGui::Text("%s  %s", FpsText().c_str(),
                 s.upscaler == BbSettings::UpscalerFsr3     ? "FSR 3.1"
                 : s.upscaler == BbSettings::UpscalerFsr4   ? "FSR 4"
-                : s.upscaler == BbSettings::UpscalerFsr411 ? "FSR 4.1.1"
+                : s.upscaler == BbSettings::UpscalerFsr411
+                    ? (s.fsr4_version_active.load(std::memory_order_relaxed)
+                           ? s.fsr4_version_active.load(std::memory_order_relaxed)
+                           : "FSR 4.1.x")
                 : s.upscaler == BbSettings::UpscalerTaa    ? "TAA"
                 : s.upscaler == BbSettings::UpscalerDlss   ? "DLSS"
                 : s.upscaler == BbSettings::UpscalerFsr1   ? "FSR 1"

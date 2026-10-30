@@ -18,6 +18,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <string_view>
 #include <vector>
 
@@ -297,6 +298,22 @@ bool Reflect(const std::vector<uint32_t>& words, Reflection& out, std::string& e
 
 } // namespace
 
+/// "FSR 4.1.2" from a set's version file (tools/fsr4cap/extract.py writes the version of the DLL
+/// that ran the recording), or null for a set built before it had one. Interned: the pointer stays
+/// valid (the menu keeps it).
+static const char* ReadVersion(const std::string& path) {
+    std::ifstream f(path);
+    std::string v;
+    if (!(f >> v) || v.empty() || v.size() > 16 || v.find_first_not_of("0123456789.") != std::string::npos) {
+        return nullptr;
+    }
+    static std::mutex mutex;   // sets load on the build thread and the recording thread
+    std::scoped_lock lock{mutex};
+    static std::map<std::string, std::string> interned;
+    auto [it, _] = interned.try_emplace(v, "FSR " + v);
+    return it->second.c_str();
+}
+
 bool Built(const std::string& dir, const Rules& r) {
     return bool(std::ifstream(dir + "/" + r.folder + "t1080_m0/initializer.bin"));
 }
@@ -338,8 +355,9 @@ struct Upscaler::Impl {
     VkDeviceSize ubo_align = 256;
     PFN_vkCmdPushDescriptorSetKHR push_descriptors = nullptr;
 
-    // Current set and sizes.
+    // Current set and sizes; the FSR version the set was recorded from (its "version" file).
     std::string set;
+    const char* version = nullptr;
     uint32_t out_w = 0, out_h = 0;
     bool ready = false;
     bool uploaded = false;
@@ -655,6 +673,7 @@ struct Upscaler::Impl {
                 return false;
             }
         }
+        version = ReadVersion(dir + "/" + rules->folder + set + "/version");
         const std::string weights = dir + "/" + rules->folder + set + "/initializer.bin";
         if (!ReadFile(weights, initializer_data) || initializer_data.size() != rules->initializer_size) {
             error = "missing or wrong " + weights;
@@ -1009,6 +1028,14 @@ const std::string& Upscaler::Error() const noexcept {
 
 const char* Upscaler::ModelName() const {
     return impl->rules->name;
+}
+
+const char* Upscaler::VersionName() const {
+    if (impl->version) {
+        return impl->version;
+    }
+    // Sets built before they recorded their version: the 4.1.2 models only came from 4.1.2.
+    return impl->rules == &kNavi2 || impl->rules == &kLite ? "FSR 4.1.2" : "FSR 4.1.1";
 }
 
 std::string Upscaler::Describe() const {

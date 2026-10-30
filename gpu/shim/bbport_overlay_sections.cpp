@@ -172,7 +172,8 @@ bool UpscalerSection(BbSettings::Values& s) {
         }
         if (const char* active = s.fsr4_model_active.load(); active && !amd) {
             ImGui::SameLine();
-            ImGui::TextDisabled("%s", active);
+            const char* version = s.fsr4_version_active.load();
+            ImGui::TextDisabled("%s%s%s", active, version ? ", " : "", version ? version : "");
         }
         if (amd) {
             Hint(BbSettings::MenuText(
@@ -185,11 +186,12 @@ bool UpscalerSection(BbSettings::Values& s) {
         } else Hint(BbSettings::MenuText(
             "FP8: RDNA4's model (emulated, slower, on RDNA3). INT8: FSR 4.1 on any GPU. INT8 RDNA2: "
             "FSR 4.1.2's model made for RX 6000. INT8 Lite: FSR 4.1.2's light model (Steam Deck, "
-            "APUs): faster, softer. The 4.1.2 models are built from AMD's driver DLL in the "
-            "launcher.",
+            "APUs): faster, softer. The 4.1.2 models are built in the launcher from AMD's FSR SDK "
+            "2.4 DLL, or a 4.1.x DLL with the driver's amdxcffx64.dll.",
             "FP8: модель RDNA4 (на RDNA3 эмулируется, медленнее). INT8: FSR 4.1 на любой видеокарте. "
             "INT8 RDNA2: модель FSR 4.1.2 для RX 6000. INT8 Lite: лёгкая модель FSR 4.1.2 (Steam "
-            "Deck, APU): быстрее, мягче. Модели 4.1.2 собираются в лаунчере из DLL драйвера AMD."));
+            "Deck, APU): быстрее, мягче. Модели 4.1.2 собираются в лаунчере из DLL AMD FSR SDK 2.4 "
+            "или из DLL 4.1.x с драйверным amdxcffx64.dll."));
     }
     if (s.upscaler == BbSettings::UpscalerDlss) {
         Hint(BbSettings::MenuText(
@@ -231,10 +233,12 @@ bool UpscalerSection(BbSettings::Values& s) {
                 "быть FSR 3.1."));
         } else if (s.upscaler == BbSettings::UpscalerFsr411) {
             Hint(BbSettings::MenuText(
-                "FSR 4.1.1: the model from AMD's 4.1.1 DLL, reproduced in Vulkan (output matches "
-                "the DLL). Assets are built from your DLL in the launcher.",
-                "FSR 4.1.1: модель из DLL AMD 4.1.1, воспроизведённая в Vulkan (результат совпадает "
-                "с DLL). Ассеты собираются из вашей DLL в лаунчере."));
+                "FSR 4.1.x: AMD's model from your DLL (4.1.1; INT8 RDNA2 and INT8 Lite: 4.1.2), "
+                "reproduced in Vulkan (output matches the DLL). Assets are built from your DLL in "
+                "the launcher.",
+                "FSR 4.1.x: модель AMD из вашей DLL (4.1.1; INT8 RDNA2 и INT8 Lite: 4.1.2), "
+                "воспроизведённая в Vulkan (результат совпадает с DLL). Ассеты собираются из вашей "
+                "DLL в лаунчере."));
         } else {
             Hint(BbSettings::MenuText(
                 "FSR 4 in INT8 mode (v07 model from AMD FidelityFX SDK sources). Higher quality "

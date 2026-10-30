@@ -3,13 +3,15 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll 4.1.x> [loader DLL 2.3.x]
 # tools/fsr4cap/build_assets.sh <amdxcffx64.dll | AMD Adrenalin installer .exe> [upscaler DLL 4.1.x]
+# BB_FSR412=1 tools/fsr4cap/build_assets.sh <amd_fidelityfx_upscaler_dx12.dll 4.1.2 (FSR SDK 2.4)>
 #
-# The second form adds FSR 4.1.2's models from AMD's driver (Adrenalin 26.10.1 and later): INT8
-# RDNA2 (navi2/) and INT8 Lite (lite/), and the INT8 set (as 4.1.1's) when there is none yet.
-# The driver DLL answers through the upscaler DLL's driver query (vkd3d-proton's amdxc64,
-# FSR4_UPGRADE=1): the 4.1.x upscaler DLL is needed as well (the second argument, or the one the
-# last 4.1.1 build left in the work folder). driver_model.py makes, per model, a copy of the
-# driver DLL that offers only that model; it sits next to fsr4cap.exe for the recording.
+# The second and third forms add FSR 4.1.2's models: INT8 RDNA2 (navi2/) and INT8 Lite (lite/), and
+# the INT8 set (as 4.1.1's) when there is none yet. AMD's FSR SDK 2.4 upscaler DLL (4.1.2) holds the
+# four models itself: then it is the only file needed, and driver_model.py makes, per model, a copy
+# of it that offers only that model (fsr4cap.exe loads it directly). With an older 4.1.x upscaler
+# DLL (the second argument, or the one the last 4.1.1 build left in the work folder) the models come
+# from AMD's driver DLL (Adrenalin 26.10.1+), which answers through the upscaler DLL's driver query
+# (vkd3d-proton's amdxc64, FSR4_UPGRADE=1); then the copies are of the driver DLL.
 # BB_FSR4_DRIVER_MODELS: the models to build (default "navi2 lite", plus int8 without an INT8 set).
 #
 # Builds the FSR 4.1.1 asset set (fsr4_411/: SPIR-V of every pass, model weights) from AMD's
@@ -54,7 +56,8 @@ python=${PYTHON:-python3}
 # folder.
 driver=
 name=$(basename -- "${upscaler,,}")
-if [[ $name == *.exe || $name == amdxcffx64.dll || $name == amdvkffx64.dll ]]; then
+# BB_FSR412=1 with AMD's FSR SDK 2.4 upscaler DLL (4.1.2, it holds every model): its 4.1.2 models.
+if [[ $name == *.exe || $name == amdxcffx64.dll || $name == amdvkffx64.dll || ${BB_FSR412:-} == 1 ]]; then
     driver=$upscaler
     if [[ $name == amdvkffx64.dll ]]; then
         driver=$(dirname -- "$upscaler")/amdxcffx64.dll
@@ -181,7 +184,14 @@ if [[ -n $driver ]]; then
             exit 2
         fi
     fi
-    if ! "$python" "$here/driver_model.py" info "$dll"; then
+    # The DLL that answers the recording: AMD's FSR SDK 2.4 upscaler DLL (4.1.2) holds the four
+    # models itself and the driver DLL is then never asked (fsr4cap.exe loads the upscaler DLL
+    # directly; under Proton nothing reaches a driver DLL next to it), so that one is patched.
+    # Older upscaler DLLs (4.1.1) only have their own models: then the driver DLL.
+    if "$python" "$here/driver_model.py" info "$upscaler" >/dev/null 2>&1; then
+        echo "FSR 4.1.2's models from the upscaler DLL ($(basename -- "$upscaler")), which holds them"
+        dll=$upscaler patch_upscaler=1
+    elif ! "$python" "$here/driver_model.py" info "$dll"; then
         echo "$dll does not hold FSR 4.1.2's models (Adrenalin 26.10.1 or later is needed)" >&2
         exit 2
     fi
@@ -192,11 +202,19 @@ if [[ -n $driver ]]; then
     copy_in "$work/fsr4cap.exe" "$d/fsr4cap.exe"
     [[ $upscaler -ef $d/amd_fidelityfx_upscaler_dx12.dll ]] ||
         copy_in "$upscaler" "$d/amd_fidelityfx_upscaler_dx12.dll"
+    if [[ -n ${patch_upscaler:-} ]]; then   # each model's copy is made from the DLL as AMD built it
+        copy_in "$d/amd_fidelityfx_upscaler_dx12.dll" "$d/upscaler_as_built.dll"
+        dll=$d/upscaler_as_built.dll
+    fi
     rm -rf "$work/driver-out"
     for model in $models; do
         echo "FSR 4.1.2 $model: recording the driver's passes under Proton (20 sizes)..."
         rm -rf "$d"/capture_* "$d/fp8"
-        "$python" "$here/driver_model.py" force "$dll" "$d/amdxcffx64.dll" "$model"
+        if [[ -n ${patch_upscaler:-} ]]; then
+            "$python" "$here/driver_model.py" force "$dll" "$d/amd_fidelityfx_upscaler_dx12.dll" "$model"
+        else
+            "$python" "$here/driver_model.py" force "$dll" "$d/amdxcffx64.dll" "$model"
+        fi
         FSR4_UPGRADE=1 FSR4CAP_VERSION=4.1.2 BB_FSR4CAP_FP8=0 bash "$here/capture_all.sh" "$d"
         echo "FSR 4.1.2 $model: translating the passes to SPIR-V..."
         FSR4CAP_MODEL=$model "$python" "$here/extract.py" "$dxil_spirv" "$d" "$work/driver-out"

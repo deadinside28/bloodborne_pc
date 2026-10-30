@@ -610,6 +610,7 @@ BB_ENV(BB_BUNDLED_VK_LAYER_PATH, INTERNAL, "the package's own Vulkan layers, fou
 BB_ENV(BB_CLIENT_VERSION, INTERNAL, "the online client's name for the server (bbport VERSION, set by run.py)")
 BB_ENV(BB_DATA_DIR, INTERNAL, "the port's data folder (set by run.py)")
 BB_ENV(BB_FSR411_OUT, INTERNAL, "where the launcher's FSR 4.1.1 build puts its assets")
+BB_ENV(BB_FSR412, INTERNAL, "=1: the FSR 4 build takes FSR 4.1.2's models from the upscaler DLL it is given (AMD FSR SDK 2.4; set by the launcher)")
 BB_ENV(BB_FSR4CAP_CLEAN, INTERNAL, "=1: the FSR 4.1.1 build removes its work folder afterwards (set by the launcher)")
 BB_ENV(BB_FSR4CAP_TOOLS, INTERNAL, "the FSR 4.1.1 build's tools folder (set by the launcher)")
 BB_ENV(BB_FSR4CAP_WORK, INTERNAL, "the FSR 4.1.1 build's work folder (set by the launcher)")

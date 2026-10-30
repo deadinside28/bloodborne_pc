@@ -120,7 +120,14 @@ class Recorder:
                                timeout=600)
             except (OSError, subprocess.SubprocessError) as e:
                 log.write(f'{e}\n')
-        return 'frames done' in self.last_line()
+        if 'frames done' not in self.last_line():
+            return False
+        # The FSR version that ran ("provider: 4.1.2 (0x...)"): extract.py writes it into the set.
+        provider = [l for l in (self.work / 'fsr4cap.log').read_text(errors='replace').splitlines()
+                    if l.startswith('provider:')]
+        if provider:
+            (sub / 'provider.txt').write_text(provider[0] + '\n')
+        return True
 
 
 def record_all(work, version, fp8_mode):
@@ -204,7 +211,16 @@ def main(argv):
         say(f'Tools missing in {TOOLS}: {", ".join(missing)} (the package brings them)')
         return 4
     driver = None
-    if first.name.lower() in ('amdxcffx64.dll', 'amdvkffx64.dll'):
+    sdk_2_4 = (second is None and first.name.lower() not in ('amdxcffx64.dll', 'amdvkffx64.dll')
+               and run_script('driver_model.py', 'info', first) == 0)
+    if (os.environ.get('BB_FSR412') == '1' or sdk_2_4) and \
+            first.name.lower() not in ('amdxcffx64.dll', 'amdvkffx64.dll'):
+        # AMD's FSR SDK 2.4 upscaler DLL (4.1.2) alone: it holds FSR 4.1.2's models itself (the
+        # launcher's one button: this DLL by itself builds them, and INT8 when there is none yet).
+        driver = first
+        upscaler = second or first
+        loader = None
+    elif first.name.lower() in ('amdxcffx64.dll', 'amdvkffx64.dll'):
         driver = first.with_name('amdxcffx64.dll')
         if not driver.is_file():
             say('amdvkffx64.dll is the driver\'s Vulkan module; the recording needs its D3D12 one, '
@@ -247,13 +263,23 @@ def main(argv):
         models = os.environ.get('BB_FSR4_DRIVER_MODELS', 'navi2 lite').split()
         if not (out / 't1080_m0' / 'initializer.bin').is_file():
             models.insert(0, 'int8')
-        if run_script('driver_model.py', 'info', driver) != 0:
+        # The DLL that answers the recording: AMD's FSR SDK 2.4 upscaler DLL (4.1.2) holds the four
+        # models itself and fsr4cap.exe loads it directly (the driver DLL is never asked), so that
+        # one is patched; older upscaler DLLs (4.1.1) only have their own: then the driver DLL.
+        patch_upscaler = run_script('driver_model.py', 'info', upscaler) == 0
+        if patch_upscaler:
+            say(f'FSR 4.1.2\'s models from the upscaler DLL ({upscaler.name}), which holds them')
+        elif run_script('driver_model.py', 'info', driver) != 0:
             say(f'{driver} does not hold FSR 4.1.2\'s models (Adrenalin 26.10.1 or later is needed)')
             return 2
         d = work / 'driver'
         d.mkdir(exist_ok=True)
         for name in RECORDER_FILES + ['amd_fidelityfx_upscaler_dx12.dll']:
             copy_in(work / name, d / name)
+        source = driver
+        if patch_upscaler:   # each model's copy is made from the DLL as AMD built it
+            copy_in(d / 'amd_fidelityfx_upscaler_dx12.dll', d / 'upscaler_as_built.dll')
+            source = d / 'upscaler_as_built.dll'
         driver_out = work / 'driver-out'
         shutil.rmtree(driver_out, ignore_errors=True)
         os.environ['FSR4_UPGRADE'] = '1'
@@ -262,7 +288,8 @@ def main(argv):
                 say(f'FSR 4.1.2 {model}: recording the driver\'s passes (20 sizes)...')
                 for old in list(d.glob('capture_*')) + [d / 'fp8']:
                     shutil.rmtree(old, ignore_errors=True)
-                if run_script('driver_model.py', 'force', driver, d / 'amdxcffx64.dll', model) != 0:
+                patched = d / ('amd_fidelityfx_upscaler_dx12.dll' if patch_upscaler else 'amdxcffx64.dll')
+                if run_script('driver_model.py', 'force', source, patched, model) != 0:
                     return 2
                 status = record_all(d, '4.1.2', '0')
                 if status:
