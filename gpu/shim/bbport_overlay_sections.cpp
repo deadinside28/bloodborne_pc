@@ -873,8 +873,38 @@ void HdrSection(BbSettings::Values& s) {
             "снимите флажок, чтобы задать вручную. Усиление светов (расширенный режим): 0 "
             "оставляет SDR-картинку как есть; выше — самые яркие части (фонари, огонь, луна) "
             "поднимаются к пику. Применяется сразу."));
+        // Native+ shows the scene chain's own settings below: expand's boost is out of play.
+        ImGui::BeginDisabled(
+            s.hdr_mode.load(std::memory_order_relaxed) == BbSettings::HdrModeScene);
         Slider(BbSettings::MenuText("Highlight boost (Expand)", "Усиление светов (расширенный)"),
                s.hdr_boost, 0.0f, 1.0f);
+        ImGui::EndDisabled();
+        // Native+ (the scene chain): live.
+        const bool native_plus =
+            s.hdr_mode.load(std::memory_order_relaxed) == BbSettings::HdrModeScene;
+        ImGui::BeginDisabled(!native_plus);
+        ImGui::SeparatorText(BbSettings::MenuText("Native+", "Native+"));
+        Slider(BbSettings::MenuText("Highlight range", "Диапазон светов"), s.hdr_knee,
+               BbSettings::HdrKneeMin, BbSettings::HdrKneeMax);
+        Hint(BbSettings::MenuText(
+            "How far up the game's white its own tone curve stands: below it the picture is the "
+            "game's, above it the highlights run to the peak (60 % by default).",
+            "Насколько высоко от белого игры стоит её собственная кривая: ниже картинка — "
+            "игровая, выше света уходят к пику (по умолчанию 60 %)."));
+        Slider(BbSettings::MenuText("Bloom", "Свечение (Bloom)"), s.hdr_bloom, 0.0f, 100.0f);
+        Hint(BbSettings::MenuText(
+            "The glow around lights: 50 is the game's own. Applies live (the composite's delta "
+            "and the second glow's add).",
+            "Свечение вокруг источников: 50 — как в игре. Применяется сразу (дельта композита "
+            "и второе свечение)."));
+        Slider(BbSettings::MenuText("Black floor", "Чёрный пол"), s.hdr_black_floor, 0.0f,
+               BbSettings::HdrBlackFloorMax);
+        Hint(BbSettings::MenuText(
+            "Takes the game's darkest greys down to true black (OLED), in nits of the game's "
+            "white. Live.",
+            "Уводит самые тёмные серые тона игры к истинному чёрному (OLED), в нитах белого "
+            "игры. Применяется сразу."));
+        ImGui::EndDisabled();
     }
     {
         // The comparison is deliberately not saved (the SDR half at paper white is for judging

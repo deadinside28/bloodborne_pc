@@ -848,6 +848,11 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
                  (settings.hdr_compare.load(std::memory_order_relaxed)
                       ? HdrOutputPass::FlagCompare
                       : 0u),
+        // Native+: the menu's black floor (OLED), in units of the game's white.
+        .black_floor = native16 ? std::clamp(settings.hdr_black_floor.load(std::memory_order_relaxed),
+                                             0.0f, BbSettings::HdrBlackFloorMax) /
+                                      std::max(paper_white, 1.0f)
+                                : 0.0f,
     };
     const vk::ImageMemoryBarrier2 to_attachment{
         .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,

@@ -621,7 +621,8 @@ float HdrChannel::Knee() {
         return env;
     }
     const float knee = BbSettings::Get().hdr_knee.load(std::memory_order_relaxed);
-    return std::clamp(std::isfinite(knee) ? knee : HdrKneeDefault, HdrKneeMin, HdrKneeMax);
+    return std::clamp(std::isfinite(knee) ? knee : BbSettings::HdrKneeDefault,
+                      BbSettings::HdrKneeMin, BbSettings::HdrKneeMax);
 }
 
 bool HdrChannel::VanillaChain() {
