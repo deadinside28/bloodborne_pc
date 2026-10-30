@@ -55,6 +55,9 @@ int bbgpu_video_active(void);
 int bbgpu_world_active(void);
 /* Microseconds the world has been shown (the pad recording clock). */
 unsigned long long bbgpu_world_us(void);
+/* Cumulative counters for a scene-loaded check (runtime_pad/sample.c): frames presented and total
+ * draws. Both are monotonic; the caller takes per-second deltas to get draws/frame. */
+void bbgpu_frame_counters(uint64_t *frames, uint64_t *draws);
 int bbgpu_video_skip(void);
 typedef int (*BbGpuPointerQuery)(void);
 void bbgpu_add_pointer_query(BbGpuPointerQuery query);

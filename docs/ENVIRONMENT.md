@@ -336,7 +336,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_VULKANINFO` | path of vulkaninfo for the launcher |
 | `BB_WORK_RETIRED` | =0: the recording thread and fences do not wait for retired work |
 
-## Diagnostics (274)
+## Diagnostics (283)
 
 Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame time; none is meant for playing.
 
@@ -479,6 +479,7 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_LAYER_VERIFY` | =1 / 2: verify the layer's mirrors (2: also those a paged binding reads) |
 | `BB_LAYER_WATCH_HOT` | =1 (experiment): often written blocks watched and uploaded after every write |
 | `BB_LAYER_WRITE_LOG` | set: large GPU writes kept in place, and the images near them |
+| `BB_LEVEL_SETTLE` | =s (default 10): tools/restart.sh's wait after the level loaded |
 | `BB_LIST_UNRESOLVED` | =1 (porting another game): every unresolved import, once |
 | `BB_LOW_INFO_TEST` | set: test of the memory queries for the game's statics (#282) |
 | `BB_MEMORY_LOCK_REPORT_MS` | =N (default 20, 0 off): memory map lock holds longer than this, with the code |
@@ -505,6 +506,12 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_PAD_FILE` | =file: scripted pad input for automated runs |
 | `BB_PAD_RECORD` | =file: F9 starts and stops recording the pad state into it |
 | `BB_PAD_REPLAY` | =file: plays a BB_PAD_RECORD recording |
+| `BB_PAD_REPLAY_AUTOSTART` | =1: arms the BB_PAD_REPLAY replay by itself once the scene has loaded (playtests) |
+| `BB_PAD_REPLAY_DELAY_MS` | =ms (default 3000): the autostarted replay's wait after the scene loaded |
+| `BB_PAD_REPLAY_END` | =quit[:s]: quits the game that long (default 5 s) after the replay ended |
+| `BB_PAD_REPLAY_LEAD` | =keep: the replay starts at the file's start, its standing lead included (routes recorded before 0.7) |
+| `BB_PAD_REPLAY_LOOP` | =N: the BB_PAD_REPLAY route played N more times after its end |
+| `BB_PAD_SCENE_DRAWS` | =N (default 600): draws/frame over two seconds that count as a loaded scene for autostart |
 | `BB_PAD_TAP_TEST` | =ms: the right stick fully right for that long (#325) |
 | `BB_PAD_TRACE` | =1 / 2: gamepad buttons and touches as read (2: every sample) |
 | `BB_PAGED_COPY_CROSSING` | =0 (tests): copy programs paged for size alone are not paged |
@@ -518,6 +525,8 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_PENDING_STATS` | set: pending notes and granules a second, by level |
 | `BB_PIN_CLEAR_LOG` | set: large releases of GPU-pinned memory that were cleared |
 | `BB_PIPE_VERIFY` | =N: verify the draw pipe's results every Nth frame |
+| `BB_PLAYTESTS` | =dir: the playtest library of tools/playtest.py (default ../bbport-playtests) |
+| `BB_PLAYTEST_PORT` | =dir: tools/playtest.py runs the build of that checkout (an A/B between builds) |
 | `BB_PM4_SELFTEST` | =1: tests of command processor packets Bloodborne never sends |
 | `BB_PM4_SELFTEST_STEPS` | =mask: the self test steps to run |
 | `BB_POOL_WATCH` | =1: watch of the game's pool corruption (#32) |

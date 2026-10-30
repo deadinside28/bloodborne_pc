@@ -366,6 +366,15 @@ int* PS4_SYSV_ABI __Error() {
 }
 } // namespace Libraries::Kernel
 
+extern "C" void bbgpu_frame_counters(uint64_t* frames, uint64_t* draws) {
+    if (frames) {
+        *frames = BbStats::frame_number.load(std::memory_order_relaxed);
+    }
+    if (draws) {
+        *draws = BbStats::draws.load(std::memory_order_relaxed);
+    }
+}
+
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }

@@ -1045,6 +1045,17 @@ def build_fsr411(arguments):
 
 
 if __name__ == "__main__":
+    if "--print-env" in sys.argv[1:]:
+        # The game environment the launcher would use now (its bbport.ini settings), as KEY=VALUE
+        # lines — only the keys the launcher sets or changes, not the inherited environment. The
+        # playtest recorder sources this so a recording matches what the launcher shows.
+        _settings = load_settings()
+        set_language(_settings.get("ui_language", ""))   # as --play: BB_MENU_LANGUAGE follows it
+        _env = game_environment(_settings)
+        for _k, _v in _env.items():
+            if os.environ.get(_k) != _v:
+                print(f"{_k}={_v}")
+        sys.exit(0)
     if "--play" in sys.argv[1:]:
         sys.exit(play())
     if "--build-fsr411" in sys.argv[1:]:

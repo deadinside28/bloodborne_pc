@@ -138,6 +138,8 @@ static struct { uint32_t buttons; int stick[4]; int touch_side; float mouse[2]; 
 static int replay_armed;      /* 1 while a BB_PAD_REPLAY recording plays, 2 once it ended */
 static int replay_running;    /* 0: (re)start at the next sample */
 static uint64_t replay_start;
+static uint64_t replay_finished_us; /* when the replay ended (us); drives BB_PAD_REPLAY_END */
+static void replay_end_tick(void);
 static void read_inject(void) {
     static const char *path; static int checked; static uint64_t last_check; static struct timespec mtime;
     if (!checked) { path=bb_env("BB_PAD_FILE"); checked=1; }
@@ -234,6 +236,7 @@ static void record_sample(const PadData *d) {
 }
 static PadSample *replay; static size_t replay_count, replay_next;
 static void replay_sample(PadData *d) {
+    pad_replay_playing=replay_armed==1;
     if (!replay_armed) return;
     if (!replay_running) {
         static int loaded;
@@ -251,10 +254,15 @@ static void replay_sample(PadData *d) {
             /* From the first input that is not neutral: the recording started (F9) a moment the replay
              * cannot know, while the player stood. */
             size_t lead=0;
+            /* BB_PAD_REPLAY_LEAD=keep: from the file's start, standing lead included (as before 0.7;
+             * routes recorded then were timed from it). */
+            const char *keep_lead=bb_env("BB_PAD_REPLAY_LEAD");
+            if (keep_lead && !strcmp(keep_lead,"keep")) lead=replay_count;
             while (lead<replay_count && !replay[lead].buttons && replay[lead].l2<8 && replay[lead].r2<8 &&
                    abs(replay[lead].axes[0]-128)<24 && abs(replay[lead].axes[1]-128)<24 &&
                    abs(replay[lead].axes[2]-128)<24 && abs(replay[lead].axes[3]-128)<24) ++lead;
-            if (lead<replay_count) {
+            if (lead>=replay_count) lead=0;
+            else {
                 const uint32_t t0=replay[lead].ms;
                 for (size_t i=lead;i<replay_count;++i) replay[i-lead]=replay[i], replay[i-lead].ms-=t0;
                 replay_count-=lead;
@@ -264,12 +272,22 @@ static void replay_sample(PadData *d) {
         replay_start=pad_clock_us();
         replay_running=1;
         replay_next=0;
+        printf("Runtime: pad replay started (mono %.3f s)\n",now_us()/1e6);
     }
     const uint32_t ms=(uint32_t)((pad_clock_us()-replay_start)/1000);
     while (replay_next<replay_count && replay[replay_next].ms<=ms) ++replay_next;
     if (!replay_next) return;
     if (replay_next==replay_count && ms>replay[replay_count-1].ms+500) {
-        if (replay_armed==1) { puts("Runtime: pad replay finished"); replay_armed=2; }
+        /* BB_PAD_REPLAY_LOOP=N: the route N more times (a soak test walks it there and back). */
+        static int loops_left=-1;
+        if (loops_left<0) loops_left=(int)bb_env_int("BB_PAD_REPLAY_LOOP",0);
+        if (replay_armed==1 && loops_left>0) {
+            --loops_left; replay_running=0;
+            printf("Runtime: pad replay looped (%d more)\n",loops_left);
+            return;
+        }
+        if (replay_armed==1) { puts("Runtime: pad replay finished"); replay_armed=2; replay_finished_us=now_us(); }
+        replay_end_tick();
         return;
     }
     const PadSample *s=&replay[replay_next-1];
@@ -292,9 +310,58 @@ static void touch_ids(PadData *d) {
     else if (!since) since=d->timestamp;
     d->touch_held_time=d->touch_count ? (uint32_t)(d->timestamp-since) : 0;
 }
+/* Playtest replay autostart (tools/playtest.py): once the scene has loaded, arm a BB_PAD_REPLAY
+ * replay by itself (no "replay" token) and optionally quit at the end, so a run needs no hand
+ * timing. "Scene loaded" = two consecutive ~1 s windows over BB_PAD_SCENE_DRAWS draws/frame (the
+ * threshold tools/restart.sh polls, the same counter the frame-stats line reports). */
+static int scene_loaded(uint64_t now) {
+    static uint64_t last_sample, last_frames, last_draws; static int ok, threshold=-1;
+    if (threshold<0) threshold=(int)bb_env_int("BB_PAD_SCENE_DRAWS",600);
+    if (last_sample && now-last_sample<1000000) return ok>=2;
+    uint64_t frames=0, draws=0; bbgpu_frame_counters(&frames,&draws);
+    if (last_sample) {
+        const uint64_t df=frames-last_frames;
+        const double dpf=df ? (double)(draws-last_draws)/(double)df : 0.0;
+        if (dpf>threshold) { if (ok<2) ++ok; } else ok=0;
+    }
+    last_sample=now; last_frames=frames; last_draws=draws;
+    return ok>=2;
+}
+static void pad_autostart(void) {
+    static int checked, want_replay, done; static unsigned delay; static uint64_t ready_at;
+    if (!checked) {
+        checked=1;
+        want_replay=bb_env_on("BB_PAD_REPLAY_AUTOSTART");
+        delay=(unsigned)bb_env_int("BB_PAD_REPLAY_DELAY_MS",3000);
+    }
+    if (!want_replay || done) return;
+    const uint64_t now=now_us();
+    if (!scene_loaded(now)) return;
+    if (!ready_at) ready_at=now;
+    const unsigned waited=(unsigned)((now-ready_at)/1000);
+    if (waited>=delay) {
+        done=1;
+        if (replay_armed!=1) { replay_armed=1; replay_running=0;
+            printf("Runtime: pad replay armed (autostart, %u ms after scene load)\n",waited); }
+    }
+}
+static void replay_end_tick(void) {  /* BB_PAD_REPLAY_END=quit[:hold_s]: quit the game a while after the replay ends */
+    static int checked, want_quit, quit_sent; static unsigned hold_ms;
+    if (!checked) {
+        checked=1;
+        const char *v=bb_env("BB_PAD_REPLAY_END");
+        if (v && !strncmp(v,"quit",4)) { want_quit=1; const char *c=strchr(v,':'); hold_ms=c ? (unsigned)(atof(c+1)*1000) : 5000; }
+    }
+    if (!want_quit || quit_sent || !replay_finished_us) return;
+    if ((now_us()-replay_finished_us)/1000 < hold_ms) return;
+    quit_sent=1;
+    SDL_Event quit={0}; quit.type=SDL_EVENT_QUIT; SDL_PushEvent(&quit);
+    puts("Runtime: pad replay end: quit requested");
+}
 static void sample(PadData *d) {
     sample_host(d);
     if (bbgpu_overlay_captures_input()) return;
+    pad_autostart();
     record_sample(d);
     read_inject();
     replay_sample(d);

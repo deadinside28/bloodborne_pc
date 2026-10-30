@@ -56,5 +56,5 @@ for i in $(seq 1 90); do
     last=$(grep '^Frame stats' out/session.log | tail -1 | sed -E 's/.* ([0-9]+) draws\/frame.*/\1/')
     [[ -n $last && $last -gt 600 ]] && break
 done
-sleep 10
+sleep ${BB_LEVEL_SETTLE:-10}
 grep '^Frame stats\|^Present rate' out/session.log | tail -1

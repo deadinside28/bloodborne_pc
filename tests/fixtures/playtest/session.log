@@ -1,0 +1,251 @@
+GPU profile: on (timestamp period 10.00 ns)
+Runtime: pad opened for user 1 (SDL gamepad or keyboard)
+Frame stats: 60.0 FPS, worst frame 20.1 ms (vblank 60 Hz); 0 shader/pipeline compiles, 0.0 ms; 0 recorder syncs; 100 draws/frame
+Runtime: pad file: buttons 0x4000 sticks -1 -1 -1 -1
+Frame stats: 59.0 FPS, worst frame 40.1 ms (vblank 60 Hz); 12 shader/pipeline compiles, 9.4 ms; 0 recorder syncs; 1400 draws/frame
+Runtime: pad replay armed (1400 draws/frame; starts in 10000 ms)
+Runtime: pad replay of 2 samples from /lib/routes/stand-60.pad
+Runtime: pad replay started (mono 100.000 s)
+Camera: 20.000 s at 10.0 2.000 -5.000 (inverse of view: 10.0 2.000 -5.000, largest difference 0.0001) mono 100.000 frame 1200
+Camera: 30.000 s at 10.1 2.000 -5.000 (inverse of view: 10.1 2.000 -5.000, largest difference 0.0001) mono 110.000 frame 1800
+Camera: 40.000 s at 10.2 2.000 -5.000 (inverse of view: 10.2 2.000 -5.000, largest difference 0.0001) mono 120.000 frame 2400
+Camera: 50.000 s at 10.3 2.000 -5.000 (inverse of view: 10.3 2.000 -5.000, largest difference 0.0001) mono 130.000 frame 3000
+Camera: 60.000 s at 10.4 2.000 -5.000 (inverse of view: 10.4 2.000 -5.000, largest difference 0.0001) mono 140.000 frame 3600
+Camera: 70.000 s at 10.5 2.000 -5.000 (inverse of view: 10.5 2.000 -5.000, largest difference 0.0001) mono 150.000 frame 4200
+Camera: 80.000 s at 10.6 2.000 -5.000 (inverse of view: 10.6 2.000 -5.000, largest difference 0.0001) mono 160.000 frame 4800
+GPU profile: 16.65 ms/frame over 301 frames, 303 labels
+   2.460 ms/frame   1.0/frame  upscaler RunScaled (FSR)
+   0.848 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 2)
+   0.841 ms/frame   5.4/frame  dispatch cs 000000003d5ebf4e (58880x1x1 groups)
+   0.732 ms/frame   1.0/frame  rtao trace
+   0.614 ms/frame   7.6/frame  (between submissions: GPU idle, after submission 15)
+   0.559 ms/frame   1.0/frame  ssgi
+   0.468 ms/frame   4.7/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000009da6aacb ps 00000000bb10e440
+   0.434 ms/frame   7.6/frame  pass 4096x4096 [- ] depth D32Sfloat vs 00000000014b7164 ps 00000000a2108f5e
+   0.407 ms/frame  57.0/frame  dispatch cs 00000000fefebf9f (1024x1x1 groups)
+   0.307 ms/frame   0.2/frame  rtao static
+   0.286 ms/frame   1.0/frame  rtao blas
+   0.247 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 7)
+   0.244 ms/frame  15.3/frame  pass 16384x16384 [] depth - vs 0000000089cda9e4 ps 0000000000000000
+   0.235 ms/frame   3.0/frame  pass 2560x1440 [R8G8B8A8Unorm ] depth - vs 00000000061fbbf6 ps 0000000011ffdfb5
+   0.225 ms/frame   1.7/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000006a833138 ps 00000000bb10e440
+   0.219 ms/frame   1.0/frame  rt sun shadow
+   0.215 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 6)
+   0.204 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 8)
+   0.199 ms/frame  15.5/frame  pass 2560x1440 [- ] depth D32SfloatS8Uint vs 000000004b8827a6 ps 000000009837d1c8
+   0.191 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 5)
+   0.178 ms/frame   1.0/frame  pass 2560x1440 [B10G11R11UfloatPack32 B10G11R11UfloatPack32 ] depth - vs 000000008747a367 ps 000000003fe9e964
+   0.174 ms/frame   1.0/frame  pass 2560x1440 [R8Unorm ] depth - vs 000000000b0acf50 ps 00000000c45c51cb
+   0.170 ms/frame   2.0/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000009da6aacb ps 000000001c3953c6
+   0.170 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 0)
+   0.157 ms/frame   1.8/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000007620368b ps 000000008aba0ecd
+   0.148 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 3)
+   0.140 ms/frame   2.0/frame  pass 2560x1440 [R16G16B16A16Sfloat ] depth - vs 000000007d668276 ps 00000000e0305cef
+   0.131 ms/frame   3.2/frame  pass 2560x1440 [B10G11R11UfloatPack32 B10G11R11UfloatPack32 ] depth D32SfloatS8Uint vs 000000008747a367 ps 00000000370174f7
+   0.128 ms/frame   1.2/frame  pass 1280x720 [R8G8B8A8Unorm ] depth - vs 00000000637500e0 ps 00000000e55e45eb
+   0.121 ms/frame   0.9/frame  (between submissions: GPU idle, after submission 10)
+  submission gaps: 13697, median 0.006 ms, p90 0.217, max 5.315; 2.516 ms/frame in gaps of 0.25 ms or more
+Layer memory: 2371 MiB valid in VRAM, 105 mirrors of 3197 MiB (0 retired); loaded data 2604 MiB; vkQueueBindSparse: 0 calls, 0 ranges; write traps hit 14625
+Layer memory: 0 volatile blocks, 0 MiB refreshed in 10 s (0 MiB read in place in render passes); 2475 watched blocks, 835 uploaded again after CPU writes; GPU writes in VRAM barred in 2873 MiB the CPU wrote
+Layer memory: write traps in 10 s: announced 6593; the game's code on watched 833, on other copies 2; other code on watched 2, on other copies 7178
+Layer memory: back in place (MiB): written 1, mixed 5, command 0, request 1524, copy back 0, unmap 0, idle 0; GPU data copied back 104 MiB
+Layer memory: held in place (MiB): dynamic 71 (CPU-hot 58), watch failed 42, CPU-written 2873 (GPU writes kept in place by them: 1328 MiB in 10 s), write bounces 2; dynamic blocks reloaded whole 0; blocks with loaded data and no copy 561 MiB
+SSGI: pass 601 at 2560x1440 (native images, frame 1753)
+GPU: 6 pipelines compiled in the background, 1 draws went without theirs meanwhile, 0 waited for one
+Render state memo: 229282 hits, 32861 misses; texture sets: 141150 hits, 8733 misses
+  texture set misses: other key 1064, generation 7404, image check 265, other 0
+  scene proxies sampled directly: 0 bindings
+Frame stats: 60.1 FPS, worst frame 26.0 ms (vblank 60 Hz); 7 shader/pipeline compiles, 4.1 ms; 301 recorder syncs; 5652 write faults/s, 0 hot pages; GPU thread 3.18 us/draw, 2096 draws/frame, idle 58.5%; blocked: recorder 0.0%, host copies 0.0% (0/frame, 1/frame not needed), copy threads 0.0%, GPU ticks 0.0%; reduced-size draws 0/frame of 0 in the scene
+Image write sites (guest code -> texture, this window): host:/usr/lib/libc.so.6+0x1b1b37 (from +0x6487570) 6 into image 0x114d89c500 size 701440 1024x1024 fmt 134 tile 13; host:/usr/lib/libc.so.6+0x1b1b66 (from +0x53aec90) 2 into image 0x114c4f1a00 size 352256 1024x512 fmt 139 tile 13; host:/usr/lib/libc.so.6+0x1b1b66 (from +0x53aec90) 2 into image 0x114c73d400 size 92160 256x256 fmt 146 tile 13; host:/usr/lib/libc.so.6+0x1b1b66 (from +0x53aec90) 2 into image 0x1149dc4100 size 24576 128x256 fmt 134 tile 13; host:/usr/lib/libc.so.6+0x1b1b66 (from +0x53aec90) 2 into image 0x114dca9900 size 701440 1024x1024 fmt 134 tile 13; host:/usr/lib/libc.so.6+0x1b1b66 (from +0x53aec90) 4 into image 0x114c753c00 size 46080 256x256 fmt 133 tile 13; host:/usr/lib/libc.so.6+0x1b1b66 (from +0x53aec90) 4 into image 0x1149e16900 size 24576 256x128 fmt 133 tile 13
+Write fault sites (guest code, this window): 9 faults: host:/usr/lib/libc.so.6+0x1b1b37 (from +0x6487570) 4 at 0x1043badd00; +0x1087940 (from +0x216cab6) 3 at 0x115db28c80; +0x2ab9c1b (from +0x28f5608) 1 at 0x10469ed480; host:/usr/lib/libc.so.6+0x1b1b40 (from +0x6b001b0) 1 at 0x1045e80000
+Write notices: 1121/s, 1.53 MB/s (libc copies over pages the GPU side watches)
+GPU breadcrumbs: stream 0 (draws: game and presenter) 1140320 noted, 581 unfinished; largest indirect dispatches: cs 0000000042f2a521 46x1x1;
+Memory: VRAM 9691 MiB, GTT 8203 MiB, RSS 461 MiB; Vulkan memory 9527 MiB allocated (VMA blocks 9255 MiB, 9202 MiB of them used); Vulkan images 2492 MiB; cached images 1996 MiB in 1569; guest blocks in VRAM 3197 MiB allocated, 0 MiB of it unused (0 MiB moved back idle, 0 MiB unmapped, 0 MiB freed; 0 chunks, 0 emptied, blocks kept: 0 GPU-written, 0 not direct memory); texture collector: usage 9687 MiB, starts at 3139 MiB, 231 images freed, 234 GPU-written kept
+Buffer bindings: 126760.7 MB/frame in place (85.6 GPU-written), 3311.9 MB/frame VRAM copies
+Guest waits per frame (thread kind +site):
+GPU range allocators: 0x10282a2060: 289 live, 106.1 MB
+Gnm: 1.0 sceGnmSubmitDone/frame, 0.0 sceGnmAreSubmitsAllowed/frame, 0.0 refused/frame; guest waited for the previous frame 0.3x 0.47 ms/frame; 0.0 compute queue submissions/frame
+EOP fences: 308236 decoded, 308236 labels written, 0 pending; 461.3 labels/frame written by the GPU
+Honest labels: 1.2 submissions/frame sent early (GPU idle), 16.5 as the GPU reached the last one
+Guest sleeps per frame: 7.1, 99.99 ms
+Guest GPU memory: 300 ranges/s handed out, 16.51 MB/s
+Recording: 23.8 submissions/frame, 2.51 command buffers each
+Frame pacing: median 16.51 ms, stddev 1.85 ms, p99 21.09 ms, 2 frames over 1.5x median
+Layer memory: 3904 MiB of loaded blocks copied to VRAM, 2370 MiB valid there in 104 mirrors
+RTAO: frame 1800: 68 draws, 349216 triangles (0 draws, 0 triangles dropped: budget 3000000; 0 strips/other, 51 alpha-tested, 0 without depth write, 0 without index address skipped), 456 passes recorded in 600 frames, 0 skipped (ring slot still in use)
+RTAO: index data of the last frame: 13000 KiB (1178 KiB in ranges of <= 16 KiB)
+RTAO: cache: 1000 draws known, pool 2872746 of 3000000 triangles; 571 cached, 102 evicted (0 for room) in 600 frames; static BLAS 1275110 triangles in 1755 parts, 73 rebuilds in 600 frames; probes 22890 read, 0 not written, 19668 same, 112 reordered, 2437 changed; camera (-5.5 -8.3 116.4)
+RTAO: big meshes in pieces: 334 cached (4725 pieces, split 213.5 ms on the worker), 0 dropped (changed meanwhile, or no room) in 600 frames
+RTAO: per-frame triangles by reason: 306017 skinned, 0 bigger than maxsize, 0 kept changing, 8724 not stable yet, 34475 copies of a mesh not all cached, 0 cache off
+RTAO: memory: fixed 1935 MiB (the static pool and BLAS included)
+Lights: 33 in the last frame (30 point, 3 spot, 0 of them shadowed), 57.4 light buffers per frame; camera (-5.5 -8.3 116.4); nearest:
+  point ps a22c7f71 at (-5.54 -8.18 116.59), 0.3 m away, radius 2.6 m, colour (1 1 0)
+Object motion: 40581 draws, 40581 stored, 39079 with history, 1502 unmatched, 0 capacity skips, 0 invalid, 123844 still (600 frames); last frame 456218/4194304 vertices; index ranges 157300 reused, 5755 scanned (0 found changed), 846 cached
+Object motion: RTAO capture: 122474 draws, 0 skipped (room) in 600 frames; last frame 1538061/4194304 vertices
+Draw preparation: 507237 prepared pipelines used, 47771 not (not ready 25330, unavailable 10755, other registers 0, other programs 11686; 8 workers, 0 scanner rebases)
+Texture helper: 0 binds in parallel, 0 partly, 549888 serial; per fork 0 cycles helper task, 0 cycles GPU thread wait
+Texture cache: memory pressure, 9691 of 9555 MiB (critical 12832): 423 images evicted, 0 written back since the last report
+Occlusion queries: 5590 events in 5 s, 23621 in all; 396623 segments, 0 not counted; labels after unwritten events: 295 (294 in a render pass); counters reused before their results were written: 0 of 5590; queries read: 2368 none passed, 427 some passed, 0 not valid
+Render state memo: 227055 hits, 35088 misses; texture sets: 130968 hits, 17485 misses
+  texture set misses: other key 1977, generation 15248, image check 260, other 0
+  scene proxies sampled directly: 0 bindings
+Layer memory: 3970 MiB of loaded blocks copied to VRAM, 2385 MiB valid there in 112 mirrors
+Draw pipe: 149696 draws/s pipelined, 12 drains/s that waited, stage A waited 1.6%, stage B busy 43.5%
+  drains by reason/s: ConstRam=12 (1.5%) commands=0 (0.0%) ConstRam not waited=5448
+  stage A waits over 0.5%:
+Layer memory: 4032 MiB of loaded blocks copied to VRAM, 2393 MiB valid there in 113 mirrors
+Runtime: pad replay dump at 30000 ms (index 0)
+Final dump 0: GPU frame 3000
+GPU profile: 18.03 ms/frame over 278 frames, 396 labels
+   6.202 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 2)
+   3.224 ms/frame   4.6/frame  dispatch cs 000000003d5ebf4e (58880x1x1 groups)
+   1.106 ms/frame   4.0/frame  dispatch cs 00000000e2c27f0c (1x1x1 groups)
+   0.662 ms/frame  14.6/frame  dispatch cs 000000008b355b5a (29440x1x1 groups)
+   0.550 ms/frame   0.2/frame  upscaler RunScaled (FSR)
+   0.404 ms/frame  10.6/frame  pass 16384x16384 [] depth - vs 0000000089cda9e4 ps 0000000000000000
+   0.265 ms/frame  30.5/frame  dispatch cs 00000000fefebf9f (1024x1x1 groups)
+   0.259 ms/frame   0.8/frame  pass 3840x2160 [R8G8B8A8Unorm ] depth - vs 0000000081d336ce ps 00000000b7de74d9
+   0.200 ms/frame   0.2/frame  rtao blas
+   0.174 ms/frame   0.2/frame  rtao trace
+   0.153 ms/frame   2.3/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000009da6aacb ps 00000000bb10e440
+   0.148 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 4)
+   0.140 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 6)
+   0.138 ms/frame   0.2/frame  ssgi
+   0.135 ms/frame   1.0/frame  pass 2560x1440 [B10G11R11UfloatPack32 B10G11R11UfloatPack32 ] depth D32SfloatS8Uint vs 000000008747a367 ps 00000000d92266b9
+   0.111 ms/frame   1.0/frame  pass 3840x2160 [R8G8B8A8Srgb ] depth - vs 0000000089cda9e4 ps 0000000038d65b32
+   0.103 ms/frame   1.0/frame  pass 2560x1440 [R16G16B16A16Sfloat ] depth - vs 000000007d668276 ps 00000000fbe7c4b6
+   0.103 ms/frame   1.0/frame  pass 1280x720 [R8G8B8A8Unorm ] depth - vs 000000000b0acf50 ps 00000000cbbca5dc
+   0.101 ms/frame   1.6/frame  pass 4096x4096 [- ] depth D32Sfloat vs 00000000014b7164 ps 00000000a2108f5e
+   0.101 ms/frame   1.0/frame  pass 2560x1440 [B10G11R11UfloatPack32 B10G11R11UfloatPack32 ] depth - vs 000000008747a367 ps 000000003fe9e964
+   0.096 ms/frame   5.1/frame  pass 1568x588 [R16G16B16A16Sfloat ] depth - vs 00000000086c6a72 ps 00000000483f5dc1
+   0.096 ms/frame   1.0/frame  pass 2560x1440 [R16G16B16A16Sfloat ] depth - vs 000000004c37ae6d ps 00000000bf368417
+   0.095 ms/frame   5.7/frame  pass 2560x1440 [- ] depth D32SfloatS8Uint vs 000000004b8827a6 ps 000000009837d1c8
+   0.085 ms/frame   5.1/frame  pass 1568x588 [R16G16B16A16Sfloat ] depth - vs 00000000d7407513 ps 00000000474f0123
+   0.078 ms/frame   1.0/frame  (between submissions: GPU idle, after submission 0)
+   0.074 ms/frame   0.2/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000009da6aacb ps 00000000053bbf3b
+   0.073 ms/frame   1.0/frame  pass 2560x1440 [R8G8B8A8Unorm ] depth - vs 00000000061fbbf6 ps 00000000f55643de
+   0.070 ms/frame  10.5/frame  (submission start: copies and barriers before its first mark)
+   0.068 ms/frame   1.6/frame  dispatch cs 00000000a224d59e (240x1x1 groups)
+   0.068 ms/frame   0.8/frame  upscaler RunUiOnly
+  submission gaps: 5739, median 0.009 ms, p90 0.173, max 15.609; 6.476 ms/frame in gaps of 0.25 ms or more
+Render state memo: 222421 hits, 39722 misses; texture sets: 143524 hits, 6823 misses
+  texture set misses: other key 1869, generation 4602, image check 352, other 0
+  scene proxies sampled directly: 0 bindings
+Frame stats: 54.4 FPS, worst frame 66.4 ms (vblank 60 Hz); 6 shader/pipeline compiles, 4.4 ms; 103 recorder syncs; 966 write faults/s, 0 hot pages; GPU thread 3.65 us/draw, 1180 draws/frame, idle 75.4%; blocked: recorder 0.0%, host copies 0.0% (0/frame, 1/frame not needed), copy threads 0.0%, GPU ticks 0.0%; reduced-size draws 0/frame of 0 in the scene
+Image write sites (guest code -> texture, this window): +0x2085c0c (from +0x11e6846) 1 into image 0x10671b0000 size 8519680 1568x588 fmt 97 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069fe0000 size 32768 66x56 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 2 into image 0x1068f00000 size 2293760 523x441 fmt 97 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1063990000 size 1146880 523x441 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1062668000 size 393216 262x222 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x10650f0000 size 8519680 1568x588 fmt 97 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1063cf0000 size 8519680 1568x588 fmt 97 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1066150000 size 8519680 1568x588 fmt 97 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069908000 size 1146880 523x441 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069e20000 size 1146880 523x441 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1068fc0000 size 983040 314x265 fmt 97 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x10690b8000 size 491520 314x265 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 2 into image 0x10695b0000 size 2293760 523x441 fmt 97 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x10623c0000 size 1146880 523x441 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1068ea8000 size 32768 33x28 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069ff0000 size 32768 33x28 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x10691a0000 size 131072 131x111 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x10697e8000 size 1146880 523x441 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069138000 size 393216 262x221 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1062180000 size 1146880 523x441 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 2 into image 0x1069a28000 size 4128768 1046x881 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069a90000 size 65536 79x67 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x10624e0000 size 1146880 523x441 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1068ff0000 size 262144 196x74 fmt 97 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069aa8000 size 196608 158x134 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1068e80000 size 131072 132x112 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069f40000 size 393216 262x221 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x10622a0000 size 1146880 523x441 fmt 122 tile 14; +0x2085c0c (from +0x11e6846) 1 into image 0x1069170000 size 65536 25x10 fmt 97 tile 14
+Write fault sites (guest code, this window): 29 faults: +0x2085c0c (from +0x11e6846) 25 at 0x1069ff0048; +0x208596e (from +0x29297ba) 2 at 0x105bbe7ab0; +0x20859e4 (from +0x29297ba) 1 at 0x105bc01e50; +0x2085a3a (from +0x29297ba) 1 at 0x105bb5bd50
+Write notices: 96/s, 0.07 MB/s (libc copies over pages the GPU side watches)
+GPU breadcrumbs: stream 0 (draws: game and presenter) 9263226 noted, 1429 unfinished; largest indirect dispatches: cs 000000002da7fe60 1193x1x1; cs 0000000042f2a521 46x1x1;
+Memory: VRAM 9649 MiB, GTT 8203 MiB, RSS 484 MiB; Vulkan memory 9461 MiB allocated (VMA blocks 9189 MiB, 9089 MiB of them used); Vulkan images 2516 MiB; cached images 2025 MiB in 1477; guest blocks in VRAM 3279 MiB allocated, 0 MiB of it unused (0 MiB moved back idle, 0 MiB unmapped, 0 MiB freed; 0 chunks, 0 emptied, blocks kept: 0 GPU-written, 0 not direct memory); texture collector: usage 9645 MiB, starts at 3139 MiB, 5 images freed, 336 GPU-written kept
+Buffer bindings: 56962.0 MB/frame in place (80.0 GPU-written), 1536.8 MB/frame VRAM copies
+Guest waits per frame (thread kind +site):
+GPU range allocators: 0x10282a2060: 466 live, 36.1 MB
+Gnm: 1.0 sceGnmSubmitDone/frame, 0.0 sceGnmAreSubmitsAllowed/frame, 0.0 refused/frame; guest waited for the previous frame 0.4x 6.81 ms/frame; 0.0 compute queue submissions/frame
+EOP fences: 2265566 decoded, 2265566 labels written, 0 pending; 337.9 labels/frame written by the GPU
+Honest labels: 1.3 submissions/frame sent early (GPU idle), 2.7 as the GPU reached the last one
+Guest sleeps per frame: 7.2, 110.28 ms
+Guest GPU memory: 256 ranges/s handed out, 14.94 MB/s
+Recording: 11.0 submissions/frame, 2.86 command buffers each
+Frame pacing: median 17.13 ms, stddev 4.10 ms, p99 27.68 ms, 11 frames over 1.5x median
+RTAO: readback (frame 7500): of the first 4096 triangles 4096 non-zero, 4096 valid (finite), 0 invalid (NaN); z 3.42..4.08, |xy| up to 1.40; first: (-0.03 0.12 3.67) (-0.02 0.12 3.66) (-0.01 0.13 3.66)
+Draw preparation: 379530 prepared pipelines used, 56694 not (not ready 40603, unavailable 6838, other registers 0, other programs 9253; 8 workers, 0 scanner rebases)
+Render state memo: 232626 hits, 29517 misses; texture sets: 161623 hits, 2406 misses
+  texture set misses: other key 2107, generation 5, image check 294, other 0
+  scene proxies sampled directly: 0 bindings
+Indirect draws checked: 69 in 5 s
+Texture helper: 0 binds in parallel, 0 partly, 526336 serial; per fork 0 cycles helper task, 0 cycles GPU thread wait
+Occlusion queries: 11100 events in 5 s, 94419 in all; 2668966 segments, 0 not counted; labels after unwritten events: 14 (13 in a render pass); counters reused before their results were written: 0 of 11100; queries read: 5060 none passed, 490 some passed, 0 not valid
+RT shadows: sun ray traced in 242 of 600 frames (sun 1: (-0.848 0.530 0.015), mask regions 2: channel 2, 1); spot map in 0 (spot 1)
+Texture cache: memory pressure, 9646 of 9555 MiB (critical 12832): 0 images evicted, 0 written back since the last report
+Draw pipe: 174854 draws/s pipelined, 0 drains/s that waited, stage A waited 0.0%, stage B busy 55.0%
+  drains by reason/s: ConstRam not waited=4677
+  stage A waits over 0.5%:
+Render state memo: 232973 hits, 29170 misses; texture sets: 157916 hits, 7041 misses
+  texture set misses: other key 2073, generation 4702, image check 266, other 0
+  scene proxies sampled directly: 0 bindings
+GPU profile: 19.13 ms/frame over 262 frames, 205 labels
+   3.418 ms/frame   7.0/frame  dispatch cs 000000003d5ebf4e (58880x1x1 groups)
+   2.464 ms/frame   1.0/frame  upscaler RunScaled (FSR)
+   1.138 ms/frame   4.0/frame  dispatch cs 00000000e2c27f0c (1x1x1 groups)
+   1.087 ms/frame  15.0/frame  pass 16384x16384 [] depth - vs 0000000089cda9e4 ps 0000000000000000
+   0.967 ms/frame  20.0/frame  dispatch cs 000000008b355b5a (29440x1x1 groups)
+   0.677 ms/frame   1.0/frame  rtao trace
+   0.596 ms/frame   4.4/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000009da6aacb ps 00000000bb10e440
+   0.519 ms/frame   1.0/frame  ssgi
+   0.392 ms/frame  56.9/frame  dispatch cs 00000000fefebf9f (1024x1x1 groups)
+   0.351 ms/frame   6.8/frame  pass 4096x4096 [- ] depth D32Sfloat vs 00000000014b7164 ps 00000000a2108f5e
+   0.329 ms/frame   1.0/frame  rtao blas
+   0.263 ms/frame   0.6/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000009da6aacb ps 00000000053bbf3b
+   0.241 ms/frame  22.8/frame  pass 2560x1440 [- ] depth D32SfloatS8Uint vs 000000004b8827a6 ps 000000009837d1c8
+   0.237 ms/frame   1.0/frame  rt sun shadow
+   0.232 ms/frame   3.0/frame  pass 2560x1440 [R8G8B8A8Unorm ] depth - vs 00000000061fbbf6 ps 0000000011ffdfb5
+   0.196 ms/frame   4.6/frame  pass 2560x1440 [B10G11R11UfloatPack32 B10G11R11UfloatPack32 ] depth D32SfloatS8Uint vs 000000008747a367 ps 00000000370174f7
+   0.184 ms/frame   1.0/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 00000000e859b6d9 ps 00000000e21e283a
+   0.179 ms/frame   2.0/frame  pass 1280x720 [R8G8B8A8Unorm ] depth - vs 00000000637500e0 ps 00000000e55e45eb
+   0.164 ms/frame   2.0/frame  pass 1280x720 [R8G8B8A8Unorm ] depth - vs 00000000637500e0 ps 000000007fdd54e1
+   0.155 ms/frame   1.0/frame  pass 2560x1440 [B10G11R11UfloatPack32 B10G11R11UfloatPack32 ] depth - vs 000000008747a367 ps 000000003fe9e964
+   0.155 ms/frame   1.0/frame  pass 2560x1440 [R8Unorm ] depth - vs 000000000b0acf50 ps 00000000c45c51cb
+   0.147 ms/frame   0.1/frame  rtao static
+   0.137 ms/frame   1.5/frame  pass 4096x4096 [- ] depth D32Sfloat vs 000000006c62a79f ps 00000000a0e88f56
+   0.136 ms/frame   2.0/frame  pass 2560x1440 [R16G16B16A16Sfloat ] depth - vs 000000007d668276 ps 00000000e0305cef
+   0.130 ms/frame   2.5/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000007620368b ps 000000008aba0ecd
+   0.127 ms/frame   0.5/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat - - ] depth D32SfloatS8Uint vs 000000009da6aacb ps 000000001c3953c6
+   0.123 ms/frame   2.0/frame  pass 2560x1440 [R8G8B8A8Unorm R8G8B8A8Unorm R8G8B8A8Srgb R8G8B8A8Unorm B10G11R11UfloatPack32 R16G16B16A16Sfloat R16G16B16A16Sfloat - ] depth D32SfloatS8Uint vs 000000003deaa573 ps 00000000c1986f33
+   0.122 ms/frame   1.0/frame  pass 2560x1440 [R16G16B16A16Sfloat ] depth D32SfloatS8Uint vs 000000008747a367 ps 0000000032e47788
+   0.120 ms/frame   1.0/frame  (after a frame's last submission: presenter, GPU idle)
+   0.120 ms/frame   1.0/frame  pass 2560x1440 [B10G11R11UfloatPack32 B10G11R11UfloatPack32 ] depth D32SfloatS8Uint vs 000000008747a367 ps 00000000d92266b9
+  submission gaps: 4840, median 0.006 ms, p90 0.047, max 1.685; 0.313 ms/frame in gaps of 0.25 ms or more
+Layer memory: 2358 MiB valid in VRAM, 112 mirrors of 3279 MiB (0 retired); loaded data 2659 MiB; vkQueueBindSparse: 0 calls, 0 ranges; write traps hit 16390
+Layer memory: 0 volatile blocks, 0 MiB refreshed in 10 s (0 MiB read in place in render passes); 1248 watched blocks, 248 uploaded again after CPU writes; GPU writes in VRAM barred in 2936 MiB the CPU wrote
+Layer memory: write traps in 10 s: announced 341; the game's code on watched 248, on other copies 1; other code on watched 0, on other copies 0
+Layer memory: back in place (MiB): written 107, mixed 108, command 0, request 3196, copy back 0, unmap 0, idle 46; GPU data copied back 313 MiB
+Layer memory: held in place (MiB): dynamic 182 (CPU-hot 71), watch failed 108, CPU-written 2936 (GPU writes kept in place by them: 22991 MiB in 10 s), write bounces 83; dynamic blocks reloaded whole 27; blocks with loaded data and no copy 468 MiB
+Frame stats: 52.2 FPS, worst frame 28.2 ms (vblank 60 Hz); 0 shader/pipeline compiles, 0.0 ms; 262 recorder syncs; 736 write faults/s, 0 hot pages; GPU thread 3.30 us/draw, 2461 draws/frame, idle 56.0%; blocked: recorder 0.0%, host copies 0.0% (0/frame, 1/frame not needed), copy threads 0.0%, GPU ticks 0.0%; reduced-size draws 0/frame of 0 in the scene
+Write fault sites (guest code, this window): 1 faults: host:/usr/lib/libc.so.6+0x1b19a1 (from +0x6487420) 1 at 0x1049e00000
+Write notices: 118/s, 0.14 MB/s (libc copies over pages the GPU side watches)
+GPU breadcrumbs: stream 0 (draws: game and presenter) 9940225 noted, 1380 unfinished; largest indirect dispatches: cs 000000002da7fe60 1193x1x1; cs 0000000042f2a521 46x1x1;
+Memory: VRAM 9620 MiB, GTT 8203 MiB, RSS 484 MiB; Vulkan memory 9431 MiB allocated (VMA blocks 9159 MiB, 8953 MiB of them used); Vulkan images 2380 MiB; cached images 1891 MiB in 1200; guest blocks in VRAM 3279 MiB allocated, 0 MiB of it unused (0 MiB moved back idle, 0 MiB unmapped, 0 MiB freed; 0 chunks, 0 emptied, blocks kept: 0 GPU-written, 0 not direct memory); texture collector: usage 9616 MiB, starts at 3139 MiB, 277 images freed, 298 GPU-written kept
+Buffer bindings: 124392.5 MB/frame in place (98.6 GPU-written), 3807.0 MB/frame VRAM copies
+Guest waits per frame (thread kind +site):; HavokWorkerThre sema +0x423599<+0x423474<+0x4233c5 4.0x 17.89 ms; HavokWorkerThre sema +0x423599<+0x423474<+0x4233c5 4.0x 17.88 ms
+GPU range allocators: 0x10282a2060: 474 live, 35.7 MB
+Gnm: 1.0 sceGnmSubmitDone/frame, 0.0 sceGnmAreSubmitsAllowed/frame, 0.0 refused/frame; guest waited for the previous frame 1.0x 16.71 ms/frame; 0.0 compute queue submissions/frame
+EOP fences: 2393827 decoded, 2393827 labels written, 0 pending; 491.5 labels/frame written by the GPU
+Honest labels: 0.0 submissions/frame sent early (GPU idle), 0.1 as the GPU reached the last one
+Guest sleeps per frame: 7.5, 114.50 ms
+Guest GPU memory: 261 ranges/s handed out, 14.35 MB/s
+Recording: 10.2 submissions/frame, 5.01 command buffers each
+Frame pacing: median 19.07 ms, stddev 1.14 ms, p99 21.56 ms, 0 frames over 1.5x median
+Render state memo: 232764 hits, 29379 misses; texture sets: 159763 hits, 4130 misses
+  texture set misses: other key 2073, generation 1778, image check 279, other 0
+  scene proxies sampled directly: 0 bindings
+Layer memory: 5824 MiB of loaded blocks copied to VRAM, 2358 MiB valid there in 112 mirrors
+Draw preparation: 584280 prepared pipelines used, 56744 not (not ready 36723, unavailable 9880, other registers 0, other programs 10141; 8 workers, 0 scanner rebases)
+RTAO: frame 7800: 90 draws, 317134 triangles (0 draws, 0 triangles dropped: budget 3000000; 0 strips/other, 63 alpha-tested, 0 without depth write, 0 without index address skipped), 447 passes recorded in 600 frames, 0 skipped (ring slot still in use)
+RTAO: index data of the last frame: 20016 KiB (1602 KiB in ranges of <= 16 KiB)
+RTAO: history reset 1 times (gaps or camera jumps) in 600 frames
+RTAO: cache: 1461 draws known, pool 2361583 of 3000000 triangles; 308 cached, 54 evicted (359 for room) in 600 frames; static BLAS 1150445 triangles in 1515 parts, 42 rebuilds in 600 frames; probes 17233 read, 0 not written, 16521 same, 61 reordered, 343 changed; camera (20.8 -8.1 100.8)
+RTAO: big meshes in pieces: 169 cached (2078 pieces, split 97.4 ms on the worker), 0 dropped (changed meanwhile, or no room) in 600 frames
+RTAO: per-frame triangles by reason: 290135 skinned, 0 bigger than maxsize, 21731 kept changing, 0 not stable yet, 5268 copies of a mesh not all cached, 0 cache off
+RTAO: memory: fixed 1935 MiB (the static pool and BLAS included)
+Lights: 89 in the last frame (82 point, 7 spot, 3 of them shadowed), 50.2 light buffers per frame; camera (20.8 -8.1 100.8); nearest:
+  point ps a22c7f71 at (20.81 -7.96 101.02), 0.3 m away, radius 2.6 m, colour (1 1 0)
+Object motion: 49038 draws, 49038 stored, 48076 with history, 962 unmatched, 0 capacity skips, 0 invalid, 117051 still (600 frames); last frame 419722/4194304 vertices; index ranges 160700 reused, 5389 scanned (0 found changed), 556 cached
+Object motion: RTAO capture: 117051 draws, 0 skipped (room) in 600 frames; last frame 2288727/4194304 vertices
+Texture helper: 0 binds in parallel, 0 partly, 668672 serial; per fork 0 cycles helper task, 0 cycles GPU thread wait
+Occlusion queries: 11722 events in 5 s, 106141 in all; 2827607 segments, 0 not counted; labels after unwritten events: 10 (7 in a render pass); counters reused before their results were written: 0 of 11722; queries read: 5365 none passed, 496 some passed, 0 not valid
+Render state memo: 232748 hits, 29395 misses; texture sets: 160300 hits, 2781 misses
+  texture set misses: other key 2044, generation 466, image check 271, other 0
+  scene proxies sampled directly: 0 bindings
+Texture cache: memory pressure, 9616 of 9555 MiB (critical 12832): 291 images evicted, 0 written back since the last report
+Draw pipe: 175369 draws/s pipelined, 0 drains/s that waited, stage A waited 0.0%, stage B busy 55.2%
+  drains by reason/s: ConstRam=0 (0.0%) ConstRam not waited=4746
+  stage A waits over 0.5%:
+SSGI: pass 6001 at 2560x1440 (native images, frame 7888)
+RT reflections: first pass: SSR target 1280x720, depth 2560x1440, copy 1280x720
+RT reflections: 0 passes in 600 frames, 242 skipped (no RTAO scene, no history or a size mismatch); mode 1, far 40 m; the game's SSR left out in 0
+RT reflections: 482 passes in 600 frames, 118 skipped (no RTAO scene, no history or a size mismatch); mode 1, far 40 m; the game's SSR left out in 482
+RT governor: level 0, GPU 82 % of the frame (13.7 ms; budget 15.5)
+Runtime: pad replay finished
+Runtime: pad replay end: quit requested
+Window: closed (quit): the game ends
+Exit: GPU work finished for 2 of 2 schedulers in 0 ms (submissions stopped)
