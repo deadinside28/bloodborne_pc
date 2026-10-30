@@ -1087,7 +1087,9 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
     }
     if (!blank && last) {
         DumpFinalFrameIfDue(instance, present_scheduler, cmdbuf, frame->image, frame->width,
-                            frame->height, swapchain.GetSurfaceFormat().format);
+                            frame->height,
+                            HdrChannel::Native16() ? HdrChannel::Native16Format
+                                                   : swapchain.GetSurfaceFormat().format);
     }
     // BB_SEQUENCE_DUMP_TRIGGER=<file> (frame generation checks): the next 16 images shown, the
     // interpolated ones ("interp") and the game's ("real") in the order they are presented.

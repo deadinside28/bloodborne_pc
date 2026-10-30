@@ -109,6 +109,7 @@ struct DumpBuffer {
     VmaAllocation allocation;
     VmaAllocationInfo info;
     VkDeviceSize size;
+    bool float16 = false;
 };
 std::mutex dump_pool_mutex;
 std::vector<DumpBuffer> dump_pool;
@@ -135,7 +136,8 @@ void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffe
         if (only && !std::strstr(only, image.name)) {
             continue;
         }
-        const VkDeviceSize size = VkDeviceSize(image.width) * image.height * image.bytes_per_pixel;
+        const VkDeviceSize size = VkDeviceSize(image.width) * image.height *
+                                  (image.float16 ? 8u : image.bytes_per_pixel);
         const VkBufferCreateInfo buffer_ci{
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             .size = size,
@@ -163,6 +165,7 @@ void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffe
             continue;
         }
         pooled.size = size;
+        pooled.float16 = image.float16;
         const VkBuffer buffer = pooled.buffer;
         const vk::BufferImageCopy region{
             .imageSubresource = {image.aspect, 0, 0, 1},
@@ -173,11 +176,37 @@ void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffe
         std::snprintf(path, sizeof(path), "%s/f%03d_%s_%ux%u_%s.raw", dir.c_str(), frame,
                       image.name, image.width, image.height, image.format);
         scheduler.DeferPriorityOperation(
-            [allocator = instance.GetAllocator(), pooled, file = std::string{path}] {
-                const auto& [buffer, allocation, info, size] = pooled;
+            [allocator = instance.GetAllocator(), pooled, file = std::string{path},
+             width = image.width, height = image.height] {
+                const auto& [buffer, allocation, info, size, float16] = pooled;
                 vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
                 if (FILE* f = std::fopen(file.c_str(), "wb")) {
-                    std::fwrite(info.pMappedData, 1, size, f);
+                    if (float16) {
+                        // RGBA16F: the texels are halfs of the game's encoding, possibly above
+                        // its white — clamped into 8-bit RGBA for viewing.
+                        const auto* halfs = static_cast<const unsigned short*>(info.pMappedData);
+                        std::vector<unsigned char> rgba8(size_t(width) * height * 4);
+                        for (size_t p = 0; p < rgba8.size() / 4; ++p) {
+                            for (int c = 0; c < 3; ++c) {
+                                const unsigned short h = halfs[p * 4 + unsigned(c)];
+                                const int sign = h & 0x8000 ? -1 : 1;
+                                const int exponent = int((h >> 10) & 0x1F) - 15;
+                                const unsigned mantissa = h & 0x3FF;
+                                const float value =
+                                    exponent <= 0
+                                        ? 0.0f
+                                        : sign * std::ldexp(1.0f + float(mantissa) / 1024.0f,
+                                                            exponent);
+                                rgba8[p * 4 + unsigned(c)] =
+                                    static_cast<unsigned char>(std::clamp(value, 0.0f, 1.0f) *
+                                                               255.0f);
+                            }
+                            rgba8[p * 4 + 3] = 255;
+                        }
+                        std::fwrite(rgba8.data(), 1, rgba8.size(), f);
+                    } else {
+                        std::fwrite(info.pMappedData, 1, size, f);
+                    }
                     std::fclose(f);
                 }
                 std::scoped_lock lock{dump_pool_mutex};
@@ -234,6 +263,13 @@ void DumpFinalFrameIfDue(const Instance& instance, Scheduler& scheduler, vk::Com
     }
     std::printf("Final dump %d: GPU frame %llu\n", index,
                 (unsigned long long)BbStats::gpu_frames.load(std::memory_order_relaxed));
+    if (format == vk::Format::eR16G16B16A16Sfloat) {
+        // Native+: the frame is the chain's float image — converted for viewing.
+        DumpImages(instance, scheduler, cmdbuf, index++,
+                   {{image, width, height, 4, "final", "rgba16f", vk::ImageAspectFlagBits::eColor,
+                     true}});
+        return;
+    }
     const bool bgra = format == vk::Format::eB8G8R8A8Unorm || format == vk::Format::eB8G8R8A8Srgb;
     DumpImages(instance, scheduler, cmdbuf, index++,
                {{image, width, height, 4, "final", bgra ? "bgra" : "rgba"}});
