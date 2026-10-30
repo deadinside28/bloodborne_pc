@@ -1,0 +1,29 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport HDR, native+ (render/hdr_channel.cpp): the HUD's mask. At the display pass the
+// output-size UI image holds the frame with its UI drawn; the snapshot holds the same image
+// taken just before the first UI draw. A pixel the UI drew changed; one it left alone is the
+// snapshot's, bit for bit (both RGBA16F, copied, the UI's blending of nothing leaves it as it
+// is). The mask goes in the snapshot's alpha, which the present's encode reads as the HUD's
+// share (1: UI), to show the HUD at UI Brightness (hdr_ui_nits).
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform texture2D ui_img;               // the frame with its UI
+layout(binding = 1, rgba16f) uniform image2D snapshot_img;  // the frame before the UI
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, imageSize(snapshot_img)))) {
+        return;
+    }
+    vec3 before = imageLoad(snapshot_img, p).rgb;
+    vec3 now = texelFetch(ui_img, p, 0).rgb;
+    // Half-float rounding of a blend that changed nothing stays far below this; the faintest UI
+    // (a few percent of alpha over the scene) far above it.
+    vec3 change = abs(now - before);
+    float tolerance = 1e-3 * max(1.0, max(max(abs(before.r), abs(before.g)), abs(before.b)));
+    float ui = max(max(change.r, change.g), change.b) > tolerance ? 1.0 : 0.0;
+    imageStore(snapshot_img, p, vec4(before, ui));
+}

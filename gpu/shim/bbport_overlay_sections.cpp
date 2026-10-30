@@ -904,6 +904,17 @@ void HdrSection(BbSettings::Values& s) {
             "white. Live.",
             "Уводит самые тёмные серые тона игры к истинному чёрному (OLED), в нитах белого "
             "игры. Применяется сразу."));
+        Slider(BbSettings::MenuText("UI Brightness", "Яркость интерфейса"), s.hdr_ui_nits,
+               BbSettings::HdrUiNitsMin, BbSettings::HdrUiNitsMax);
+        Hint(BbSettings::MenuText(
+            "The HUD and menus' white, whatever the game's white (they are told apart by "
+            "comparing the frame with the one before the UI drew; a pixel the UI left alone "
+            "stays at the game's white). Keep this at the value of the other sliders' defaults "
+            "(203) unless the HUD looks off. Live.",
+            "Яркость белого интерфейса независимо от белого игры (интерфейс узнаётся сравнением "
+            "кадра с кадром до отрисовки интерфейса; нетронутые пиксели остаются при белом "
+            "игры). Держите на значении по умолчанию (203), если интерфейс не выглядит "
+            "неправильно. Применяется сразу."));
         ImGui::EndDisabled();
     }
     {

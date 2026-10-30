@@ -152,6 +152,9 @@ add_own_shader(render/shaders/hdr/bb_glow_source.frag bb_glow_source_hw_frag BB_
 add_own_shader(render/shaders/hdr/bb_color_grading.frag bb_color_grading_frag)
 add_own_shader(render/shaders/hdr/bb_color_grading.frag bb_color_grading_hw_frag BB_HW_INTERP=1)
 add_own_shader(render/shaders/hdr/bb_display_copy.frag bb_display_copy_frag)
+# The HUD's mask (the upscaler's pre-UI snapshot against the finished frame): the present shows
+# the HUD at UI Brightness through it.
+add_own_shader(render/shaders/hdr/hdr_ui_mask.comp hdr_ui_mask_comp)
 add_own_shader(upscale/shaders/camera_motion.comp camera_motion_comp)
 # GT-VBAO in place of the game's SSAO (upscale/vk_vbao.cpp, docs/vbao.md; contributed by redditor69).
 add_own_shader(upscale/shaders/vbao.comp vbao_comp)

@@ -133,6 +133,8 @@ Presenter::~Presenter() {
             vmaDestroyImage(instance.GetAllocator(), frame.image, frame.allocation);
         }
         DestroyInterpolated(frame);
+        frame.hdr_snapshot.Destroy();
+        frame.hdr_snapshot_view.reset();
         device.destroyFence(frame.present_done);
     }
     DestroyHdrTarget(hdr_game);
@@ -217,6 +219,10 @@ void Presenter::RecreateFrame(Frame& frame, u32 width, u32 height) {
     // Frame generation's frames (made with the first ones generated: most sessions never need
     // them).
     DestroyInterpolated(frame);
+    // Native+ HDR: the last frame's snapshot (its use was fenced by present_done).
+    frame.hdr_snapshot.Destroy();
+    frame.hdr_snapshot_view.reset();
+    frame.hdr_snapshot_ui_mask = false;
     frame.width = width;
     frame.height = height;
     frame.is_hdr = game_hdr.load(std::memory_order_relaxed);
@@ -267,6 +273,12 @@ Frame* Presenter::PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute
     }
 
     Frame* frame = GetRenderFrame();
+
+    // Native+ HDR: the display pass's masked pre-UI snapshot (the HUD at UI Brightness).
+    if (upscaled) {
+        upscaler.TakeHdrSnapshot(cpu_address, frame->hdr_snapshot, frame->hdr_snapshot_view,
+                                 frame->hdr_snapshot_ui_mask);
+    }
 
     // Recorded like draws, on the recording threads: CommandBuffer() would first wait for them
     // to record everything handed over before and then submit from this thread.
@@ -845,6 +857,9 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
                  (overlay ? HdrOutputPass::FlagOverlay : 0u) |
                  (debug ? HdrOutputPass::FlagDebug : 0u) |
                  (native16 ? HdrOutputPass::FlagNative16 : 0u) |
+                 (native16 && frame && frame->hdr_snapshot_ui_mask
+                      ? HdrOutputPass::FlagUiMask
+                      : 0u) |
                  (settings.hdr_compare.load(std::memory_order_relaxed)
                       ? HdrOutputPass::FlagCompare
                       : 0u),
@@ -853,6 +868,12 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
                                              0.0f, BbSettings::HdrBlackFloorMax) /
                                       std::max(paper_white, 1.0f)
                                 : 0.0f,
+        // Native+: the HUD at UI Brightness (the snapshot's mask), as a factor of paper white.
+        .ui_white = native16 && frame && frame->hdr_snapshot_ui_mask
+                        ? std::clamp(settings.hdr_ui_nits.load(std::memory_order_relaxed),
+                                     BbSettings::HdrUiNitsMin, BbSettings::HdrUiNitsMax) /
+                              std::max(paper_white, 1.0f)
+                        : 1.0f,
     };
     const vk::ImageMemoryBarrier2 to_attachment{
         .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
@@ -865,6 +886,8 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
     };
     cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_attachment});
     hdr_pass.Render(cmdbuf, hdr_game.view, overlay ? hdr_overlay.view : hdr_game.view,
+                    frame && frame->hdr_snapshot_view ? *frame->hdr_snapshot_view
+                                                      : hdr_game.view,
                     swapchain.ImageView(), extent, encode);
     const vk::ImageMemoryBarrier2 to_present{
         .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,

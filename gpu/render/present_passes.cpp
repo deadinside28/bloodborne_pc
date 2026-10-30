@@ -171,6 +171,12 @@ void HdrOutputPass::Create(vk::Device device, vk::Format output_format) {
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment,
         },
+        vk::DescriptorSetLayoutBinding{
+            .binding = 2,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = 1,
+            .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        },
     };
     desc_set_layout = Check<"create HDR output set layout">(device.createDescriptorSetLayoutUnique({
         .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
@@ -250,7 +256,7 @@ void HdrOutputPass::Create(vk::Device device, vk::Format output_format) {
 }
 
 void HdrOutputPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView game, vk::ImageView overlay,
-                           vk::ImageView output, vk::Extent2D output_size,
+                           vk::ImageView snapshot, vk::ImageView output, vk::Extent2D output_size,
                            const Settings& settings) {
     const vk::RenderingAttachmentInfo attachment{
         .imageView = output,
@@ -269,6 +275,11 @@ void HdrOutputPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView game, vk::Ima
             .imageView = overlay,
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         },
+        vk::DescriptorImageInfo{
+            .sampler = *sampler,
+            .imageView = snapshot,
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        },
     };
     const std::array writes{
         vk::WriteDescriptorSet{
@@ -282,6 +293,12 @@ void HdrOutputPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView game, vk::Ima
             .descriptorCount = 1,
             .descriptorType = vk::DescriptorType::eCombinedImageSampler,
             .pImageInfo = &images[1],
+        },
+        vk::WriteDescriptorSet{
+            .dstBinding = 2,
+            .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .pImageInfo = &images[2],
         },
     };
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline);

@@ -149,6 +149,10 @@ public:
         u32 width, height;
     };
     bool DisplayOverride(VAddr address, Display& display);
+    /// Native+ HDR: the masked pre-UI snapshot of the frame shown at `address`, moved into the
+    /// caller's hands (the presenter's frame; the HUD at UI Brightness goes through it).
+    bool TakeHdrSnapshot(VAddr address, VideoCore::HostImage& image, vk::UniqueImageView& view,
+                         bool& ui_mask);
     /// The game's display pass of `address` begins (recording thread): frame generation
     /// interpolates this frame now, its scene with the UI complete.
     void OnDisplayPassStart(VAddr address);
@@ -306,12 +310,32 @@ private:
     vk::ImageView Mirror(vk::Image image, std::vector<MirrorView>& views, vk::Format format,
                          vk::ComponentMapping mapping);
     std::vector<MirrorView> ui_views;
+    /// Native+ HDR: the frame before the first UI draw (a copy of the UI image, float like it).
+    /// At the display pass hdr_ui_mask.comp writes the HUD's mask into its alpha (the pixels the
+    /// UI changed); the present shows the HUD at UI Brightness through it.
+    VideoCore::HostImage hdr_snapshot;
+    vk::UniqueImageView hdr_snapshot_view;
+    bool hdr_snapshot_ready = false;  ///< this frame's scene copy is in (its mask not yet)
+    bool hdr_snapshot_masked = false; ///< masked, on its way to the presenter
+    vk::UniqueDescriptorSetLayout hdr_ui_mask_desc_layout;
+    vk::UniquePipelineLayout hdr_ui_mask_pipeline_layout;
+    vk::UniquePipeline hdr_ui_mask_pipeline;
+    /// Copies the UI image (the scene alone at this point) into the snapshot. Recorded before
+    /// the triggering UI draw writes (RedirectColor calls it first).
+    void SnapshotHdrUi();
+    /// The display pass is next: the UI image holds the frame with its UI — the mask pass
+    /// compares the two and publishes the snapshot for the presenter at `address`.
+    void MaskHdrSnapshot(VAddr address);
     struct DisplayImage {
         VideoCore::HostImage image;
         std::vector<MirrorView> views;
         vk::Format format{};
         u32 width = 0, height = 0;
         bool valid = false;
+        /// Native+ HDR: the masked pre-UI snapshot of the frame this image holds.
+        VideoCore::HostImage snapshot;
+        vk::UniqueImageView snapshot_view;
+        bool ui_mask = false;
     };
     std::mutex display_mutex;
     int present_dump_remaining = 0, present_dump_index = 0;

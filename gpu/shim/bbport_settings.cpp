@@ -147,6 +147,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "hdr_black_floor") {
         v.hdr_black_floor =
             Clamp(std::isfinite(f) ? f : HdrBlackFloorDefault, 0.0f, HdrBlackFloorMax);
+    } else if (key == "hdr_ui_nits") {
+        v.hdr_ui_nits = Clamp(std::isfinite(f) ? f : HdrUiNitsDefault, HdrUiNitsMin, HdrUiNitsMax);
     } else if (key == "hdr_mode") {
         // "psychov30": lantern.ini's value of the native+ mode in the source port (a file copied
         // from there keeps working). Unknown values stay native+ (the point of the port).
@@ -359,7 +361,7 @@ void Load() {
         {"BB_HDR", "hdr"},                          {"BB_HDR_PAPER_WHITE", "hdr_paper_white"},
         {"BB_HDR_PEAK", "hdr_peak"},                {"BB_HDR_BOOST", "hdr_boost"},
         {"BB_HDR_MODE", "hdr_mode"},                {"BB_HDR_BLOOM", "hdr_bloom"},
-        {"BB_HDR_BLACK_FLOOR", "hdr_black_floor"},
+        {"BB_HDR_BLACK_FLOOR", "hdr_black_floor"},  {"BB_HDR_UI_NITS", "hdr_ui_nits"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -545,6 +547,7 @@ void Save() {
     put("hdr_knee", fixed(v.hdr_knee, 2));
     put("hdr_bloom", fixed(v.hdr_bloom, 0));
     put("hdr_black_floor", fixed(v.hdr_black_floor, 2));
+    put("hdr_ui_nits", fixed(v.hdr_ui_nits, 0));
     if (v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));
     }

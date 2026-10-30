@@ -7,11 +7,13 @@
 
 #include "upscale/vk_temporal_upscaler.h"
 #include "shim/bb_env.h"
+#include "bbgpu/shaders/hdr_ui_mask_comp.h"
 #include "render/hdr_channel.h"
 #include "render/vk_gpu_profiler.h"
 #include "upscale/motion_history.h"
 #include "upscale/vk_scene_resolution.h"
 #include "upscale/ui_composition.h"
+#include "vulkan/shader_module.h"
 
 #include <array>
 #include <atomic>
@@ -228,6 +230,11 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
                 frame_generation->CaptureHudless(vk::Image(ui_image));
             }
         }
+        // Native+ HDR: the same point for the pre-UI snapshot (the HUD's mask compares against
+        // it) — recorded before this draw's writes land in the image.
+        if (!hdr_snapshot_ready && hdr_snapshot_view) {
+            SnapshotHdrUi();
+        }
         target = {Mirror(vk::Image(ui_image), ui_views, view_info.format, {}),
                   vk::ImageLayout::eGeneral, ui_width, ui_height, true};
         return true;
@@ -377,6 +384,9 @@ void TemporalUpscaler::CaptureFrameGenScene(vk::Image depth_image, vk::Format de
 }
 
 void TemporalUpscaler::OnDisplayPassStart(VAddr address) {
+    // Native+ HDR: the UI image now holds the frame with its UI — write the HUD's mask into the
+    // snapshot's alpha and hand it to the presenter for this display buffer.
+    MaskHdrSnapshot(address);
     // Periodically clean up stale proxy render targets to prevent VRAM leak during level transitions.
     static u64 last_cleanup_frame = 0;
     const u64 current_frame = BbStats::frame_number.load(std::memory_order_relaxed);
@@ -433,6 +443,150 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
     if (PresentDumpDue()) {
         DumpPresented(display.image, display.width, display.height, display.format);
     }
+    return true;
+}
+
+void TemporalUpscaler::SnapshotHdrUi() {
+    scheduler.EndRendering();
+    const vk::ImageMemoryBarrier2 barriers[2]{{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite,
+        .oldLayout = vk::ImageLayout::eGeneral,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = vk::Image(ui_image),
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+    },
+    {
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .oldLayout = vk::ImageLayout::eUndefined,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = vk::Image(hdr_snapshot),
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+    }};
+    const vk::Extent3D extent = ui_image.image_ci.extent;
+    const vk::Offset3D extent_offset{s32(extent.width), s32(extent.height), 1};
+    scheduler.Record([src = vk::Image(ui_image), dst = vk::Image(hdr_snapshot), extent_offset,
+                      barriers](vk::CommandBuffer cmd) {
+        cmd.pipelineBarrier2({.imageMemoryBarrierCount = u32(std::size(barriers)),
+                              .pImageMemoryBarriers = barriers});
+        cmd.blitImage(src, vk::ImageLayout::eGeneral, dst, vk::ImageLayout::eGeneral,
+                      vk::ImageBlit{
+                          .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                          .srcOffsets = std::array{vk::Offset3D{}, extent_offset},
+                          .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                          .dstOffsets = std::array{vk::Offset3D{}, extent_offset},
+                      },
+                      vk::Filter::eNearest);
+    });
+    hdr_snapshot_ready = true;
+}
+
+void TemporalUpscaler::MaskHdrSnapshot(VAddr address) {
+    if (!hdr_snapshot_ready || !hdr_snapshot_view || !ui_image || !ui_view) {
+        hdr_snapshot_ready = false;
+        return;
+    }
+    // The mask pipeline, with the upscaler's resources (made on first use).
+    if (!hdr_ui_mask_pipeline) {
+        const vk::DescriptorSetLayoutBinding bindings[2]{
+            {.binding = 0, .descriptorType = vk::DescriptorType::eSampledImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+            {.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+        };
+        hdr_ui_mask_desc_layout = Check<"create the HUD mask set layout">(
+            instance.GetDevice().createDescriptorSetLayoutUnique({
+                .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+                .bindingCount = 2, .pBindings = bindings,
+            }));
+        const vk::DescriptorSetLayout set = *hdr_ui_mask_desc_layout;
+        hdr_ui_mask_pipeline_layout = Check<"create the HUD mask layout">(
+            instance.GetDevice().createPipelineLayoutUnique({
+                .setLayoutCount = 1, .pSetLayouts = &set,
+            }));
+        hdr_ui_mask_pipeline = Check<"create the HUD mask pipeline">(
+            instance.GetDevice().createComputePipelineUnique(
+                {}, vk::ComputePipelineCreateInfo{
+                        .stage = {.stage = vk::ShaderStageFlagBits::eCompute,
+                                  .module = CompileSPV(HDR_UI_MASK_COMP, instance.GetDevice()),
+                                  .pName = "main"},
+                        .layout = *hdr_ui_mask_pipeline_layout,
+                    }));
+    }
+    // The UI image sampled as it is (its float format, General layout).
+    const vk::ImageView ui_sampled = Mirror(vk::Image(ui_image), ui_views, ui_format, {});
+    const vk::ImageView snapshot_sampled = *hdr_snapshot_view;
+    scheduler.EndRendering();
+    const auto all = vk::PipelineStageFlagBits2::eAllCommands;
+    const auto compute = vk::PipelineStageFlagBits2::eComputeShader;
+    const auto rw = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
+    const vk::ImageSubresourceRange color{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+    const std::array<vk::ImageMemoryBarrier2, 2> before{{
+        {.srcStageMask = all, .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+         .dstStageMask = compute, .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+         .oldLayout = vk::ImageLayout::eGeneral, .newLayout = vk::ImageLayout::eGeneral,
+         .image = vk::Image(ui_image), .subresourceRange = color},
+        {.srcStageMask = all, .srcAccessMask = rw,
+         .dstStageMask = compute,
+         .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead |
+                          vk::AccessFlagBits2::eShaderStorageWrite,
+         .oldLayout = vk::ImageLayout::eGeneral, .newLayout = vk::ImageLayout::eGeneral,
+         .image = vk::Image(hdr_snapshot), .subresourceRange = color},
+    }};
+    const vk::Extent3D extent = hdr_snapshot.image_ci.extent;
+    scheduler.Record([=, layout = *hdr_ui_mask_pipeline_layout,
+                      pipeline = *hdr_ui_mask_pipeline](vk::CommandBuffer cmd) {
+        // Built in the lambda: the writes point at the copies' own arrays.
+        const std::array<vk::DescriptorImageInfo, 2> infos{{
+            {.imageView = ui_sampled, .imageLayout = vk::ImageLayout::eGeneral},
+            {.imageView = snapshot_sampled, .imageLayout = vk::ImageLayout::eGeneral},
+        }};
+        const std::array<vk::WriteDescriptorSet, 2> writes{{
+            {.dstBinding = 0, .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eSampledImage, .pImageInfo = &infos[0]},
+            {.dstBinding = 1, .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &infos[1]},
+        }};
+        cmd.pipelineBarrier2({.imageMemoryBarrierCount = u32(std::size(before)),
+                              .pImageMemoryBarriers = before.data()});
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline);
+        cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, layout, 0, writes);
+        cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+        // The display pass reads the UI image next, the present's encode the snapshot.
+        const vk::MemoryBarrier2 done{.srcStageMask = compute,
+                                      .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite |
+                                                       vk::AccessFlagBits2::eShaderSampledRead,
+                                      .dstStageMask = all, .dstAccessMask = rw};
+        cmd.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &done});
+    });
+    hdr_snapshot_ready = false;
+    hdr_snapshot_masked = true;
+    // The snapshot belongs to the display buffer this pass fills.
+    {
+        std::scoped_lock lock{display_mutex};
+        auto& display = displays[address];
+        display.snapshot = std::move(hdr_snapshot);
+        display.snapshot_view = std::move(hdr_snapshot_view);
+        display.ui_mask = true;
+        hdr_snapshot = VideoCore::HostImage{}; // a fresh one for the next frame
+    }
+}
+
+bool TemporalUpscaler::TakeHdrSnapshot(VAddr address, VideoCore::HostImage& image,
+                                       vk::UniqueImageView& view, bool& ui_mask) {
+    std::scoped_lock lock{display_mutex};
+    const auto it = displays.find(address);
+    if (it == displays.end() || !it->second.valid || !it->second.ui_mask || !it->second.snapshot) {
+        return false;
+    }
+    image = std::move(it->second.snapshot);
+    view = std::move(it->second.snapshot_view);
+    ui_mask = it->second.ui_mask;
+    it->second.ui_mask = false;
     return true;
 }
 

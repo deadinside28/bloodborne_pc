@@ -66,6 +66,12 @@ struct Frame {
     std::array<FrameGeneration::Output, MaxInterp> interp_async{};
     EncodePass::Settings interp_encode{};
     vk::Format interp_view_format{};
+    /// Native+ HDR: the frame's masked pre-UI snapshot (its alpha is the HUD's mask; the encode
+    /// shows the HUD at UI Brightness through it). Taken at PrepareFrame, freed when the frame
+    /// is recreated (its fence waited first).
+    VideoCore::HostImage hdr_snapshot{};
+    vk::UniqueImageView hdr_snapshot_view{};
+    bool hdr_snapshot_ui_mask = false;
     /// Low latency: the frame's ID for the driver (0: a blank frame).
     u64 present_id = 0;
 };

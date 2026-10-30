@@ -12,8 +12,9 @@
 
 layout(location = 0) out vec4 color;
 
-layout(binding = 0) uniform sampler2D game;    // the letterboxed SDR frame, swapchain-sized
-layout(binding = 1) uniform sampler2D overlay; // the menu layer (FLAG_OVERLAY)
+layout(binding = 0) uniform sampler2D game;     // the letterboxed SDR frame, swapchain-sized
+layout(binding = 1) uniform sampler2D overlay;  // the menu layer (FLAG_OVERLAY)
+layout(binding = 2) uniform sampler2D snapshot; // the frame before the UI (FLAG_UI_MASK)
 
 layout(push_constant) uniform Settings {
     float paper_white; // nits of SDR white
@@ -21,6 +22,7 @@ layout(push_constant) uniform Settings {
     float boost;       // 0: SDR white at paper white .. 1: SDR white at the peak
     uint flags;
     float black_floor; // Native+: the game's darkest greys taken down to true black (of its white)
+    float ui_white;    // Native+: the HUD's white as a factor of paper white
 } hdr;
 
 const uint FLAG_SCRGB = 1u;   // scRGB output, else HDR10
@@ -32,6 +34,9 @@ const uint FLAG_COMPARE = 8u; // the left half as SDR (at paper white), for comp
 // decodes with the same 2.2 and is shown as it is (the game's look at paper white where a frame
 // has nothing above it).
 const uint FLAG_NATIVE16 = 16u;
+// Native+: the snapshot's alpha is the HUD's mask (hdr_ui_mask.comp); the HUD is shown at UI
+// Brightness (ui_white).
+const uint FLAG_UI_MASK = 32u;
 
 // Linear brightness (SDR white = 1) above which the highlights are expanded: high, so large
 // bright areas (fog, sky) stay near paper white and only lamps, fire and sparks reach the peak.
@@ -95,6 +100,13 @@ void main() {
         linear = sdr_linear;
         if (hdr.black_floor > 0.0) {
             linear = max(linear - vec3(hdr.black_floor), vec3(0.0)) / (1.0 - hdr.black_floor);
+        }
+        // The HUD (the mask in the snapshot's alpha): shown at UI Brightness — its pixels
+        // brightened by the HUD's white over the game's — while the scene stays as it is.
+        if ((hdr.flags & FLAG_UI_MASK) != 0u) {
+            float ui = texture(snapshot, gl_FragCoord.xy / vec2(textureSize(snapshot, 0))).a;
+            ui = clamp(ui, 0.0, 1.0);
+            linear = mix(linear, linear * max(hdr.ui_white, 0.0), ui);
         }
     } else {
         linear = ExpandHighlights(sdr_linear, white);

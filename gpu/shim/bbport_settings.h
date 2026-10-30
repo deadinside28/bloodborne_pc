@@ -63,11 +63,12 @@ inline constexpr float HdrPeakDefault = 1000.0f, HdrPeakMin = 100.0f, HdrPeakMax
 /// Expand mode only: 0 the SDR picture as it is .. 1 its white at the peak.
 inline constexpr float HdrBoostDefault = 0.25f;
 /// Native+ (the scene chain): the knee below which the game's own curve stands (a fraction of
-/// its white), the glow's strength (50 = the game's), and how far the darkest greys are taken
-/// down to true black (nits of the game's white).
+/// its white), the glow's strength (50 = the game's), how far the darkest greys are taken down
+/// to true black (nits of the game's white), and the HUD and menus' white (UI Brightness).
 inline constexpr float HdrKneeDefault = 0.60f, HdrKneeMin = 0.10f, HdrKneeMax = 0.95f;
 inline constexpr float HdrBloomDefault = 50.0f;
 inline constexpr float HdrBlackFloorDefault = 0.0f, HdrBlackFloorMax = 2.0f;
+inline constexpr float HdrUiNitsDefault = 203.0f, HdrUiNitsMin = 48.0f, HdrUiNitsMax = 500.0f;
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
 /// menu label, default (the game's own behaviour).
@@ -261,9 +262,10 @@ struct Values {
     std::atomic<bool> hdr{false};
     std::atomic<float> hdr_paper_white{HdrPaperWhiteDefault}, hdr_peak{HdrPeakDefault},
         hdr_boost{HdrBoostDefault};
-    /// Native+ (live): the knee below the game's white, the glow's strength, the black floor.
+    /// Native+ (live): the knee below the game's white, the glow's strength, the black floor,
+    /// and the HUD's white (UI Brightness; the masked pixels of the scene chain's frame).
     std::atomic<float> hdr_knee{HdrKneeDefault}, hdr_bloom{HdrBloomDefault},
-        hdr_black_floor{HdrBlackFloorDefault};
+        hdr_black_floor{HdrBlackFloorDefault}, hdr_ui_nits{HdrUiNitsDefault};
     /// Peak Brightness from the display (shim/window.cpp's DXGI probe) while the display
     /// reports one; hdr_peak is the fallback and the manual value.
     std::atomic<bool> hdr_peak_auto{true};

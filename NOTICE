@@ -28,3 +28,16 @@ Code bbport is built on, with its own notices kept in its files:
   tools/fsr4cap/ffx, with AMD's notices.
 - The libraries in gpu/third_party (sirit, imgui, half, httplib, fsr-vulkan and others), each under
   its own license in its folder.
+- The HDR implementation (gpu/render/hdr_channel.*, gpu/render/bb_tonemap_variants.h,
+  gpu/render/shaders/hdr/, gpu/render/shaders/hdr_output.frag) is adapted from
+  LanternEngine-NativePlusHDR (https://github.com/LRF17/LanternEngine-NativePlusHDR,
+  GPL-2.0-or-later, Copyright 2026 bbport), whose HDR integration itself is not affiliated with
+  or endorsed by RenoDX.
+- RenoDX (https://github.com/clshortfuse/renodx, MIT, Copyright (C) Carlos Lopez (ShortFuse) and
+  contributors): gpu/render/shaders/hdr/renodx.glsl, psychov30.glsl and gamut_bridge.glsl are
+  GLSL ports of its shader library (the colorimetry, Neutwo and its inverse, UpgradeToneMap,
+  PsychoV-30, the grading, CInfinityRollOff and the gamut and LUT bridges), with its MIT notice
+  kept in the files.
+- Vanilla+, the default tone mapper of the HDR scene mode (the game's curve up to mid grey,
+  continued above it to the display's peak), is souperman9's, from his RenoDX Bloodborne mod.
+  The HDR settings menu's layout follows a RenoDX mod's.
