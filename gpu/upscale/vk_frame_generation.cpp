@@ -16,6 +16,7 @@
 #include <vk_mem_alloc.h>
 
 #include "bbport_settings.h"
+#include "render/hdr_channel.h"
 #include "common/thread.h"
 #include "ffx_vk_portable.h"
 #include "bbgpu/shaders/fg_display_lut_comp.h"
@@ -731,8 +732,24 @@ FrameGeneration::Job FrameGeneration::BuildFsr(vk::Image color, vk::Image motion
     dispatch.cameraVerticalFovRadians = scene.vertical_fov;
     dispatch.viewSpaceToMeters = 1.0f;
     dispatch.minLuminance = 0.0f;
-    dispatch.maxLuminance = 1.0f;
-    dispatch.transferFunction = FFX_VK_PORTABLE_TRANSFER_FUNCTION_SRGB;
+    // Native+ HDR (render/hdr_channel.cpp): the chain's values are the game's encoding with the
+    // highlights above its white, up to the display's peak. FSR's sRGB transfer assumes 0..1
+    // (its optical flow stores the luminance in 8 bits and overflowed above white); as scRGB
+    // with the encoded peak as its maximum luminance they map to 0..1. The interpolation itself
+    // blends the raw values either way.
+    const bool chain16 = scene.color_format == HdrChannel::Native16Format;
+    const float peak_over_paper = [&] {
+        if (!chain16) {
+            return 1.0f;
+        }
+        const auto& settings = BbSettings::Get();
+        const float paper =
+            std::max(settings.hdr_paper_white.load(std::memory_order_relaxed), 1.0f);
+        return std::max(BbSettings::HdrPeakNits(settings) / paper, 1.0f);
+    }();
+    dispatch.maxLuminance = 80.0f * std::pow(peak_over_paper, 1.0f / 2.2f);
+    dispatch.transferFunction = chain16 ? FFX_VK_PORTABLE_TRANSFER_FUNCTION_SCRGB
+                                        : FFX_VK_PORTABLE_TRANSFER_FUNCTION_SRGB;
     dispatch.reset = reset ? VK_TRUE : VK_FALSE;
     dispatch.frameId = id;
 
@@ -773,8 +790,9 @@ FrameGeneration::Job FrameGeneration::BuildFsr(vk::Image color, vk::Image motion
     prepare.cameraVerticalFovRadians = scene.vertical_fov;
     prepare.viewSpaceToMeters = 1.0f;
     prepare.minLuminance = 0.0f;
-    prepare.maxLuminance = 1.0f;
-    prepare.transferFunction = FFX_VK_PORTABLE_TRANSFER_FUNCTION_SRGB;
+    prepare.maxLuminance = 80.0f * std::pow(peak_over_paper, 1.0f / 2.2f);
+    prepare.transferFunction = chain16 ? FFX_VK_PORTABLE_TRANSFER_FUNCTION_SCRGB
+                                       : FFX_VK_PORTABLE_TRANSFER_FUNCTION_SRGB;
     prepare.cameraPosition = {scene.camera_position[0], scene.camera_position[1], scene.camera_position[2]};
     prepare.cameraUp = {scene.camera_up[0], scene.camera_up[1], scene.camera_up[2]};
     prepare.cameraRight = {scene.camera_right[0], scene.camera_right[1], scene.camera_right[2]};
