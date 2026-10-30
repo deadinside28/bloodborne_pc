@@ -853,7 +853,25 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
     const float peak = BbSettings::HdrPeakNits(settings);
     const float boost = std::clamp(settings.hdr_boost.load(std::memory_order_relaxed), 0.0f, 1.0f);
     const float expand_white = std::max(1.0f + (peak / paper_white - 1.0f) * boost, 1.0f);
-    swapchain.SetHdrMetadata(peak, std::min(peak, paper_white * expand_white), paper_white);
+    // MaxLuminance is the display's peak; MaxCLL the brightest content. In native+ the chain
+    // already extends the scene above the game's white, so the content can reach the display's
+    // peak itself — an SDR-derived 203 made HDR analysis tools report the content as 203.
+    swapchain.SetHdrMetadata(peak, HdrChannel::Native16() ? peak : std::min(peak, paper_white * expand_white),
+                             paper_white);
+    static const bool told_metadata = [] {
+        const auto& s = BbSettings::Get();
+        const float paper = std::clamp(s.hdr_paper_white.load(), BbSettings::HdrPaperWhiteMin,
+                                       BbSettings::HdrPaperWhiteMax);
+        LOG_INFO(Render_Vulkan, "HDR output: metadata: display {} nits, content {} nits, paper {} nits",
+                 HdrChannel::PeakNits(), HdrChannel::Native16() ? HdrChannel::PeakNits() : paper,
+                 paper);
+        std::printf("HDR output: metadata: display %u nits, content %u nits, paper %u nits\n",
+                    unsigned(HdrChannel::PeakNits()),
+                    unsigned(HdrChannel::Native16() ? HdrChannel::PeakNits() : paper),
+                    unsigned(paper));
+        return true;
+    }();
+    (void)told_metadata;
     static const bool debug = bb_env("BB_HDR_DEBUG") != nullptr;
     const bool native16 = HdrChannel::Native16();
     const HdrOutputPass::Settings encode{
