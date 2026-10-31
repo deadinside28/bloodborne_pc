@@ -347,6 +347,10 @@ void main() {
     vec3 mult = texture(sampler2D(bb_img_mult, bb_samp_mult), BB_IN_UV(bb_in_mult)).rgb;
     vec3 bloom = textureLod(sampler2D(bb_img_bloom, bb_samp_bloom), BB_IN_UV(bb_in_bloom), 0.0).rgb;
     vec2 vig_uv = (BB_COS4 || BB_VIG888) ? BB_IN_UV(bb_in_vig) : vec2(0.0);
+    // The scene texture's guest component mapping (A8B8G8R8: red and blue exchange). Only the
+    // scene: swapping the multiplier with it cancels out (scene.bgr * tint(mult.bgr) is still
+    // swapped) — measured with probe 4, which shows this exact colour on screen.
+    scene.rgb = scene.bgr;
 
     // The game's output, and the same with the HDR curve.
     vec3 ms = bb_scene_tint(mult);
@@ -417,6 +421,12 @@ void main() {
             }
             delta = hdr_out - game_out;
         }
+        // Chain probe 8 (test): a constant red delta � no game_out, no curve: if the scene turns
+        // BLUE instead of red, the delta's write swaps red and blue.
+        if (push_data.bb_hdr.z == 8u) {
+            frag_color0 = vec4(0.4, 0.0, 0.0, 0.0);
+            return;
+        }
         // Chain probe 6 (test): the delta itself. The target already holds the game's own colour,
         // so writing 0.5 - game_out lands on mid grey where our reconstruction matches it, and
         // shows the error (bright, dark, coloured) everywhere else — amplified 4x.
@@ -433,12 +443,7 @@ void main() {
             return;
         }
         // PsychoV30 (scene) replaces the game's curve, so it may also darken.
-        // The guest target's component mapping (A8B8G8R8: red and blue exchange): the recompiler
-        // swizzles the game shaders' writes, so this pass must too — written raw, the delta went
-        // into the opposite channels and the whole scene looked blue while the UI (drawn by the
-        // game's own shaders) stayed right.
-        vec3 delta_out = (scaled || psycho_scene) ? delta : max(delta, 0.0);
-        frag_color0 = vec4(delta_out.bgr, 0.0);
+        frag_color0 = vec4((scaled || psycho_scene) ? delta : max(delta, 0.0), 0.0);
         // Chain probe (in-game menu, test; bb_hdr.z set for this draw by bbport): green where
         // the HDR image is above the game's white (PsychoV30), or where this draw adds light
         // to it (the other tone mappers). The delta makes the target exactly green at white: a
