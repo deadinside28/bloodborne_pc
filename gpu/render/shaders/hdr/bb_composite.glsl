@@ -267,9 +267,16 @@ vec3 bb_grade(BbComposite o, vec3 s) {
     if (!o.grade) {
         return s;
     }
-    return vec3(bb_c(840u) * s.r + bb_c(841u) * s.g + bb_c(842u) * s.b + bb_c(843u),
-                bb_c(844u) * s.r + bb_c(845u) * s.g + bb_c(846u) * s.b + bb_c(847u),
-                bb_c(848u) * s.r + bb_c(849u) * s.g + bb_c(850u) * s.b + bb_c(851u));
+    vec3 r0 = vec3(bb_c(840u), bb_c(841u), bb_c(842u));
+    vec3 r1 = vec3(bb_c(844u), bb_c(845u), bb_c(846u));
+    vec3 r2 = vec3(bb_c(848u), bb_c(849u), bb_c(850u));
+    vec3 o0 = vec3(bb_c(843u), bb_c(847u), bb_c(851u));
+    // The composite's constant buffer holds no numbers in 840..851 in this game build (they read
+    // NaN): the matrix would poison every pixel. The colour goes through unchanged there.
+    if (any(isnan(r0)) || any(isnan(r1)) || any(isnan(r2)) || any(isnan(o0))) {
+        return s;
+    }
+    return vec3(dot(r0, s) + o0.x, dot(r1, s) + o0.y, dot(r2, s) + o0.z);
 }
 
 // The game's output (grain and alpha aside), in export order: rows 840, 844, 848.

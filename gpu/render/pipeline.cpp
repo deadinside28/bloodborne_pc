@@ -609,7 +609,27 @@ GraphicsPipeline::GraphicsPipeline(
                 .module = delta,
                 .pName = "main",
             };
-            hdr_pipeline = CheckPipeline(device.createGraphicsPipelineUnique(pipeline_cache, pipeline_ci),
+            // The delta goes over the game's own colour: add it (the game's blend state would
+            // blend it — the scene came out dark and without red). Alpha keeps the game's.
+            const vk::PipelineColorBlendAttachmentState delta_attachment{
+                .blendEnable = true,
+                .srcColorBlendFactor = vk::BlendFactor::eOne,
+                .dstColorBlendFactor = vk::BlendFactor::eOne,
+                .colorBlendOp = vk::BlendOp::eAdd,
+                .srcAlphaBlendFactor = vk::BlendFactor::eZero,
+                .dstAlphaBlendFactor = vk::BlendFactor::eOne,
+                .alphaBlendOp = vk::BlendOp::eAdd,
+                .colorWriteMask = vk::ColorComponentFlagBits::eR |
+                                  vk::ColorComponentFlagBits::eG |
+                                  vk::ColorComponentFlagBits::eB,
+            };
+            auto delta_blending = color_blending;
+            delta_blending.logicOpEnable = false;
+            delta_blending.attachmentCount = 1;
+            delta_blending.pAttachments = &delta_attachment;
+            auto delta_ci = pipeline_ci;
+            delta_ci.pColorBlendState = &delta_blending;
+            hdr_pipeline = CheckPipeline(device.createGraphicsPipelineUnique(pipeline_cache, delta_ci),
                                          preloading, "HDR delta");
             SetObjectName(device, *hdr_pipeline, "HDR Delta Pipeline {}", debug_name);
         }
