@@ -1107,9 +1107,17 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
         }
         if (left > 0 && !blank) {
             --left;
-            DumpPresented(instance, present_scheduler, cmdbuf, source ? source : frame->image,
-                          frame->width, frame->height, swapchain.GetSurfaceFormat().format, index++,
-                          source ? "interp" : "real");
+            const vk::Image dumped = source ? source : frame->image;
+            if (HdrChannel::Native16()) {
+                // Native+: the frame is the chain's float image — converted for viewing.
+                DumpPresentedFloat16(instance, present_scheduler, cmdbuf, dumped,
+                                     frame->width, frame->height, index++,
+                                     source ? "interp" : "real", frame->source_format);
+            } else {
+                DumpPresented(instance, present_scheduler, cmdbuf, dumped,
+                              frame->width, frame->height, swapchain.GetSurfaceFormat().format,
+                              index++, source ? "interp" : "real");
+            }
         }
     }
     RecordPresent(cmdbuf, blank ? nullptr : frame, swapchain.Image(), extent, source);

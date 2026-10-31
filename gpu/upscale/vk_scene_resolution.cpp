@@ -279,9 +279,11 @@ void SceneTargets::Copy(Entry& e, VideoCore::Image& original, bool to_native) {
     const Runtime::TransferMark mark{runtime, to_native ? "scene proxy resolve" : "scene proxy fill",
                                      original};
     if (debug) {
-        std::printf("Scene %s: %s %ux%u level %u\n", to_native ? "resolve" : "fill",
+        std::printf("Scene %s: %s %ux%u level %u, guest %#llx\n",
+                    to_native ? "resolve" : "fill",
                     vk::to_string(original.info.pixel_format).c_str(), original.info.size.width,
-                    original.info.size.height, e.level);
+                    original.info.size.height, e.level,
+                    (unsigned long long)original.info.guest_address);
     }
     const vk::Image src = to_native ? vk::Image(e.image) : original.GetImage();
     const vk::Image dst = to_native ? original.GetImage() : vk::Image(e.image);

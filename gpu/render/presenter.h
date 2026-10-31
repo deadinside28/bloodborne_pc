@@ -75,6 +75,9 @@ struct Frame {
     /// Native+ HDR: the frame image holds LINEAR values (an sRGB view decoded the game's
     /// encoding when it was sampled), so the present must not decode them again.
     bool hdr_linear = false;
+    /// Native+ HDR: the format of the image this frame was encoded from (16F when the chain
+    /// engaged; the game's 8-bit form otherwise) — the frame dump reads it as that format.
+    vk::Format source_format{};
     /// Low latency: the frame's ID for the driver (0: a blank frame).
     u64 present_id = 0;
 };

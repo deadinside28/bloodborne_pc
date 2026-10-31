@@ -53,6 +53,11 @@ void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer c
 void DumpPresented(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
                    vk::Image image, u32 width, u32 height, vk::Format format, int index,
                    const char* name);
+/// The same, for the native+ chain's float frame: converted to viewable 8-bit RGBA (the frame
+/// holds the game's encoding, possibly above its white — clamped for the picture).
+void DumpPresentedFloat16(const Instance& instance, Scheduler& scheduler,
+                          vk::CommandBuffer cmdbuf, vk::Image image, u32 width, u32 height,
+                          int index, const char* name, vk::Format source_format);
 void DumpFinalFrameIfDue(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
                          vk::Image image, u32 width, u32 height, vk::Format format);
 

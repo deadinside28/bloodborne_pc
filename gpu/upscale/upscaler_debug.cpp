@@ -204,6 +204,23 @@ void DumpImages(const Instance& instance, Scheduler& scheduler, vk::CommandBuffe
                             rgba8[p * 4 + 3] = 255;
                         }
                         std::fwrite(rgba8.data(), 1, rgba8.size(), f);
+                        float max_value = 0.0f;
+                        for (size_t p = 0; p < rgba8.size() / 4; ++p) {
+                            for (int c = 0; c < 3; ++c) {
+                                const unsigned short h = halfs[p * 4 + unsigned(c)];
+                                const int exponent = int((h >> 10) & 0x1F) - 15;
+                                const unsigned mantissa = h & 0x3FF;
+                                if (exponent > 0) {
+                                    max_value = std::max(max_value,
+                                        std::ldexp(1.0f + float(mantissa) / 1024.0f, exponent));
+                                }
+                            }
+                        }
+                        const std::string sidecar = file + ".max";
+                        if (FILE* m = std::fopen(sidecar.c_str(), "w")) {
+                            std::fprintf(m, "%.4f\n", max_value);
+                            std::fclose(m);
+                        }
                     } else {
                         std::fwrite(info.pMappedData, 1, size, f);
                     }
@@ -238,6 +255,26 @@ void PrintIssues(const char* what, u64 issues) {
 }
 
 } // namespace Vulkan::UpscalerDebug
+
+namespace Vulkan {
+
+void DumpPresentedFloat16(const Instance& instance, Scheduler& scheduler,
+                          vk::CommandBuffer cmdbuf, vk::Image image, u32 width, u32 height,
+                          int index, const char* name, vk::Format source_format) {
+    if (source_format == vk::Format::eR16G16B16A16Sfloat) {
+        UpscalerDebug::DumpImages(instance, scheduler, cmdbuf, index,
+                                  {{image, width, height, 4, name, "rgba16f",
+                                    vk::ImageAspectFlagBits::eColor, true}});
+        return;
+    }
+    const bool bgra = source_format == vk::Format::eB8G8R8A8Unorm ||
+                      source_format == vk::Format::eB8G8R8A8Srgb;
+    UpscalerDebug::DumpImages(instance, scheduler, cmdbuf, index,
+                              {{image, width, height, 4, name, bgra ? "bgra" : "rgba",
+                                vk::ImageAspectFlagBits::eColor, false}});
+}
+
+} // namespace Vulkan
 
 namespace Vulkan {
 
