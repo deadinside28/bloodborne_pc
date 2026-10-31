@@ -337,6 +337,11 @@ void main() {
     BbComposite o = BbComposite(BB_CURVE, BB_LUMINANCE, BB_PRE, BB_PRE_LUM, BB_COS4, BB_VIG888,
                                 BB_GAMMA, BB_ADDITIVE, BB_GAIN, BB_FLOOR_ON, BB_SCENE_MAT,
                                 BB_GLOW_MAT, BB_GRADE);
+    // hdr_nograde (a diagnostic): bb_hdr.x bit 4 skips the game's colour matrix, to see whether a
+    // channel it drives to zero is what removes part of the image (the scene losing its red).
+    if ((push_data.bb_hdr.x & 16u) != 0u) {
+        o.grade = false;
+    }
 
     vec4 scene = textureLod(sampler2D(bb_img_scene, bb_samp_scene), BB_IN_UV(bb_in_scene), 0.0);
     vec3 mult = texture(sampler2D(bb_img_mult, bb_samp_mult), BB_IN_UV(bb_in_mult)).rgb;

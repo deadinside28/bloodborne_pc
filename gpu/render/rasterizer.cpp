@@ -809,8 +809,13 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         const float bloom =
             std::clamp(BbSettings::Get().hdr_bloom.load(std::memory_order_relaxed), 0.0f, 100.0f) /
             50.0f;
-        const u32 swap = u32(std::clamp(int(BbSettings::Get().hdr_swap.load(std::memory_order_relaxed)),
-                                        0, 15));
+        u32 swap = u32(std::clamp(int(BbSettings::Get().hdr_swap.load(std::memory_order_relaxed)),
+                                  0, 15));
+        // Bit 4: the composite's delta without the game's colour matrix (hdr_nograde, a
+        // diagnostic for a channel the matrix pushes to zero).
+        if (BbSettings::Get().hdr_nograde.load(std::memory_order_relaxed) != 0) {
+            swap |= 16u;
+        }
         std::array<u32, 12> probe{swap, bits(HdrChannel::Knee()), HdrChannel::ChainProbe(),
                                   bits(bloom)};
         std::array<u32, 12> game_reg{push_data.bb_hdr[0], push_data.bb_hdr[1],
