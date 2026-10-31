@@ -906,6 +906,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     if (ps_info && HdrChannel::Native16() && HdrChannel::IsCompositeVariant(ps_info->pgm_hash)) {
         static std::atomic<bool> hdr_consts_done{false};
         if (!hdr_consts_done.exchange(true)) {
+            std::printf("HDR probe: ChainProbe %u, setting %d, knee %.3f\n", HdrChannel::ChainProbe(),
+                        int(BbSettings::Get().hdr_probe.load()), HdrChannel::Knee());
             const auto* stage = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
             u32 n = 0;
             for (const auto& buffer : stage ? stage->buffers : decltype(stage->buffers){}) {

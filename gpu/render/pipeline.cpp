@@ -108,10 +108,11 @@ void Pipeline::CreateLayouts(vk::ShaderStageFlags push_stages, const char* kind,
                kind, vk::to_string(set_result));
     desc_layout = std::move(set_layout);
 
-    // The game's 128-byte push prefix; native+ extends the range for bb_hdr/bb_hdr2 (the GLSL
-    // of render/shaders/hdr/ hard-codes the offsets). Native+ is chosen at start, so a
-    // session's pipelines all declare the same size.
-    push_size = HdrChannel::Enabled() ? sizeof(Shader::PushData) : Shader::PushData::GameSize;
+    // The game's 128-byte push prefix plus bbport's bb_hdr/bb_hdr2 (the GLSL of
+    // render/shaders/hdr/ hard-codes offsets 128/144). Always the whole struct: HDR mode can be
+    // switched while the game runs, and a push past a layout's declared range is silently
+    // ignored — pipelines built before the setting resolved then ran the HDR chain with zeros.
+    push_size = sizeof(Shader::PushData);
     const vk::PushConstantRange push_constants{
         .stageFlags = push_stages,
         .offset = 0,
