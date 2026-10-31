@@ -417,6 +417,13 @@ void main() {
             }
             delta = hdr_out - game_out;
         }
+        // Chain probe 6 (test): the delta itself. The target already holds the game's own colour,
+        // so writing 0.5 - game_out lands on mid grey where our reconstruction matches it, and
+        // shows the error (bright, dark, coloured) everywhere else — amplified 4x.
+        if (push_data.bb_hdr.z == 6u) {
+            frag_color0 = vec4(vec3(0.5) - game_out + 4.0 * delta, 0.0);
+            return;
+        }
         // Chain probe 4 (test): the chain's own input colour in place of the scene. Red missing
         // here = the sampled textures are wrong; red present = the maths after them is.
         if (push_data.bb_hdr.z == 4u) {
