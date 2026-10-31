@@ -72,6 +72,11 @@ public:
     /// chain's own shaders (the copy, the glow's source, the colour table, the display copy)?
     /// For the draw-time diagnostics only.
     static bool IsCompositeVariant(u64 pgm_hash);
+
+    /// The size of the chain's own image (a composite variant's target): the display copy
+    /// converts channels only when its target is that image, not the UI's.
+    static void NoteChainSize(u32 width, u32 height);
+    static bool IsChainSize(u32 width, u32 height);
     static bool ChainShaderHash(u64 pgm_hash);
     /// Diagnostics: display buffers whose memory holds float bits (the pipeline upgraded them),
     /// and a log line per unique native access to such a buffer (who touches it, and as what).

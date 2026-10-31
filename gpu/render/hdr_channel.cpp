@@ -631,6 +631,7 @@ void HdrChannel::NoteTarget(u64 ps_hash, VAddr address, u32 width, u32 height,
         return;
     }
     std::scoped_lock lock{native16_mutex};
+    NoteChainSize(width, height); // the display copy tells the chain's image by its size
     if (native16_targets.insert(address).second) {
         native16_count.store(u32(native16_targets.size()), std::memory_order_release);
         std::printf("HDR 16-bit: target %#llx (from ps %08x) is RGBA16F\n", (unsigned long long)address,
@@ -657,6 +658,22 @@ bool HdrChannel::Upgraded(VAddr address, u32 width, u32 height, vk::Format forma
     }
     std::scoped_lock lock{native16_mutex};
     return native16_targets.contains(address);
+}
+
+namespace {
+/// The chain's own image: width in the high 32 bits, height in the low (0: not seen yet).
+std::atomic<u64> chain_size{0};
+} // namespace
+
+void HdrChannel::NoteChainSize(u32 width, u32 height) {
+    if (width != 0 && height != 0) {
+        chain_size.store((u64(width) << 32) | u64(height), std::memory_order_relaxed);
+    }
+}
+
+bool HdrChannel::IsChainSize(u32 width, u32 height) {
+    const u64 size = chain_size.load(std::memory_order_relaxed);
+    return size != 0 && u32(size >> 32) == width && u32(size & 0xFFFFFFFFu) == height;
 }
 
 void HdrChannel::SetDisplayRedirect(bool redirect) {
