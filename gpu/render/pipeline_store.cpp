@@ -340,15 +340,16 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar, std::vector
     GraphicsPipeline::SerializationSupport sdata{};
     sdata.Deserialize(ar);
 
-    // Native+ HDR: a composite variant's pipeline also carries the delta pass. Preloaded
-    // pipelines are created with preloading=true, where that pass cannot be built (the game's
-    // shader may not be recompiled yet) — they then ran with no delta at all. Left to be created
-    // on first use, which builds it.
+    // Native+ HDR: a preloaded pipeline is built with preloading=true, where the composite's
+    // delta pass cannot be built (the game's shader may not be recompiled yet) — so it ran with
+    // no delta at all. Graphics pipelines are created on first use instead, which builds it.
     if (HdrChannel::Native16()) {
-        const u64 fs_hash = sel.graphics_key.stage_hashes[u32(Shader::SwStage::Fragment)];
-        if (fs_hash != 0 && HdrChannel::IsCompositeVariant(fs_hash)) {
-            return false;
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1) == 0) {
+            std::printf("HDR: native+: graphics pipelines are created live (a preloaded one has no "
+                        "delta pass)\n");
         }
+        return false;
     }
 
     for (u32 stage = 0; stage < MaxShaderStages; ++stage) {
