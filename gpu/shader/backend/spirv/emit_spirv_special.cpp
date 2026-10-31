@@ -7,6 +7,7 @@
 #include "shader/ir/microinstruction.h"
 #include "shader/backend/spirv/emit_spirv_instructions.h"
 #include "shader/backend/spirv/spirv_emit_context.h"
+#include "shim/bbport_settings.h"
 
 namespace Shader::Backend::SPIRV {
 
@@ -250,9 +251,60 @@ void EmitUiEdgeStretch(EmitContext& ctx) {
         ctx.OpCompositeInsert(ctx.F32[4], snap(x, snap_x), position, 0u), 1u));
 }
 
+void EmitVertexSnap(EmitContext& ctx) {
+    const Id f32 = ctx.F32[1];
+    const Id u32 = ctx.U32[1];
+    const Id b1 = ctx.U1[1];
+    const Id param = ctx.OpLoad(u32, ctx.OpAccessChain(
+        ctx.TypePointer(spv::StorageClass::PushConstant, u32), ctx.push_data_block,
+        ctx.ConstU32(PushData::MotionParamIndex)));
+    const Id is_ui = ctx.OpINotEqual(b1, param, ctx.u32_zero_value);
+
+    const Id position = ctx.OpLoad(ctx.F32[4], ctx.output_position);
+    const Id x = ctx.OpCompositeExtract(f32, position, 0u);
+    const Id y = ctx.OpCompositeExtract(f32, position, 1u);
+    const Id z = ctx.OpCompositeExtract(f32, position, 2u);
+    const Id w = ctx.OpCompositeExtract(f32, position, 3u);
+
+    const Id valid_w = ctx.OpFOrdGreaterThan(b1, w, ctx.Constant(f32, 1e-4f));
+    const Id should_snap = ctx.OpLogicalAnd(b1, valid_w, ctx.OpLogicalNot(b1, is_ui));
+    const Id safe_w = ctx.OpSelect(f32, valid_w, w, ctx.Constant(f32, 1.0f));
+
+    const float snap_w = static_cast<float>(BbSettings::Get().retro_snap_w.load(std::memory_order_relaxed));
+    const float snap_h = static_cast<float>(BbSettings::Get().retro_snap_h.load(std::memory_order_relaxed));
+    const float half_w_val = snap_w > 0.0f ? snap_w * 0.5f : 160.0f;
+    const float half_h_val = snap_h > 0.0f ? snap_h * 0.5f : 120.0f;
+
+    const Id half_w = ctx.Constant(f32, half_w_val);
+    const Id half_h = ctx.Constant(f32, half_h_val);
+
+    const Id ndc_x = ctx.OpFDiv(f32, x, safe_w);
+    const Id scaled_x = ctx.OpFMul(f32, ndc_x, half_w);
+    const Id rounded_x = ctx.OpRoundEven(f32, scaled_x);
+    const Id snapped_ndc_x = ctx.OpFDiv(f32, rounded_x, half_w);
+    const Id snapped_x = ctx.OpFMul(f32, snapped_ndc_x, safe_w);
+    const Id final_x = ctx.OpSelect(f32, should_snap, snapped_x, x);
+
+    const Id ndc_y = ctx.OpFDiv(f32, y, safe_w);
+    const Id scaled_y = ctx.OpFMul(f32, ndc_y, half_h);
+    const Id rounded_y = ctx.OpRoundEven(f32, scaled_y);
+    const Id snapped_ndc_y = ctx.OpFDiv(f32, rounded_y, half_h);
+    const Id snapped_y = ctx.OpFMul(f32, snapped_ndc_y, safe_w);
+    const Id final_y = ctx.OpSelect(f32, should_snap, snapped_y, y);
+
+    ctx.OpStore(ctx.output_position,
+                ctx.OpCompositeConstruct(ctx.F32[4], std::array<Id, 4>{final_x, final_y, z, w}));
+}
+
 } // namespace
 
 void EmitEpilogue(EmitContext& ctx) {
+    if (BbSettings::Get().retro_mode.load(std::memory_order_relaxed) &&
+        BbSettings::Get().retro_vertex_snap.load(std::memory_order_relaxed)) {
+        if (ctx.hw_stage == HwStage::Vertex && !ctx.runtime_info.hw.vs.clip_disable) {
+            EmitVertexSnap(ctx);
+        }
+    }
     if (Sirit::ValidId(ctx.motion_out_cur)) {
         EmitVertexMotion(ctx);
     }

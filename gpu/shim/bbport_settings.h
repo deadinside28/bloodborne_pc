@@ -230,6 +230,14 @@ struct Values {
     std::atomic<bool> dlss_supported{false};
     std::atomic<const char*> dlss_problem{nullptr};
 
+    // Retro Graphics Settings
+    std::atomic<bool> retro_mode{false};
+    std::atomic<bool> retro_dither{true};
+    std::atomic<bool> retro_point_filter{false};
+    std::atomic<bool> retro_vertex_snap{false};
+    std::atomic<bool> retro_affine{false};
+    std::atomic<int> retro_snap_w{320}, retro_snap_h{240};
+
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;
     int startup_upscaler = UpscalerFsr3;
@@ -239,6 +247,11 @@ struct Values {
     /// The output the startup patch was made for (BB_OUTPUT_RES), else 0x0.
     OutputSize startup_output{0, 0};
     int startup_live_resolution = 0;
+    bool startup_retro_mode = false;
+    bool startup_retro_vertex_snap = false;
+    bool startup_retro_affine = false;
+    int startup_retro_snap_w = 320;
+    int startup_retro_snap_h = 240;
 };
 
 Values& Get();
@@ -277,5 +290,6 @@ const char* LowLatencyName(int mode);
 /// NVIDIA requires of games: generated frames add latency that Reflex takes back).
 int EffectiveLowLatency();
 const char* UpscalerName(int upscaler);
+void SetRetroMode(bool enabled);
 
 } // namespace BbSettings

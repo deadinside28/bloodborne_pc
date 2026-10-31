@@ -17,6 +17,7 @@
 #include "shader/ir/microinstruction.h"
 #include "shader/runtime_info.h"
 #include "shader/backend/spirv/spirv_emit_context.h"
+#include "shim/bbport_settings.h"
 
 namespace Shader::Backend::SPIRV {
 namespace {
@@ -461,13 +462,16 @@ void EmitContext::DefineInputs() {
                 }
                 return Name(DefineInput(type, bind_location), fmt::format("fs_in_attr{}", i));
             }();
+            const bool force_nopersp = BbSettings::Get().retro_mode.load(std::memory_order_relaxed) &&
+                                       BbSettings::Get().retro_affine.load(std::memory_order_relaxed);
             if (primary == Qualifier::PerVertex) {
                 Decorate(attr_id, profile.supports_amd_shader_explicit_vertex_parameter
                                       ? spv::Decoration::ExplicitInterpAMD
                                       : spv::Decoration::PerVertexKHR);
-            } else if (primary != Qualifier::Smooth) {
-                Decorate(attr_id, primary == Qualifier::Flat ? spv::Decoration::Flat
-                                                             : spv::Decoration::NoPerspective);
+            } else if (primary == Qualifier::Flat) {
+                Decorate(attr_id, spv::Decoration::Flat);
+            } else if (primary == Qualifier::NoPerspective || force_nopersp) {
+                Decorate(attr_id, spv::Decoration::NoPerspective);
             }
             if (auxiliary != Qualifier::None) {
                 Decorate(attr_id, auxiliary == Qualifier::Centroid ? spv::Decoration::Centroid

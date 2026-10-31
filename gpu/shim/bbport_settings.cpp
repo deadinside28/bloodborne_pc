@@ -129,6 +129,22 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         for (int a = 0; a < AspectCount; ++a) {
             if (value == AspectKey(a)) v.aspect = a;
         }
+    } else if (key == "retro_mode" || key == "psx_mode") {
+        v.retro_mode = i != 0;
+    } else if (key == "retro_dither" || key == "psx_dither") {
+        v.retro_dither = i != 0;
+    } else if (key == "retro_point_filter" || key == "psx_point_filter") {
+        v.retro_point_filter = i != 0;
+    } else if (key == "retro_vertex_snap" || key == "psx_vertex_snap") {
+        v.retro_vertex_snap = i != 0;
+    } else if (key == "retro_affine" || key == "psx_affine") {
+        v.retro_affine = i != 0;
+    } else if (key == "retro_snap_res" || key == "psx_snap_res") {
+        int w = 0, h = 0;
+        if (std::sscanf(value.c_str(), "%dx%d", &w, &h) == 2 && w >= 160 && h >= 120) {
+            v.retro_snap_w = w;
+            v.retro_snap_h = h;
+        }
     } else {
         for (int e = 0; e < EffectCount; ++e) {
             if (key == Effects[e].key) {
@@ -346,6 +362,11 @@ void Load() {
         if (output && std::sscanf(output, "%dx%d", &w, &h) == 2) v.startup_output = {w, h};
     }
     v.startup_live_resolution = v.live_resolution;
+    v.startup_retro_mode = v.retro_mode.load();
+    v.startup_retro_vertex_snap = v.retro_vertex_snap.load();
+    v.startup_retro_affine = v.retro_affine.load();
+    v.startup_retro_snap_w = v.retro_snap_w.load();
+    v.startup_retro_snap_h = v.retro_snap_h.load();
 }
 
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411) {
@@ -487,6 +508,13 @@ void Save() {
     put("fsr4_model", Fsr4ModelName(v.fsr4_model));
     put("aspect_ratio", AspectKey(v.aspect));
     put("output_res", v.output_auto ? std::string{"auto"} : SizeText(CurrentOutput()));
+    // Retro Graphics
+    put("retro_mode", flag(v.retro_mode));
+    put("retro_dither", flag(v.retro_dither));
+    put("retro_point_filter", flag(v.retro_point_filter));
+    put("retro_vertex_snap", flag(v.retro_vertex_snap));
+    put("retro_affine", flag(v.retro_affine));
+    put("retro_snap_res", std::to_string(v.retro_snap_w.load()) + "x" + std::to_string(v.retro_snap_h.load()));
     // Read by run.sh at start.
     put("frame_generation", FrameGenName(v.frame_generation));
     put("frame_generation_multiplier", std::to_string(v.frame_generation_multiplier.load()));
@@ -577,6 +605,19 @@ int EffectiveLowLatency() {
 const char* FrameGenName(int frame_gen) {
     static constexpr const char* names[FrameGenCount] = {"off", "fsr3", "dlss", "fsr_amd"};
     return names[std::clamp(frame_gen, 0, FrameGenCount - 1)];
+}
+
+void SetRetroMode(bool enabled) {
+    auto& v = Get();
+    v.retro_mode = enabled;
+    if (enabled) {
+        v.retro_dither = true;
+    } else {
+        v.retro_dither = false;
+        v.retro_point_filter = false;
+        v.retro_vertex_snap = false;
+        v.retro_affine = false;
+    }
 }
 
 } // namespace BbSettings

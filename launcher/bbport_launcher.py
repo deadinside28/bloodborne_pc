@@ -452,6 +452,44 @@ class LauncherWindow(ContentPages, OnlinePage, TrophiesPage, LogPage, UpscalerFi
         game.add(self.skip_network_row)
         sec["effects"].add(effects)
 
+        retro_group = Adw.PreferencesGroup(title="Retro Graphics",
+                                           description=tr("Эмуляция графических ограничений 32-битной эпохи"))
+        self.retro_mode_row = Adw.SwitchRow(title=tr("Включить ретро-графику"),
+                                            subtitle=tr("Общий переключатель ретро-эффектов"),
+                                            active=self.ini.get("retro_mode", self.ini.get("psx_mode", "1")) == "1")
+        retro_group.add(self.retro_mode_row)
+        self.retro_dither_row = Adw.SwitchRow(title=tr("15-битный цвет и дизеринг"),
+                                              subtitle=tr("Таблица 4x4 Bayer и квантование RGB555"),
+                                              active=self.ini.get("retro_dither", self.ini.get("psx_dither", "1")) == "1")
+        retro_group.add(self.retro_dither_row)
+        self.retro_point_row = Adw.SwitchRow(title=tr("Точечная фильтрация текстур"),
+                                             subtitle=tr("Nearest-neighbor выборка текстур (убирает билинейное размытие)"),
+                                             active=self.ini.get("retro_point_filter", self.ini.get("psx_point_filter", "1")) == "1")
+        retro_group.add(self.retro_point_row)
+        self.retro_snap_row = Adw.SwitchRow(title=tr("Дрожание вершин (Vertex Snap)"),
+                                            subtitle=tr("Привязка экранных координат к целочисленной сетке"),
+                                            active=self.ini.get("retro_vertex_snap", self.ini.get("psx_vertex_snap", "1")) == "1")
+        retro_group.add(self.retro_snap_row)
+        self.retro_affine_row = Adw.SwitchRow(title=tr("Аффинное наложение текстур"),
+                                              subtitle=tr("Линейная интерполяция UV без учета перспективы"),
+                                              active=self.ini.get("retro_affine", self.ini.get("psx_affine", "1")) == "1")
+        retro_group.add(self.retro_affine_row)
+        self.retro_res_row = combo_row(tr("Сетка дрожания вершин"), None, RETRO_RESOLUTIONS,
+                                       self.ini.get("retro_snap_res", self.ini.get("psx_snap_res", "320x240")))
+        retro_group.add(self.retro_res_row)
+
+        def on_retro_mode_toggle(*_):
+            active = self.retro_mode_row.get_active()
+            self.retro_dither_row.set_sensitive(active)
+            self.retro_point_row.set_sensitive(active)
+            self.retro_snap_row.set_sensitive(active)
+            self.retro_affine_row.set_sensitive(active)
+            self.retro_res_row.set_sensitive(active)
+
+        self.retro_mode_row.connect("notify::active", on_retro_mode_toggle)
+        on_retro_mode_toggle()
+        sec["graphics"].add(retro_group)
+
         frames = Adw.PreferencesGroup(title=tr("Частота кадров"))
         self.fps_row = combo_row(tr("Режим"), tr("Какой патч частоты кадров применить к игре"),
                                  FPS_MODES, self.settings["fps_mode"])
@@ -890,6 +928,12 @@ class LauncherWindow(ContentPages, OnlinePage, TrophiesPage, LogPage, UpscalerFi
             "button_prompts": combo_value(self.prompts_row),
             "game_text_language": combo_value(self.text_language_row),
             "game_voice_language": combo_value(self.voice_language_row),
+            "retro_mode": "1" if self.retro_mode_row.get_active() else "0",
+            "retro_dither": "1" if self.retro_dither_row.get_active() else "0",
+            "retro_point_filter": "1" if self.retro_point_row.get_active() else "0",
+            "retro_vertex_snap": "1" if self.retro_snap_row.get_active() else "0",
+            "retro_affine": "1" if self.retro_affine_row.get_active() else "0",
+            "retro_snap_res": combo_value(self.retro_res_row),
             **{key: "1" if row.get_active() else "0" for key, row in self.effect_rows.items()},
             "anti_aliasing": combo_value(self.aa_row),
         })
@@ -897,7 +941,9 @@ class LauncherWindow(ContentPages, OnlinePage, TrophiesPage, LogPage, UpscalerFi
         self.ini, self.ini_lines = load_ini()
 
     def environment(self):
-        return game_environment(self.settings)
+        s = dict(self.settings)
+        s["retro_mode"] = "1" if self.retro_mode_row.get_active() else "0"
+        return game_environment(s)
 
     # --- mods ----------------------------------------------------------------------------
 

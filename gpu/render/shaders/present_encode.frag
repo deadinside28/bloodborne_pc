@@ -16,6 +16,7 @@ layout(push_constant) uniform Settings {
     bool hdr;
     bool srgb_input;
     float sharpen;
+    bool retro_dither;
 } settings;
 
 // The sRGB curve's constants: linear below the knee, a power above it.
@@ -58,6 +59,13 @@ vec3 Rcas(vec3 e) {
     return (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
 }
 
+const int bayer4x4[16] = int[](
+     0,  8,  2, 10,
+    12,  4, 14,  6,
+     3, 11,  1,  9,
+    15,  7, 13,  5
+);
+
 void main() {
     vec4 texel = texture(source, uv);
     if (settings.hdr) {
@@ -68,5 +76,29 @@ void main() {
     if (settings.sharpen > 0.0) {
         texel.rgb = Rcas(clamp(texel.rgb, 0.0, 1.0));
     }
-    color = vec4(Encode(texel.rgb), texel.a);
+    vec3 encoded = Encode(texel.rgb);
+
+    if (settings.retro_dither) {
+        float Y = dot(encoded, vec3(0.299, 0.587, 0.114));
+
+        if (Y > 0.0001) {
+            // Pixel-doubled 4x4 Bayer dither applied to Luminance ONLY
+            ivec2 p = (ivec2(gl_FragCoord.xy) >> 1) & 3;
+            const float levels = 63.0;
+
+            // Smooth dither transition: full in midtones, soft in deep blacks and bright highlights
+            float dither_strength = mix(0.30, 0.06, smoothstep(0.35, 0.85, Y)) * smoothstep(0.01, 0.08, Y);
+            float d = (float(bayer4x4[p.y * 4 + p.x]) / 16.0 - 0.5) * (dither_strength / levels);
+
+            // Quantize luminance only
+            float Y_quant = floor(clamp(Y + d, 0.0, 1.0) * levels + 0.5) / levels;
+
+            // Reconstruct RGB while strictly locking the chroma ratio (color hue cannot shift)
+            encoded = clamp(encoded * (Y_quant / Y), 0.0, 1.0);
+        } else {
+            encoded = vec3(0.0);
+        }
+    }
+
+    color = vec4(encoded, texel.a);
 }
