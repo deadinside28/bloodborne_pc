@@ -564,7 +564,7 @@ bool HdrChannel::ChainImage(VAddr address, u32 width, u32 height, vk::Format for
 
 u32 HdrChannel::ChainProbe() {
     const int setting = int(BbSettings::Get().hdr_probe.load(std::memory_order_relaxed));
-    if (setting >= 1 && setting <= 9) {
+    if (setting >= 1 && setting <= 10) {
         return u32(setting);
     }
     const char* probe = std::getenv("BB_HDR_PROBE");

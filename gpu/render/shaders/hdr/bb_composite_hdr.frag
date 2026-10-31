@@ -773,6 +773,19 @@ void main() {
 
                                    : bb_grade(o, hdr_screen);
 
+    // Chain probe 10 (test): the composite's own input range, false-coloured (black below 0.5,
+    // blue to 1, green to 2, yellow to 4, red above): what the tone curve has to work with.
+    if (push_data.bb_hdr.z == 10u) {
+        const float m = max(max(x.r, x.g), x.b);
+        vec3 fc = m < 0.5 ? vec3(0.0)
+                  : m < 1.0 ? vec3(0.0, 0.0, 1.0)
+                  : m < 2.0 ? vec3(0.0, 1.0, 0.0)
+                  : m < 4.0 ? vec3(1.0, 1.0, 0.0)
+                            : vec3(1.0, 0.0, 0.0);
+        frag_color0 = vec4(fc, 0.0);
+        return;
+    }
+
     if (BB_OUTPUT_DELTA) {
 
         // The game's bloom, live (in-game menu; bb_hdr.w set for this draw by bbport: the
