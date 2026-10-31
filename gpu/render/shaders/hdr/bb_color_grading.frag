@@ -90,8 +90,7 @@ void main() {
         o = signed_pow(graded, 1.0 / 2.2);
     }
     // The game's channel order: its target holds them swapped.
-    const bool swap = (push_data.bb_hdr.x & (4u | 32u)) != 0u;
-    frag_color0 = vec4(swap ? o.xyz : o.zyx, max(c.w, 0.0));
+    frag_color0 = vec4(o.xyz, max(c.w, 0.0));
     // Chain probe (in-game menu, test; bb_hdr.z): 3 magenta where the input is above white,
     // 4 green where this pass draws.
     uint probe = push_data.bb_hdr.z;

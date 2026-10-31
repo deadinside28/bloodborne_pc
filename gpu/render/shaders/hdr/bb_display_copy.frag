@@ -54,9 +54,7 @@ void main() {
     uint h = push_data.scene_size >> 16u;
     vec2 scale = vec2(1920.0 / float(w == 0u ? 1920u : w), 1080.0 / float(h == 0u ? 1080u : h));
     vec4 v = texelFetch(fs_img0, ivec2(floor(gl_FragCoord.xy * scale)), 0);
-    const vec3 ordered = vec3(brightness(v.z, 2.0), brightness(v.y, 1.0), brightness(v.x, 0.0));
-    const bool swap = (push_data.bb_hdr.x & (8u | 32u)) != 0u;
-    frag_color0 = vec4(swap ? ordered.zyx : ordered, v.w);
+    frag_color0 = vec4(brightness(v.x, 0.0), brightness(v.y, 1.0), brightness(v.z, 2.0), v.w);
     // Chain probe (in-game menu, test; bb_hdr.z): 2 magenta where the finished image is above
     // the game's white.
     if (push_data.bb_hdr.z == 2u && max(max(v.x, v.y), v.z) > 1.001) {

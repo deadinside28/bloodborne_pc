@@ -373,11 +373,10 @@ void main() {
                       : vanilla_plus ? max(hdr_t + g, 0.0)
                                      : hdr_t + glow * (1.0 - min(hdr_t, 1.0));
 
-    // Export order is rows 840, 844, 848; the game's target holds them as BGR (row 848 first,
-    // see hdr/bb_tonemap.frag), hence .zyx before the luminance.
-    vec3 sdr_graded = bb_grade(o, sdr_screen).zyx;
-    vec3 hdr_graded = vanilla_plus ? bb_vanilla_plus_rows(bb_grade(o, hdr_screen)).zyx
-                                   : bb_grade(o, hdr_screen).zyx;
+    // The grading matrix result is in the game's export order: components as the target wants.
+    vec3 sdr_graded = bb_grade(o, sdr_screen);
+    vec3 hdr_graded = vanilla_plus ? bb_vanilla_plus_rows(bb_grade(o, hdr_screen))
+                                   : bb_grade(o, hdr_screen);
     if (BB_OUTPUT_DELTA) {
         // The game's bloom, live (in-game menu; bb_hdr.w set for this draw by bbport: the
         // strength's bits plus one, 0 = the game's): the target is the composite with its glow
@@ -393,9 +392,9 @@ void main() {
             vec3 hdr_screen_k = !has_hdr      ? sdr_screen_k
                                 : vanilla_plus ? max(hdr_t + g * k, 0.0)
                                                : hdr_t + glow_k * (1.0 - min(hdr_t, 1.0));
-            target = !has_hdr      ? clamp(bb_grade(o, sdr_screen_k).zyx, 0.0, 1.0)
-                     : vanilla_plus ? bb_vanilla_plus_rows(bb_grade(o, hdr_screen_k)).zyx
-                                    : bb_grade(o, hdr_screen_k).zyx;
+            target = !has_hdr      ? clamp(bb_grade(o, sdr_screen_k), 0.0, 1.0)
+                     : vanilla_plus ? bb_vanilla_plus_rows(bb_grade(o, hdr_screen_k))
+                                    : bb_grade(o, hdr_screen_k);
         }
         // The game's own output in the target (the delta goes over it), and the HDR one.
         vec3 game_out = BB_GAMMA ? exp2(bb_c(808u) * log2(clamp(sdr_graded + BB_EPS, 0.0, 1.0)))

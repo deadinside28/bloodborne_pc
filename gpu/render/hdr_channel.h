@@ -73,6 +73,10 @@ public:
     /// For the draw-time diagnostics only.
     static bool IsCompositeVariant(u64 pgm_hash);
     static bool ChainShaderHash(u64 pgm_hash);
+    /// Diagnostics: display buffers whose memory holds float bits (the pipeline upgraded them),
+    /// and a log line per unique native access to such a buffer (who touches it, and as what).
+    static void NoteDisplayFloat(VAddr address);
+    static void LogFloatAccess(VAddr address, const char* what);
     /// bbport's version of a game shader of the chain (glow source, copy, color table, display
     /// copy) with the game shader's bindings and locations, or empty to keep the game's.
     static std::vector<u32> ChainReplacement(u64 pgm_hash, std::span<const u32> game);

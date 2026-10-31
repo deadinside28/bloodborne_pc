@@ -512,6 +512,26 @@ void HdrChannel::OnDisplayCopy() {
     }
 }
 
+void HdrChannel::NoteDisplayFloat(VAddr address) {
+    static std::mutex mutex;
+    static std::unordered_set<VAddr> seen;
+    std::scoped_lock lock{mutex};
+    if (seen.insert(address).second) {
+        std::printf("HDR 16-bit: display buffer %#llx holds float bits\n",
+                    (unsigned long long)address);
+    }
+}
+
+void HdrChannel::LogFloatAccess(VAddr address, const char* what) {
+    static std::mutex mutex;
+    static std::unordered_set<VAddr> seen;
+    std::scoped_lock lock{mutex};
+    if (seen.size() < 32 && seen.insert(address).second) {
+        std::printf("HDR 16-bit: native access to float-holding display buffer %#llx (%s)\n",
+                    (unsigned long long)address, what);
+    }
+}
+
 bool HdrChannel::IsCompositeVariant(u64 pgm_hash) {
     const TonemapVariant* v = FindVariant(pgm_hash);
     return v != nullptr && v->standard;

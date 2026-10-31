@@ -260,18 +260,10 @@ namespace Vulkan {
 
 void DumpPresentedFloat16(const Instance& instance, Scheduler& scheduler,
                           vk::CommandBuffer cmdbuf, vk::Image image, u32 width, u32 height,
-                          int index, const char* name, vk::Format source_format) {
-    if (source_format == vk::Format::eR16G16B16A16Sfloat) {
-        UpscalerDebug::DumpImages(instance, scheduler, cmdbuf, index,
-                                  {{image, width, height, 4, name, "rgba16f",
-                                    vk::ImageAspectFlagBits::eColor, true}});
-        return;
-    }
-    const bool bgra = source_format == vk::Format::eB8G8R8A8Unorm ||
-                      source_format == vk::Format::eB8G8R8A8Srgb;
+                          int index, const char* name, vk::Format) {
     UpscalerDebug::DumpImages(instance, scheduler, cmdbuf, index,
-                              {{image, width, height, 4, name, bgra ? "bgra" : "rgba",
-                                vk::ImageAspectFlagBits::eColor, false}});
+                              {{image, width, height, 4, name, "rgba16f",
+                                vk::ImageAspectFlagBits::eColor, true}});
 }
 
 } // namespace Vulkan

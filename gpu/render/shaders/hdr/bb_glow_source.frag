@@ -24,5 +24,5 @@ layout(location = 0) out vec4 frag_color0;
 void main() {
     vec4 c = textureLod(sampler2D(fs_img0, fs_samp0), BB_UV(fs_in_attr0), 0.0);
     // The game's channel order: its target holds them swapped.
-    frag_color0 = vec4(min(c.zyx, vec3(1.0)), c.w);
+    frag_color0 = vec4(min(c.xyz, vec3(1.0)), c.w);
 }
