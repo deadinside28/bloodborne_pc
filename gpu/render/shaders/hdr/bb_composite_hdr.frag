@@ -347,13 +347,6 @@ void main() {
     vec3 mult = texture(sampler2D(bb_img_mult, bb_samp_mult), BB_IN_UV(bb_in_mult)).rgb;
     vec3 bloom = textureLod(sampler2D(bb_img_bloom, bb_samp_bloom), BB_IN_UV(bb_in_bloom), 0.0).rgb;
     vec2 vig_uv = (BB_COS4 || BB_VIG888) ? BB_IN_UV(bb_in_vig) : vec2(0.0);
-    // The guest textures carry a component mapping (A8B8G8R8: red and blue exchange). The
-    // recompiled game shaders get it applied by the recompiler; a hand-written pass has to do it
-    // itself, or the composite's delta is computed on swapped colours (a blue scene, while the
-    // chain's own copies — sampling bbport's RGBA proxies — stayed right).
-    scene.rgb = scene.bgr;
-    mult = mult.bgr;
-    bloom = bloom.bgr;
 
     // The game's output, and the same with the HDR curve.
     vec3 ms = bb_scene_tint(mult);
@@ -440,7 +433,12 @@ void main() {
             return;
         }
         // PsychoV30 (scene) replaces the game's curve, so it may also darken.
-        frag_color0 = vec4((scaled || psycho_scene) ? delta : max(delta, 0.0), 0.0);
+        // The guest target's component mapping (A8B8G8R8: red and blue exchange): the recompiler
+        // swizzles the game shaders' writes, so this pass must too — written raw, the delta went
+        // into the opposite channels and the whole scene looked blue while the UI (drawn by the
+        // game's own shaders) stayed right.
+        vec3 delta_out = (scaled || psycho_scene) ? delta : max(delta, 0.0);
+        frag_color0 = vec4(delta_out.bgr, 0.0);
         // Chain probe (in-game menu, test; bb_hdr.z set for this draw by bbport): green where
         // the HDR image is above the game's white (PsychoV30), or where this draw adds light
         // to it (the other tone mappers). The delta makes the target exactly green at white: a
