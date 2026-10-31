@@ -778,8 +778,55 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
+    // Native+ HDR: the chain's own shaders and the colour table take bb_hdr from bbport. It goes
+    // out with the draw itself: recorded as a separate command after it, these values arrived one
+    // draw late and the game's own push (zeros there) then overwrote them, so the copy, the glow,
+    // the colour table and the display copy always ran with zeros.
+    std::array<u32, 4> hdr_bb{};
+    bool hdr_bb_set = false;
+    const vk::PipelineLayout hdr_layout = pipeline->GetLayout();
+    if (ps_info && HdrChannel::Native16()) {
+        const auto& settings = BbSettings::Get();
+        if (ps_info->pgm_hash == HdrChannel::ColorGradingHash) {
+            const float strength = std::clamp(
+                settings.hdr_scene_grading.load(std::memory_order_relaxed), 0.0f, 100.0f) / 100.0f;
+            hdr_bb = {0u,
+                      u32(std::clamp(int(settings.hdr_lut_bridge.load(std::memory_order_relaxed)), 0,
+                                     1)) +
+                          1u,
+                      HdrChannel::ChainProbe(), std::bit_cast<u32>(strength) + 1u};
+            hdr_bb_set = true;
+        } else if (ps_info->pgm_hash == 0xf7229091ull || ps_info->pgm_hash == 0x57f3b8c2ull ||
+                   ps_info->pgm_hash == 0xed4c7668ull || ps_info->pgm_hash == 0x38d65b32ull) {
+            const float bloom =
+                std::clamp(settings.hdr_bloom.load(std::memory_order_relaxed), 0.0f, 100.0f) / 50.0f;
+            u32 swap =
+                u32(std::clamp(int(settings.hdr_swap.load(std::memory_order_relaxed)), 0, 15));
+            if (regs.color_buffers[0]) {
+                const auto& cb = regs.color_buffers[0];
+                const vk::Format target = GcnToVk::SurfaceFormat(cb.GetDataFmt(), cb.GetNumberFmt());
+                if (HdrChannel::Upgraded(cb.Address(), cb.Pitch(), cb.Height(), target) ||
+                    HdrChannel::DisplayUpgraded(cb.Address(), target)) {
+                    swap |= 32u;
+                }
+                // The display copy converts channels only for the chain's own image (bit 4): the
+                // UI is composited through the same shader at the output size.
+                if (ps_info->pgm_hash == 0x38d65b32ull &&
+                    HdrChannel::IsChainSize(cb.Pitch(), cb.Height())) {
+                    swap |= 16u;
+                }
+            }
+            hdr_bb = {swap, std::bit_cast<u32>(HdrChannel::Knee()), HdrChannel::ChainProbe(),
+                      std::bit_cast<u32>(bloom)};
+            hdr_bb_set = true;
+        }
+    }
     scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+        if (hdr_bb_set) {
+            cmdbuf.pushConstants(hdr_layout, AllGraphicsStageBits,
+                                 u32(offsetof(Shader::PushData, bb_hdr)), 16u, hdr_bb.data());
+        }
         if (DynCheck::Enabled()) {
             DynCheck::Draw(cmdbuf, check_viewports, check_scissors, check_vs, check_ps);
         }
@@ -861,50 +908,6 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             }
             cmdbuf.pushConstants(layout, AllGraphicsStageBits, reg_offset, reg_size,
                                  game_reg.data());
-        });
-    }
-    // Native+ HDR: the colour table's replacement reads the menu's strength and LUT bridge
-    // from bb_hdr.y/.w of its own draw (the composite's delta draws push their own values).
-    if (ps_info && HdrChannel::Native16() && ps_info->pgm_hash == HdrChannel::ColorGradingHash) {
-        const auto& settings = BbSettings::Get();
-        const float strength =
-            std::clamp(settings.hdr_scene_grading.load(std::memory_order_relaxed), 0.0f, 100.0f) /
-            100.0f;
-        const std::array<u32, 4> grading{
-            0u,
-            u32(std::clamp(int(settings.hdr_lut_bridge.load(std::memory_order_relaxed)), 0, 1)) + 1u,
-            HdrChannel::ChainProbe(), std::bit_cast<u32>(strength) + 1u};
-        scheduler.Record([layout = pipeline->GetLayout(), grading](vk::CommandBuffer cmdbuf) {
-            cmdbuf.pushConstants(layout, AllGraphicsStageBits,
-                                 u32(offsetof(Shader::PushData, bb_hdr)), 16u, grading.data());
-        });
-    }
-    // Native+ HDR: the chain's own shaders (the copy, the glow's source, the colour table, the
-    // display copy) take bb_hdr from bbport: the channel-order test, the knee, the probe and the
-    // glow's strength. (The composite's delta draw pushes its own before it draws.)
-    if (ps_info && HdrChannel::Native16() &&
-        (ps_info->pgm_hash == 0xf7229091ull || ps_info->pgm_hash == 0x57f3b8c2ull ||
-         ps_info->pgm_hash == 0xed4c7668ull || ps_info->pgm_hash == 0x38d65b32ull)) {
-        const auto& settings = BbSettings::Get();
-        const float bloom =
-            std::clamp(settings.hdr_bloom.load(std::memory_order_relaxed), 0.0f, 100.0f) / 50.0f;
-        // The game's shaders write the guest's BGR order; the port's float images hold RGBA.
-        // Bit 5 (32): the target is float this frame — flip the stage's order back.
-        u32 swap = u32(std::clamp(int(settings.hdr_swap.load(std::memory_order_relaxed)), 0, 15));
-        if (regs.color_buffers[0]) {
-            const auto& cb = regs.color_buffers[0];
-            const vk::Format target = GcnToVk::SurfaceFormat(cb.GetDataFmt(), cb.GetNumberFmt());
-            if (HdrChannel::Upgraded(cb.Address(), cb.Pitch(), cb.Height(), target) ||
-                HdrChannel::DisplayUpgraded(cb.Address(), target)) {
-                swap |= 32u;
-            }
-        }
-        const std::array<u32, 4> chain_reg{
-            swap, std::bit_cast<u32>(HdrChannel::Knee()), HdrChannel::ChainProbe(),
-            std::bit_cast<u32>(bloom)};
-        scheduler.Record([layout = pipeline->GetLayout(), chain_reg](vk::CommandBuffer cmdbuf) {
-            cmdbuf.pushConstants(layout, AllGraphicsStageBits,
-                                 u32(offsetof(Shader::PushData, bb_hdr)), 16u, chain_reg.data());
         });
     }
     // One-shot diagnostic: the words the composite's shader reads. Those values say whether our

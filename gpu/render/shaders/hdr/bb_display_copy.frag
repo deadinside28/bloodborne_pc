@@ -54,8 +54,10 @@ void main() {
     uint h = push_data.scene_size >> 16u;
     vec2 scale = vec2(1920.0 / float(w == 0u ? 1920u : w), 1080.0 / float(h == 0u ? 1080u : h));
     vec4 v = texelFetch(fs_img0, ivec2(floor(gl_FragCoord.xy * scale)), 0);
-    // The chain's image carries the opposite channel order of the display buffer.
-    frag_color0 = vec4(brightness(v.z, 2.0), brightness(v.y, 1.0), brightness(v.x, 0.0), v.w);
+    // The chain's order is set by the colour table (bb_color_grading.frag); the display buffer
+    // takes it as it comes. Converting here would also convert the UI, which the game composites
+    // through this same shader.
+    frag_color0 = vec4(brightness(v.x, 0.0), brightness(v.y, 1.0), brightness(v.z, 2.0), v.w);
     // Chain probe 5 (test): the colour through without the brightness table. A correct scene here
     // and a tinted one otherwise = the table's rows (layers) are not the channel order we read.
     if (push_data.bb_hdr.z == 5u) {
