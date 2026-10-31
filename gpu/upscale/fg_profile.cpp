@@ -11,7 +11,8 @@
 
 #include "vulkan/instance.h"
 
-extern "C" void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z);
+// Weak for the same reason as ffxVkShaderOverride (ffx_shaders.cpp).
+extern "C" __attribute__((weak)) void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z) = nullptr;
 
 namespace FgProfile {
 
