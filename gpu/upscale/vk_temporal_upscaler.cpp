@@ -370,10 +370,19 @@ bool TemporalUpscaler::OnFrameStart() {
                         any ? "on" : "off");
             return any;
         }();
-        // Off unless asked (BB_HDR_CHAIN=1): the game still reads some of these targets
-        // back, and float data where it expects 8-bit ends in a guest panic.
-        static const bool chain_opt_in = std::getenv("BB_HDR_CHAIN") != nullptr;
-        HdrChannel::SetNative16Active(chain_opt_in && (chain_scaled || Scaled() || ui_phase));
+        // On for the whole session when an upscaler is configured (BB_HDR_CHAIN=0 forces it
+        // off, a diagnostic): the pipeline keys and the proxies must be consistent from the
+        // first frame — a per-frame guess here made the engagement flip-flop (the scene stayed
+        // on the game's own 8-bit path: blue, and nothing above paper white).
+        static const bool chain_on = [] {
+            const char* e = std::getenv("BB_HDR_CHAIN");
+            const bool opt_out = e && e[0] == '0';
+            const bool upscaler = BbSettings::Get().upscaler.load() != BbSettings::UpscalerOff;
+            std::printf("HDR 16-bit: the chain's images %s\n",
+                        (upscaler && !opt_out) ? "in use (upscaler on)" : "off");
+            return upscaler && !opt_out;
+        }();
+        HdrChannel::SetNative16Active(chain_on);
     }
     HdrChannel::SetDisplayRedirect(ui_phase);
     ui_phase = false;
