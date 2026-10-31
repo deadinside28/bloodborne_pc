@@ -419,7 +419,12 @@ bool ChainSize(u32 width, u32 height) {
 }
 
 constexpr bool ChainFormat(vk::Format format) {
-    return format == vk::Format::eR8G8B8A8Unorm || format == vk::Format::eR8G8B8A8Srgb ||
+    // The game's scene chain is float/HDR-capable itself (R16G16B16A16F and B10G11R11F targets
+    // at the scene size): the composite's target is one of those, and the copies run between
+    // them. The 8-bit forms are the display buffers and the small copies.
+    return format == vk::Format::eR16G16B16A16Sfloat ||
+           format == vk::Format::eB10G11R11UfloatPack32 ||
+           format == vk::Format::eR8G8B8A8Unorm || format == vk::Format::eR8G8B8A8Srgb ||
            format == vk::Format::eB8G8R8A8Unorm || format == vk::Format::eB8G8R8A8Srgb;
 }
 
