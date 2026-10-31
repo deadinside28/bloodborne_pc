@@ -795,7 +795,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // specialization constant), the game's values go back after. The peak is the display's (or
     // the menu's); the grading sliders' neutrals stand in for the RenoDX grading, which comes
     // with the menu work.
-    if (const vk::Pipeline hdr_handle = pipeline->HdrHandle()) {
+    if (const vk::Pipeline hdr_handle = pipeline->HdrHandle();
+        hdr_handle && BbSettings::Get().hdr_delta.load(std::memory_order_relaxed) != 0) {
         const auto bits = [](float f) { return std::bit_cast<u32>(f) + 1u; };
         const float paper =
             std::clamp(BbSettings::Get().hdr_paper_white.load(std::memory_order_relaxed),

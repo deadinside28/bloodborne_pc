@@ -279,6 +279,9 @@ struct Values {
     /// Diagnostic: the composite's delta without the game's colour matrix (0: the matrix, 1: no
     /// matrix). Saved.
     std::atomic<int> hdr_nograde{0};
+    /// The composite's delta pass (1: on). 0 runs the rest of the chain over the game's own image
+    /// (a pass-through bisect). Saved.
+    std::atomic<int> hdr_delta{1};
     /// Native+ (live): the knee below the game's white, the glow's strength, the black floor,
     /// and the HUD's white (UI Brightness; the masked pixels of the scene chain's frame).
     std::atomic<float> hdr_knee{HdrKneeDefault}, hdr_bloom{HdrBloomDefault},

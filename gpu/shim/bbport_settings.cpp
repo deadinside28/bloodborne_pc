@@ -171,6 +171,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.hdr_dump = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 100);
     } else if (key == "hdr_probe") {
         v.hdr_probe = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 5);
+    } else if (key == "hdr_delta") {
+        v.hdr_delta = std::clamp(std::isfinite(f) ? int(f) : 1, 0, 1);
     } else if (key == "hdr_nograde") {
         v.hdr_nograde = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 1);
     } else if (key == "hdr_swap") {
@@ -396,6 +398,7 @@ void Load() {
         {"BB_HDR_SATURATION", "hdr_saturation"},    {"BB_HDR_SCENE_GRADING", "hdr_scene_grading"},
         {"BB_HDR_LUT_BRIDGE", "hdr_lut_bridge"},  {"BB_HDR_SWAP", "hdr_swap"},             {"BB_HDR_DUMP", "hdr_dump"},
         {"BB_HDR_PROBE", "hdr_probe"},          {"BB_HDR_NOGRADE", "hdr_nograde"},
+        {"BB_HDR_DELTA", "hdr_delta"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -592,6 +595,7 @@ void Save() {
     put("hdr_dump", std::to_string(v.hdr_dump.load()));
     put("hdr_probe", std::to_string(v.hdr_probe.load()));
     put("hdr_nograde", std::to_string(v.hdr_nograde.load()));
+    put("hdr_delta", std::to_string(v.hdr_delta.load()));
     put("hdr_lut_bridge", v.hdr_lut_bridge == HdrLutBridgeRenoDx ? "renodx" : "exact");
     if (v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));
