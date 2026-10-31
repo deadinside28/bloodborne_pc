@@ -55,6 +55,11 @@ void main() {
     vec2 scale = vec2(1920.0 / float(w == 0u ? 1920u : w), 1080.0 / float(h == 0u ? 1080u : h));
     vec4 v = texelFetch(fs_img0, ivec2(floor(gl_FragCoord.xy * scale)), 0);
     frag_color0 = vec4(brightness(v.x, 0.0), brightness(v.y, 1.0), brightness(v.z, 2.0), v.w);
+    // Chain probe 5 (test): the colour through without the brightness table. A correct scene here
+    // and a tinted one otherwise = the table's rows (layers) are not the channel order we read.
+    if (push_data.bb_hdr.z == 5u) {
+        frag_color0 = vec4(v.x, v.y, v.z, v.w);
+    }
     // Chain probe (in-game menu, test; bb_hdr.z): 2 magenta where the finished image is above
     // the game's white.
     if (push_data.bb_hdr.z == 2u && max(max(v.x, v.y), v.z) > 1.001) {
