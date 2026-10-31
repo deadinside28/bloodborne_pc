@@ -8507,7 +8507,31 @@ void TickBbscSpectate() {
         LOG_INFO(Debug, "BBSC spectate: a partner said dead and then alive while we were down - "
                         "it reloaded after a wipe, the guest follows");
     }
-    if (session_alive && LivingPartnerExists()) {
+    // Second wipe signal: the host's own position reports. It says nothing while it loads, so a
+    // report after a silence means it came out of a load while we were down, with the boss not
+    // killed: it reloaded after a wipe. The life packets above can miss this (the host was already
+    // dead when our death began, or it woke in another map), which left the guest spectating until
+    // the safety limit, with its world unloaded around it (BBSC issue #44).
+    BbscFollowMessage host_report{};
+    {
+        std::scoped_lock lock{bbsc_follow_mutex};
+        host_report = bbsc_follow_latest;
+    }
+    const bool host_report_fresh =
+        host_report.received_ms != 0 && now - host_report.received_ms < BbscFollowStaleMs;
+    const bool host_came_back = session_state == 6 && host_report_fresh &&
+                                host_report.arrival_by_load &&
+                                host_report.arrival_ms >= bbsc_spectate_since_ms &&
+                                bbsc_boss_killed_ms < bbsc_spectate_since_ms &&
+                                !BbscAllPartnersReportDead();
+    if (host_came_back && !bbsc_spectate_saw_wipe) {
+        bbsc_spectate_saw_wipe = true;
+        BBSC_TIMELINE("SPECTATE", "the host came out of a load in map {:#x} while we were down - "
+                                  "the guest follows",
+                      host_report.packed_map);
+    }
+    // A host that woke in another map has no character here, so LivingPartnerExists can't see it.
+    if (session_alive && (LivingPartnerExists() || host_came_back)) {
         std::string_view respawn_why;
         const u64 chr = GetLocalPlayerCharacter();
         if (bbsc_death_mode == BbscDeathMode::RespawnNow) {
@@ -8530,13 +8554,39 @@ void TickBbscSpectate() {
                                  ? real_host
                                  : FindLivingPartnerCharacter();
             const auto host_transform = ReadCharacterTransform(host);
-            if (host_transform.has_value()) {
-                SummonPlacementDescriptor to{};
-                to.packed_region = GetCurrentPackedMap();
+            const u32 here = GetCurrentPackedMap();
+            SummonPlacementDescriptor to{};
+            bool have_target = false;
+            if (host_report_fresh && host_report.packed_map != here) {
+                // The host's coordinates only mean something in its own map: load that map, with
+                // its world state, as a follow does.
+                to.packed_region = host_report.packed_map;
+                to.x = host_report.x + 1.0f;
+                to.y = host_report.y;
+                to.z = host_report.z;
+                to.heading = host_report.heading;
+                have_target = true;
+                if (BbscHostWorldFlagsReady(to.packed_region)) {
+                    ApplyBbscHostWorldFlags(to.packed_region, "before the wipe load");
+                }
+                ApplyBbscHostTime("before the wipe load");
+                ApplyBbscGuestLootView(to.packed_region, "before the wipe load");
+                if (to.packed_region == BbscDreamStateMap) {
+                    ApplyBbscHostDreamState("before the wipe load");
+                } else {
+                    RestoreBbscOwnDreamState("following the host after the wipe");
+                }
+            } else if (host_transform.has_value()) {
+                to.packed_region = here;
                 to.x = host_transform->position[0] + 1.0f;
                 to.y = host_transform->position[1];
                 to.z = host_transform->position[2];
                 to.heading = host_transform->rotation[1];
+                have_target = true;
+            }
+            if (have_target) {
+                BBSC_TIMELINE("SPECTATE", "wipe: reloading beside the host in map {:#x}",
+                              to.packed_region);
                 if (RequestBbscSessionWarp(GetGlobalState(), to, "wipe")) {
                     return; // the load builds a new character: "a load ended the boss fight"
                 }
