@@ -252,7 +252,15 @@ void Checkbox(const char* label, std::atomic<bool>& value) {
 
 void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     float v = value;
-    Store(value, v, ImGui::SliderFloat(label, &v, lo, hi, "%.2f"));
+    const bool changed = ImGui::SliderFloat(label, &v, lo, hi, "%.2f");
+    if (OverlayTrace() && (changed || std::abs(v - float(value)) > 0.001f)) {
+        std::printf("Overlay trace: slider \"%s\" @%p: shown %.3f, was %.3f, changed %d\n", label,
+                    static_cast<const void*>(&value), v, float(value), int(changed));
+    }
+    Store(value, v, changed);
+    if (OverlayTrace() && changed) {
+        std::printf("Overlay trace: slider \"%s\" after store: %.3f\n", label, float(value));
+    }
 }
 
 void Hint(const char* text) {
@@ -319,6 +327,7 @@ void Menu() {
     const bool taa = UpscalerSection(s);
     ReactiveMaskSection(s, taa);
     OutputSection(s);
+    HdrSection(s);
     GameEffectsSection(s);
     FrameRateLimitSection(s);
     ImGui::SeparatorText(BbSettings::MenuText("Camera (right stick)", "Камера (правый стик)"));

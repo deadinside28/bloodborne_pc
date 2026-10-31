@@ -232,6 +232,10 @@ public:
     bool HasPresentId() const {
         return ext.present_id;
     }
+    /// HDR output's static metadata (render/presenter.cpp: vkSetHdrMetadataEXT).
+    bool HasHdrMetadata() const {
+        return ext.hdr_metadata;
+    }
     bool IsShaderFloat16Enabled() const {
         return vk12_features.shaderFloat16;
     }
@@ -420,7 +424,7 @@ private:
             workgroup_layout, view_2d_of_3d, image_view_min_lod, memory_budget, memory_fd,
             dma_buf, memory_host, compute_derivatives, mixed_float_dot, cooperative_matrix,
             float8, shader_clock, guest_uncached, present_id, low_latency2, anti_lag,
-            device_fault;
+            device_fault, hdr_metadata;
     };
 
     vk::UniqueInstance instance;

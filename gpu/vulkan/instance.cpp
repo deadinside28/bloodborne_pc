@@ -345,6 +345,8 @@ void Instance::CreateDevice() {
     // What the driver knows of a GPU fault, printed at a device lost (breadcrumbs).
     ext.device_fault = query.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFault &&
                        enable(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    // HDR output's static metadata (swapchain.cpp SetHdrMetadata).
+    ext.hdr_metadata = enable(VK_EXT_HDR_METADATA_EXTENSION_NAME);
     // Guest direct memory allocated here and mapped by the runtime (BbGuestMemory), or host
     // memory imported where dma-bufs do not fit (NVIDIA).
     ext.memory_fd = enable(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);

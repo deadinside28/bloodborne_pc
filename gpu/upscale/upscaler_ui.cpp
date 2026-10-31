@@ -44,6 +44,7 @@
 #include "upscale/vk_frame_generation.h"
 #include "upscale/vk_smaa.h"
 #include "render/vk_frame_capture.h"
+#include "render/hdr_channel.h"
 #include "vulkan/instance.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
@@ -82,6 +83,28 @@ void TemporalUpscaler::EnsureUiResources(u32 w, u32 h, vk::Format color, vk::For
             .initialLayout = vk::ImageLayout::eUndefined,
         });
         ui_format = color;
+        // Native+ HDR: the pre-UI copy beside it (the HUD's mask compares against it; float
+        // like the UI image, whose format the chain made float).
+        hdr_snapshot_ready = hdr_snapshot_masked = false;
+        hdr_snapshot_view.reset();
+        hdr_snapshot.Destroy();
+        if (HdrChannel::Native16()) {
+            hdr_snapshot = VideoCore::HostImage(device, allocator);
+            hdr_snapshot.Create(vk::ImageCreateInfo{
+                .imageType = vk::ImageType::e2D,
+                .format = color,
+                .extent = {w, h, 1},
+                .mipLevels = 1, .arrayLayers = 1, .samples = vk::SampleCountFlagBits::e1,
+                .tiling = vk::ImageTiling::eOptimal,
+                .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+                         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc,
+                .initialLayout = vk::ImageLayout::eUndefined,
+            });
+            hdr_snapshot_view = Check(device.createImageViewUnique({
+                .image = vk::Image(hdr_snapshot), .viewType = vk::ImageViewType::e2D,
+                .format = color, .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+            }));
+        }
     }
     if (new_depth) {
         ui_depth_view.reset();

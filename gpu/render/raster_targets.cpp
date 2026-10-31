@@ -4,6 +4,7 @@
 // copies), target lookup, the render pass (BeginRendering) and the UI placement.
 
 #include <bit>
+#include "render/hdr_channel.h"
 #include "render/raster_internal.h"
 #include "shim/bb_env.h"
 
@@ -840,8 +841,20 @@ void Rasterizer::Resolve() {
     const auto& regs = Regs();
     VideoCore::TextureCache::ImageDesc src_desc{regs.color_buffers[0], CbExtent(0)};
     VideoCore::TextureCache::ImageDesc dst_desc{regs.color_buffers[1], CbExtent(1)};
-    auto& src = texture_cache.GetImage(texture_cache.FindImage(src_desc, true));
+    const auto src_id = texture_cache.FindImage(src_desc, true);
+    auto& src = texture_cache.GetImage(src_id);
     auto& dst = texture_cache.GetImage(texture_cache.FindImage(dst_desc, true));
+    // Native+ HDR (render/hdr_channel.cpp): a resolve out of the chain (MRT0) brings its target
+    // in from the next frame, and the copies run between the chain's RGBA16F proxies.
+    if (HdrChannel::Native16() &&
+        HdrChannel::ChainImage(src.info.guest_address, src.info.size.width, src.info.size.height,
+                               src.info.pixel_format)) {
+        HdrChannel::NoteCopyTarget(dst.info.guest_address, dst.info.size.width,
+                                   dst.info.size.height, dst.info.pixel_format);
+        if (scene_targets->CopyProxy(src_id, texture_cache.FindImage(dst_desc, true))) {
+            return;
+        }
+    }
     const VAddr src_address = regs.color_buffers[0].Address();
     const VAddr dst_address = regs.color_buffers[1].Address();
     ScopeMarker("Resolve:MRT0={:#x}:MRT1={:#x}", fmt::make_format_args(src_address, dst_address),

@@ -307,6 +307,10 @@ public:
     const Viewports& CurrentViewports() const {
         return viewports;
     }
+    /// The write masks in the command stream now (the HDR delta draw restores them).
+    const ColorWriteMasks& CurrentColorWriteMasks() const {
+        return color_write_masks;
+    }
 
 private:
     u32 dirty = 0;

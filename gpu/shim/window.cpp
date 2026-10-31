@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
-// bbport: SDL3 window for the Vulkan swapchain (X11 or Wayland).
+// bbport: SDL3 window for the Vulkan swapchain (Windows, X11 or Wayland).
 #include <array>
 #include "shim/bb_env.h"
 #include <atomic>
@@ -9,6 +9,10 @@
 #include <cstring>
 #include "bbgpu.h"
 #include <SDL3/SDL.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <dxgi1_6.h>
+#endif
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
@@ -155,6 +159,59 @@ void TellMonitor(SDL_Window* window) {
     }
 }
 
+// HDR output (bbport_settings.h): the peak nits of the display the window is on, from DXGI (the
+// Windows HDR Calibration app's value once it has run, else the display's EDID). Asked at start
+// and when the window moves to another display; dxgi.dll is loaded, not linked. Nothing on the
+// other platforms: HDR output falls back to hdr_peak (bbport.ini), the menu says so.
+void UpdateDisplayPeak(SDL_Window* window) {
+    float peak = 0.0f;
+#ifdef _WIN32
+    const HWND hwnd = static_cast<HWND>(
+        SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER,
+                               nullptr));
+    const HMONITOR monitor =
+        hwnd ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) : nullptr;
+    static const HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+    using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
+    const auto create =
+        dxgi ? reinterpret_cast<CreateFactory>(
+                   reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1")))
+             : nullptr;
+    IDXGIFactory1* factory = nullptr;
+    if (monitor && create &&
+        SUCCEEDED(create(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory)))) {
+        IDXGIAdapter1* adapter = nullptr;
+        for (UINT a = 0; peak == 0.0f && factory->EnumAdapters1(a, &adapter) != DXGI_ERROR_NOT_FOUND;
+             ++a) {
+            IDXGIOutput* output = nullptr;
+            for (UINT o = 0; peak == 0.0f && adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND;
+                 ++o) {
+                IDXGIOutput6* output6 = nullptr;
+                DXGI_OUTPUT_DESC1 desc{};
+                if (SUCCEEDED(output->QueryInterface(__uuidof(IDXGIOutput6),
+                                                     reinterpret_cast<void**>(&output6)))) {
+                    if (SUCCEEDED(output6->GetDesc1(&desc)) && desc.Monitor == monitor) {
+                        peak = desc.MaxLuminance;
+                    }
+                    output6->Release();
+                }
+                output->Release();
+            }
+            adapter->Release();
+        }
+        factory->Release();
+    }
+#else
+    (void)window;
+#endif
+    auto& settings = BbSettings::Get();
+    if (peak != settings.hdr_display_peak.exchange(peak, std::memory_order_relaxed) && peak > 0.0f) {
+        std::printf("HDR output: the display reports a peak of %.0f nits%s\n", peak,
+                    settings.hdr_peak_auto.load() ? " (used: peak from the display)" : "");
+    }
+}
+
+
 } // namespace
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
@@ -226,6 +283,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     height = h;
     LOG_INFO(Frontend, "Window {}x{} on {}", w, h, driver);
     TellMonitor(window);
+    UpdateDisplayPeak(window);
 }
 
 WindowSDL::~WindowSDL() {
@@ -387,6 +445,7 @@ bool WindowSDL::PollEvents() {
         }
         case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
             TellMonitor(window);
+            UpdateDisplayPeak(window);
             break;
         case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:

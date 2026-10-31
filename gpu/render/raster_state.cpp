@@ -4,10 +4,13 @@
 // stencil, primitive assembly, rasterization, blending), set on the scheduler's DynamicState
 // (only what changed is recorded), and debug markers.
 
+#include <algorithm>
 #include <mutex>
 #include "shim/bb_env.h"
 #include <unordered_map>
 
+#include "bbport_settings.h"
+#include "render/hdr_channel.h"
 #include "render/raster_internal.h"
 
 namespace Vulkan {
@@ -310,7 +313,17 @@ void Rasterizer::UpdateRasterizationState() const {
 
 void Rasterizer::UpdateColorBlendingState(const GraphicsPipeline* pipeline) const {
     auto& dynamic_state = scheduler.GetDynamicState();
-    dynamic_state.SetBlendConstants(Regs().blend_constants);
+    // Native+ HDR (render/hdr_channel.cpp): the game's second glow is added with the blend
+    // constant — the Bloom slider scales it live (the chain draw keeps the game's own).
+    const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+    if (HdrChannel::Native16() && ps && ps->pgm_hash == HdrChannel::GlowAddHash) {
+        const float k =
+            std::clamp(BbSettings::Get().hdr_bloom.load(std::memory_order_relaxed), 0.0f, 100.0f) /
+            50.0f;
+        dynamic_state.SetBlendConstants({k, k, k, 1.0f});
+    } else {
+        dynamic_state.SetBlendConstants(Regs().blend_constants);
+    }
     dynamic_state.SetColorWriteMasks(pipeline->GetGraphicsKey().write_masks);
     dynamic_state.SetAttachmentFeedbackLoopEnabled(attachment_feedback_loop);
 }

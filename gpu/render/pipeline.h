@@ -104,6 +104,9 @@ protected:
     vk::UniquePipelineLayout pipeline_layout;
     vk::UniqueDescriptorSetLayout desc_layout;
     std::array<const Shader::Info*, Shader::MaxStageTypes> stages{};
+    /// The push range declared: the game's 128 bytes, plus bb_hdr/bb_hdr2 in native+ (128/144
+    /// are where bbport's GLSL expects them).
+    u32 push_size = Shader::PushData::GameSize;
     bool uses_push_descriptors{};
     bool is_compute;
 };
@@ -215,6 +218,14 @@ public:
         return key;
     }
 
+    /// The composite's HDR delta pass (Native+): the game's vertex stages + the delta fragment
+    /// (render/hdr_channel.cpp), the same state — or null for a pipeline without one. Drawn
+    /// right after the game's draw, with its descriptor set still bound (rasterizer.cpp
+    /// DrawRecord).
+    vk::Pipeline HdrHandle() const {
+        return *hdr_pipeline;
+    }
+
     /// The vertex input attributes and bindings of the fetch shader's attributes. `sharps`,
     /// when given, are their V#s as the GPU command thread read them (in the draw packet): the
     /// tables they come from may have been rewritten by a later constant engine dump by the
@@ -228,6 +239,7 @@ public:
 private:
     GraphicsPipelineKey key;
     std::optional<const Shader::Gcn::FetchShaderData> fetch_shader{};
+    vk::UniquePipeline hdr_pipeline;
 };
 
 struct ClipDistanceShaderKey {

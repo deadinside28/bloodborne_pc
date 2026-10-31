@@ -99,7 +99,8 @@ if (WIN32)
     # Bit-fields laid out as on Linux (GCC's way), not MSVC's: the GPU registers and the PS4's
     # structures are declared with them.
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-mno-ms-bitfields>)
-    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/platform/win32/include/bbport_win32.h>")
+    # Quoted: a checkout path with a space (D:\Code Repository\...) split the -include argument.
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include \"${CMAKE_CURRENT_SOURCE_DIR}/platform/win32/include/bbport_win32.h\">")
 endif()
 add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)
 
@@ -135,6 +136,28 @@ add_own_shader(render/shaders/texel_copy.frag texel_copy_msaa_frag MSAA_SOURCE=1
 add_own_shader(buffers/shaders/fault_scan.comp fault_scan_comp)
 add_own_shader(render/shaders/fullscreen.vert fullscreen_vert)
 add_own_shader(render/shaders/present_encode.frag present_encode_frag)
+# HDR output (render/presenter.cpp RecordHdrPresent): the SDR composite + menu layer encoded
+# for the HDR swapchain (HDR10 PQ or scRGB).
+add_own_shader(render/shaders/hdr_output.frag hdr_output_frag)
+# Native+ HDR transport (render/hdr_channel.cpp): the composite's HDR delta per variant of
+# bb_tonemap_variants.h, and bbport's versions of the chain's shaders (glow source, copy, color
+# table, display copy) with the game's inputs (shaders/hdr/bb_inputs.glsl): read per vertex, or
+# as the GPU interpolates them (BB_HW_INTERP).
+add_own_shader(render/shaders/hdr/bb_composite_hdr.frag bb_composite_hdr_frag)
+add_own_shader(render/shaders/hdr/bb_composite_hdr.frag bb_composite_hdr_hw_frag BB_HW_INTERP=1)
+add_own_shader(render/shaders/hdr/bb_copy.frag bb_copy_frag)
+add_own_shader(render/shaders/hdr/bb_copy.frag bb_copy_hw_frag BB_HW_INTERP=1)
+add_own_shader(render/shaders/hdr/bb_glow_source.frag bb_glow_source_frag)
+add_own_shader(render/shaders/hdr/bb_glow_source.frag bb_glow_source_hw_frag BB_HW_INTERP=1)
+add_own_shader(render/shaders/hdr/bb_color_grading.frag bb_color_grading_frag)
+add_own_shader(render/shaders/hdr/bb_color_grading.frag bb_color_grading_hw_frag BB_HW_INTERP=1)
+add_own_shader(render/shaders/hdr/bb_display_copy.frag bb_display_copy_frag)
+# The HUD's mask (the upscaler's pre-UI snapshot against the finished frame): the present shows
+# the HUD at UI Brightness through it.
+add_own_shader(render/shaders/hdr/hdr_ui_mask.comp hdr_ui_mask_comp)
+# Compile check of hdr/renodx.glsl (every function used once; MIT port verified by the source
+# repo's shader-check against RenoDX's own code). Not part of the game.
+add_own_shader(render/shaders/hdr/renodx_check.frag renodx_check_frag)
 add_own_shader(upscale/shaders/camera_motion.comp camera_motion_comp)
 # GT-VBAO in place of the game's SSAO (upscale/vk_vbao.cpp, docs/vbao.md; contributed by redditor69).
 add_own_shader(upscale/shaders/vbao.comp vbao_comp)
@@ -326,7 +349,9 @@ target_compile_options(effect-flags-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(effect-flags-test PRIVATE shim)
 add_executable(settings-test EXCLUDE_FROM_ALL ../tests/test_settings.cpp shim/bbport_settings.cpp)
 target_compile_options(settings-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
-target_include_directories(settings-test PRIVATE .. shim)
+# gpu/. on the path (like bbgpu's "shim/bb_env.h"), not the repo root: a newer libc++ includes
+# <version>, which would find the repo's VERSION file there (Windows is case-insensitive).
+target_include_directories(settings-test PRIVATE . shim)
 
 # The clip-space matrices DLSS Frame Generation gets (upscale/camera_matrices.h): no GPU.
 add_executable(camera-matrices-test EXCLUDE_FROM_ALL ../tests/test_camera_matrices.cpp)
@@ -348,6 +373,14 @@ set_source_files_properties(../tests/test_taa_shader.cpp PROPERTIES
     COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
 target_link_libraries(taa-shader-test PRIVATE bbgpu)
 add_dependencies(taa-shader-test host_shaders)
+
+# The HDR output encode on a synthetic row (self-contained: raw Vulkan, only the generated
+# shader headers).
+add_executable(hdr-output-test EXCLUDE_FROM_ALL ../tests/test_hdr_output.cpp)
+target_include_directories(hdr-output-test PRIVATE ${SHADER_INCLUDE})
+target_compile_options(hdr-output-test PRIVATE -UNDEBUG)
+target_link_libraries(hdr-output-test PRIVATE Vulkan::Vulkan)
+add_dependencies(hdr-output-test host_shaders)
 
 add_executable(camera-motion-test EXCLUDE_FROM_ALL ../tests/test_camera_motion.cpp ../tests/test_gpu_runtime_stubs.cpp)
 target_include_directories(camera-motion-test PRIVATE . shim ${SHADER_INCLUDE} third_party/gcn/include)

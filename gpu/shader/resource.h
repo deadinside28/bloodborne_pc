@@ -10,6 +10,7 @@
 #include "shim/bb_env.h"
 
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 
@@ -282,6 +283,10 @@ struct PushData {
     static constexpr u32 BufOffsetIndex = UdRegsIndex + NUM_USER_DATA_REGS / 4;
     static constexpr u32 MotionParamIndex = BufOffsetIndex + NUM_BUFFERS / 16 + 1;
     static constexpr u32 SceneSizeIndex = MotionParamIndex + 1;
+    static constexpr u32 BbHdrIndex = SceneSizeIndex + 1;
+    static constexpr u32 BbHdr2Index = BbHdrIndex + 4;
+    /// The game's prefix: what a pipeline's push range declares unless native+ is on.
+    static constexpr u32 GameSize = 128;
 
     float xoffset;
     float yoffset;
@@ -291,12 +296,19 @@ struct PushData {
     std::array<u8, NUM_BUFFERS> buf_offsets; ///< buffer offsets below the alignment (bytes)
     u32 motion_param; ///< object motion parameter index (0: off)
     u32 scene_size;   ///< reduced width | height << 16; 0 for native pixel coordinates
+    /// Native+ HDR transport (render/hdr_channel.cpp): bb_hdr at offset 128, bb_hdr2 at 144.
+    /// Declared only by native+ pipelines' push ranges (Pipeline::CreateLayouts) and written
+    /// there per draw (rasterizer.cpp); the recompiled game shaders never read them — bbport's
+    /// GLSL (render/shaders/hdr/) hard-codes these offsets.
+    std::array<u32, 4> bb_hdr{};
+    std::array<u32, 8> bb_hdr2{};
 
     void AddOffset(u32 binding, u32 offset) {
         ASSERT(offset < 256 && binding < buf_offsets.size());
         buf_offsets[binding] = offset;
     }
 };
-static_assert(sizeof(PushData) <= 128, "PushData exceeds the push constant size Vulkan guarantees");
+static_assert(offsetof(PushData, bb_hdr) == PushData::GameSize);
+static_assert(sizeof(PushData) == 176, "PushData's HDR extension moved (bbport GLSL hard-codes 128/144)");
 
 } // namespace Shader

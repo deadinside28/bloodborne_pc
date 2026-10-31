@@ -3,11 +3,15 @@
 // bbport render: Rasterizer, the draw and dispatch entry points: pipeline selection, then recording here or on the
 // draw recording thread (raster_pipe.cpp), and the per-frame bookkeeping.
 
+#include <algorithm>
 #include <mutex>
 #include "shim/bb_env.h"
 #include <set>
 #include <string>
 #include <filesystem>
+#include "bbport_settings.h"
+#include "render/gcn_to_vk.h"
+#include "render/hdr_channel.h"
 #include "render/raster_internal.h"
 #include <vk_mem_alloc.h>
 
@@ -24,6 +28,11 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
     // Before the rasterizer is bound: Liverpool enqueues buffers only once it sees it.
     draw_prep = std::make_unique<DrawPreparation>(pipeline_cache);
+    // Native+ HDR (render/hdr_channel.cpp): bb_hdr/bb_hdr2 extend the push constants to 176
+    // bytes, and the delta pipelines declare them.
+    ASSERT_MSG(!HdrChannel::Native16() ||
+                   instance.GetPhysicalDevice().getProperties().limits.maxPushConstantsSize >= 176,
+               "Native+ needs 176 bytes of Vulkan push constants; choose Expand in the menu");
     // A program (or fetch shader) that does not look like one yet: the game may have copied it
     // into place with the GPU (DMA) in work recorded but not run yet (another game: all-zero
     // programs, the load hung). Called on the GPU command thread, inside a draw: the work
@@ -769,8 +778,55 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
+    // Native+ HDR: the chain's own shaders and the colour table take bb_hdr from bbport. It goes
+    // out with the draw itself: recorded as a separate command after it, these values arrived one
+    // draw late and the game's own push (zeros there) then overwrote them, so the copy, the glow,
+    // the colour table and the display copy always ran with zeros.
+    std::array<u32, 4> hdr_bb{};
+    bool hdr_bb_set = false;
+    const vk::PipelineLayout hdr_layout = pipeline->GetLayout();
+    if (ps_info && HdrChannel::Native16()) {
+        const auto& settings = BbSettings::Get();
+        if (ps_info->pgm_hash == HdrChannel::ColorGradingHash) {
+            const float strength = std::clamp(
+                settings.hdr_scene_grading.load(std::memory_order_relaxed), 0.0f, 100.0f) / 100.0f;
+            hdr_bb = {0u,
+                      u32(std::clamp(int(settings.hdr_lut_bridge.load(std::memory_order_relaxed)), 0,
+                                     1)) +
+                          1u,
+                      HdrChannel::ChainProbe(), std::bit_cast<u32>(strength) + 1u};
+            hdr_bb_set = true;
+        } else if (ps_info->pgm_hash == 0xf7229091ull || ps_info->pgm_hash == 0x57f3b8c2ull ||
+                   ps_info->pgm_hash == 0xed4c7668ull || ps_info->pgm_hash == 0x38d65b32ull) {
+            const float bloom =
+                std::clamp(settings.hdr_bloom.load(std::memory_order_relaxed), 0.0f, 100.0f) / 50.0f;
+            u32 swap =
+                u32(std::clamp(int(settings.hdr_swap.load(std::memory_order_relaxed)), 0, 15));
+            if (regs.color_buffers[0]) {
+                const auto& cb = regs.color_buffers[0];
+                const vk::Format target = GcnToVk::SurfaceFormat(cb.GetDataFmt(), cb.GetNumberFmt());
+                if (HdrChannel::Upgraded(cb.Address(), cb.Pitch(), cb.Height(), target) ||
+                    HdrChannel::DisplayUpgraded(cb.Address(), target)) {
+                    swap |= 32u;
+                }
+                // The display copy converts channels only for the chain's own image (bit 4): the
+                // UI is composited through the same shader at the output size.
+                if (ps_info->pgm_hash == 0x38d65b32ull &&
+                    HdrChannel::IsChainSize(cb.Pitch(), cb.Height())) {
+                    swap |= 16u;
+                }
+            }
+            hdr_bb = {swap, std::bit_cast<u32>(HdrChannel::Knee()), HdrChannel::ChainProbe(),
+                      std::bit_cast<u32>(bloom)};
+            hdr_bb_set = true;
+        }
+    }
     scheduler.RecordCrumb(crumb, [=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+        if (hdr_bb_set) {
+            cmdbuf.pushConstants(hdr_layout, AllGraphicsStageBits,
+                                 u32(offsetof(Shader::PushData, bb_hdr)), 16u, hdr_bb.data());
+        }
         if (DynCheck::Enabled()) {
             DynCheck::Draw(cmdbuf, check_viewports, check_scissors, check_vs, check_ps);
         }
@@ -780,6 +836,169 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
         }
     });
+    // Native+ HDR transport (render/hdr_channel.cpp): the composite's HDR delta right after the
+    // game's draw, into its own (RGBA16F) target, with the same descriptor set still bound.
+    // bb_hdr/bb_hdr2 hold this draw's live values (each a float's bits plus one; 0: the
+    // specialization constant), the game's values go back after. The peak is the display's (or
+    // the menu's); the grading sliders' neutrals stand in for the RenoDX grading, which comes
+    // with the menu work.
+    if (const vk::Pipeline hdr_handle = pipeline->HdrHandle();
+        hdr_handle && BbSettings::Get().hdr_delta.load(std::memory_order_relaxed) != 0) {
+        const auto bits = [](float f) { return std::bit_cast<u32>(f) + 1u; };
+        const float paper =
+            std::clamp(BbSettings::Get().hdr_paper_white.load(std::memory_order_relaxed),
+                       BbSettings::HdrPaperWhiteMin, BbSettings::HdrPaperWhiteMax);
+        const std::array<u32, 8> vanilla{
+            bits(HdrChannel::PeakNits() / paper), bits(1.0f), bits(1.0f), bits(1.0f),
+            bits(1.0f),                           bits(1.0f), 5u /* Vanilla+ */, 0u};
+        // bb_hdr.x: the chain's channel-order test (0..15, the menu's diagnostic), bb_hdr.y:
+        // the knee, bb_hdr.z: the chain probe, bb_hdr.w: the game's bloom (50 = the game's; the
+        // menu's slider, live).
+        const float bloom =
+            std::clamp(BbSettings::Get().hdr_bloom.load(std::memory_order_relaxed), 0.0f, 100.0f) /
+            50.0f;
+        u32 swap = u32(std::clamp(int(BbSettings::Get().hdr_swap.load(std::memory_order_relaxed)),
+                                  0, 15));
+        // Bit 4: the composite's delta without the game's colour matrix (hdr_nograde, a
+        // diagnostic for a channel the matrix pushes to zero).
+        if (BbSettings::Get().hdr_nograde.load(std::memory_order_relaxed) != 0) {
+            swap |= 16u;
+        }
+        std::array<u32, 12> probe{swap, bits(HdrChannel::Knee()), HdrChannel::ChainProbe(),
+                                  bits(bloom)};
+        std::array<u32, 12> game_reg{push_data.bb_hdr[0], push_data.bb_hdr[1],
+                                     push_data.bb_hdr[2], push_data.bb_hdr[3]};
+        for (size_t i = 0; i < vanilla.size(); ++i) {
+            probe[4 + i] = vanilla[i];
+            game_reg[4 + i] = push_data.bb_hdr2[i];
+        }
+        const vk::PipelineLayout layout = pipeline->GetLayout();
+        constexpr u32 reg_offset = u32(offsetof(Shader::PushData, bb_hdr));
+        constexpr u32 reg_size = u32(sizeof(probe));
+        static_assert(offsetof(Shader::PushData, bb_hdr2) ==
+                      offsetof(Shader::PushData, bb_hdr) + 16);
+        const bool dynamic_masks = instance.IsDynamicColorWriteMaskSupported();
+        const auto game_masks = scheduler.GetDynamicState().CurrentColorWriteMasks();
+        scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, hdr_handle);
+            cmdbuf.pushConstants(layout, AllGraphicsStageBits, reg_offset, reg_size, probe.data());
+            {
+                static std::atomic<int> told{0};
+                if (told.fetch_add(1) < 3) {
+                    std::printf("HDR delta draw: probe z %u, %u bytes at %u, pipeline %p layout %p\n",
+                                probe[2], reg_size, reg_offset, (void*)hdr_handle, (void*)layout);
+                }
+            }
+            if (dynamic_masks) {
+                // The delta goes to the color channels; the game's alpha (its grain) stays.
+                constexpr auto rgb = vk::ColorComponentFlags{vk::ColorComponentFlagBits::eR} |
+                                     vk::ColorComponentFlagBits::eG |
+                                     vk::ColorComponentFlagBits::eB;
+                cmdbuf.setColorWriteMaskEXT(0, rgb);
+            }
+            if (is_indexed) {
+                cmdbuf.drawIndexed(num_indices, num_instances, 0, s32(first_vertex),
+                                   first_instance);
+            } else {
+                cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
+            }
+            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+            if (dynamic_masks) {
+                cmdbuf.setColorWriteMaskEXT(0, game_masks);
+            }
+            cmdbuf.pushConstants(layout, AllGraphicsStageBits, reg_offset, reg_size,
+                                 game_reg.data());
+        });
+    }
+    // One-shot diagnostic: the words the composite's shader reads. Those values say whether our
+    // offsets are the ones the game's own shader used (the chain's image is coherent but dark and
+    // red-less — a per-channel scale at its input would do that).
+    if (ps_info && HdrChannel::Native16() && HdrChannel::IsCompositeVariant(ps_info->pgm_hash)) {
+        static std::atomic<bool> hdr_consts_done{false};
+        if (!hdr_consts_done.exchange(true)) {
+            std::printf("HDR probe: ChainProbe %u, setting %d, knee %.3f\n", HdrChannel::ChainProbe(),
+                        int(BbSettings::Get().hdr_probe.load()), HdrChannel::Knee());
+            const auto* stage = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+            u32 n = 0;
+            for (const auto& buffer : stage ? stage->buffers : decltype(stage->buffers){}) {
+                if (n >= 4) {
+                    break;
+                }
+                if (buffer.IsSpecial()) {
+                    continue;
+                }
+                const auto sharp = buffer.GetSharp(*stage);
+                const u64 size = sharp.GetSize();
+                if (sharp.base_address == 0 || size < (852u + 1u) * 4u) {
+                    std::printf("HDR consts: buffer %u: %#llx, %llu bytes (too small)\n", n,
+                                (unsigned long long)sharp.base_address,
+                                (unsigned long long)size);
+                    ++n;
+                    continue;
+                }
+                float words[53]{}; // 800..852
+                Core::Memory::Instance()->ReadBacking(sharp.base_address + 800u * 4u, words,
+                                                      sizeof(words));
+                std::printf("HDR consts: buffer %u @%#llx %llu bytes (800..852):", n,
+                            (unsigned long long)sharp.base_address, (unsigned long long)size);
+                for (float w : words) {
+                    std::printf(" %.4f", w);
+                }
+                std::printf("\n");
+                float tint[16]{}; // 744..759
+                Core::Memory::Instance()->ReadBacking(sharp.base_address + 744u * 4u, tint,
+                                                      sizeof(tint));
+                std::printf("HDR consts: buffer %u (744..759):", n);
+                for (float w : tint) {
+                    std::printf(" %.4f", w);
+                }
+                std::printf("\n");
+                float gain[21]{}; // 600..620: the scene gain (616) and the glow's (617)
+                Core::Memory::Instance()->ReadBacking(sharp.base_address + 600u * 4u, gain,
+                                                      sizeof(gain));
+                std::printf("HDR consts: buffer %u (600..620):", n);
+                for (float w : gain) {
+                    std::printf(" %.4f", w);
+                }
+                std::printf("\n");
+                float mats[29]{}; // 856..884: the scene matrix (856..867), the glow's (872..883)
+                Core::Memory::Instance()->ReadBacking(sharp.base_address + 856u * 4u, mats,
+                                                      sizeof(mats));
+                std::printf("HDR consts: buffer %u (856..884):", n);
+                for (float w : mats) {
+                    std::printf(" %.4f", w);
+                }
+                std::printf("\n");
+                ++n;
+            }
+        }
+    }
+    // The draw's color target joins the 16-bit chain (composite variants and the chain's
+    // shaders): from the next frame on it is drawn as RGBA16F.
+    if (ps_info && HdrChannel::Native16() && regs.color_buffers[0]) {
+        const auto& cb = regs.color_buffers[0];
+        const vk::Format target_format =
+            GcnToVk::SurfaceFormat(cb.GetDataFmt(), cb.GetNumberFmt());
+        HdrChannel::NoteTarget(ps_info->pgm_hash, cb.Address(), cb.Pitch(), cb.Height(),
+                               target_format);
+        // One line per shader the chain knows, at the draw: what it draws into, and whether that
+        // target is float this frame (BB_HDR_TRACE=1 also logs the accesses of a traced frame).
+        if (HdrChannel::IsCompositeVariant(ps_info->pgm_hash) ||
+            HdrChannel::ChainShaderHash(ps_info->pgm_hash)) {
+            static std::mutex told_mutex;
+            static std::unordered_set<u64> told;
+            const bool upgraded = HdrChannel::Upgraded(cb.Address(), cb.Pitch(), cb.Height(),
+                                                       target_format);
+            const u64 key = (ps_info->pgm_hash << 1) | (upgraded ? 1u : 0u);
+            std::scoped_lock lock{told_mutex};
+            if (told.size() < 64 && told.insert(key).second) {
+                std::printf("HDR chain draw: ps %08x -> %#llx %ux%u %s, float target %s\n",
+                            u32(ps_info->pgm_hash), (unsigned long long)cb.Address(), cb.Pitch(),
+                            cb.Height(), vk::to_string(target_format).c_str(),
+                            upgraded ? "yes" : "NO");
+            }
+        }
+    }
     // BB_TRACE_SHADER with BB_GPU_PROFILE: a mark right after the traced vertex shader's draws,
     // so the profile splits their pass into the draw and what follows it unlabeled.
     if (auto* profiler = GpuProfiler::Get()) {

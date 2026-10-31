@@ -5,6 +5,7 @@
 // their resources and replaced by the tracked metadata state or a Vulkan copy or clear (the
 // images live in their own Vulkan memory, not in the buffers the shader would write).
 
+#include "render/hdr_channel.h"
 #include "render/raster_internal.h"
 #include "shim/bb_env.h"
 
@@ -173,8 +174,27 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline, bool dry_run) {
     // Reduced presets: the proxies are copied, not the native images (a resolve each).
     const auto src_id = desc0.is_written ? image1_id : image0_id;
     const auto dst_id = desc0.is_written ? image0_id : image1_id;
-    if (!scene_targets->CopyProxy(src_id, dst_id)) {
-        runtime.CopyColorAndDepth(&src, &dst);
+    // Native+ HDR (render/hdr_channel.cpp): the chain's copies happen between its RGBA16F
+    // proxies — through the native 8-bit images the copy would clip at the game's white. A copy
+    // out of the chain into a same-shaped 8-bit target brings that target in from the next
+    // frame; this one copies native (the proxy resolves into it first).
+    const auto chain = [](const VideoCore::Image& image) {
+        return HdrChannel::ChainImage(image.info.guest_address, image.info.size.width,
+                                      image.info.size.height, image.info.pixel_format);
+    };
+    if (HdrChannel::Native16() && chain(src) && chain(dst) && src.info.num_samples == 1 &&
+        dst.info.num_samples == 1 && scene_targets->CopyProxy(src_id, dst_id)) {
+        // Copied between the chain's proxies; the native copy (a resolve each) is skipped.
+    } else {
+        if (HdrChannel::Native16() && chain(src) && !chain(dst) && !dst.info.props.is_depth &&
+            dst.info.size.width == src.info.size.width &&
+            dst.info.size.height == src.info.size.height) {
+            HdrChannel::NoteCopyTarget(dst.info.guest_address, dst.info.size.width,
+                                       dst.info.size.height, dst.info.pixel_format);
+        }
+        if (!scene_targets->CopyProxy(src_id, dst_id)) {
+            runtime.CopyColorAndDepth(&src, &dst);
+        }
     }
     // Before: the shader ran (5 times a frame over the light shafts), writing 2.3 MiB into the
     // game's memory each time (in place: those blocks are dynamic), the target then uploaded

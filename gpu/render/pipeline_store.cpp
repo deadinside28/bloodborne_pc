@@ -16,6 +16,7 @@
 #include "common/serdes.h"
 #include "core/emulator_settings.h"
 #include "render/blob_store.h"
+#include "render/hdr_channel.h"
 #include "render/pipeline_cache.h"
 #include "render/pipeline_store.h"
 #include "shader/info.h"
@@ -203,10 +204,21 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
         }
         return false;
     }
+    // Native+ HDR (render/hdr_channel.cpp): the cache holds the game's own SPIR-V — the chain's
+    // replacements are applied again at each load, and a composite variant registers its delta
+    // pass. So every mode shares one cache.
+    std::vector<u32> hdr_spv{};
+    if (program->info.hw_stage == Shader::HwStage::Fragment && HdrChannel::Native16()) {
+        hdr_spv = HdrChannel::ChainReplacement(program->info.pgm_hash, spv);
+        if (hdr_spv.empty()) {
+            HdrChannel::NoteGameShader(program->info.pgm_hash, spv);
+        }
+    }
     // A module the driver rejects is a damaged entry (the cache is rebuilt), not a fatal error.
     const auto compile = [&] {
+        const std::vector<u32>& code = hdr_spv.empty() ? spv : hdr_spv;
         auto [result, created] = instance.GetDevice().createShaderModule(
-            {.codeSize = spv.size() * sizeof(u32), .pCode = spv.data()});
+            {.codeSize = code.size() * sizeof(u32), .pCode = code.data()});
         if (result != vk::Result::eSuccess) {
             throw Serialization::CorruptData{"cached SPIR-V rejected by the driver"};
         }
@@ -327,6 +339,18 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar, std::vector
     sel.graphics_key.Deserialize(ar);
     GraphicsPipeline::SerializationSupport sdata{};
     sdata.Deserialize(ar);
+
+    // Native+ HDR: a preloaded pipeline is built with preloading=true, where the composite's
+    // delta pass cannot be built (the game's shader may not be recompiled yet) — so it ran with
+    // no delta at all. Graphics pipelines are created on first use instead, which builds it.
+    if (HdrChannel::Native16()) {
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1) == 0) {
+            std::printf("HDR: native+: graphics pipelines are created live (a preloaded one has no "
+                        "delta pass)\n");
+        }
+        return false;
+    }
 
     for (u32 stage = 0; stage < MaxShaderStages; ++stage) {
         const u64 hash = sel.graphics_key.stage_hashes[stage];

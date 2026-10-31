@@ -40,6 +40,7 @@ extern char** environ;
 #include "common/hash.h"
 #include "common/scope_exit.h"
 #include "render/compile_log.h"
+#include "render/hdr_channel.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
 #include "common/serdes.h"
@@ -419,7 +420,19 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     }
     DumpShader(spv, info.pgm_hash, info.hw_stage, perm_idx, "spv");
 
-    const vk::ShaderModule module = CompileSPV(spv, instance.GetDevice());
+    // Native+ HDR transport (render/hdr_channel.cpp): bbport's version of a chain shader (the
+    // game's bindings patched into it) replaces the module; a composite variant registers its
+    // delta pass for the rasterizer's follow-up draw instead. The cache below keeps the game's
+    // own SPIR-V, so the modes stay independent; the replacement is applied again at each
+    // build. TODO(HDR): the cache's loads apply it too (cache_storage in the source port).
+    std::vector<u32> hdr_spv;
+    if (info.hw_stage == Shader::HwStage::Fragment) {
+        hdr_spv = HdrChannel::ChainReplacement(info.pgm_hash, spv);
+        if (hdr_spv.empty()) {
+            HdrChannel::NoteGameShader(info.pgm_hash, spv);
+        }
+    }
+    const vk::ShaderModule module = CompileSPV(hdr_spv.empty() ? spv : hdr_spv, instance.GetDevice());
     PipelineStore::SaveShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
     SetObjectName(instance.GetDevice(), module, GetShaderName(info.hw_stage, info.pgm_hash, perm_idx));
     return module;

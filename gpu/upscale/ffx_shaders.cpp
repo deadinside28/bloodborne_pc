@@ -21,8 +21,10 @@
 #include "bbgpu/shaders/ffx_of_v5_fast.h"
 #include "bbgpu/shaders/ffx_of_v5_hdr_fast.h"
 
+// The FFX backend's custom-shader hook; its definition lives here (a null one until the override
+// is installed below): with the library as a static one on Windows the linker needs it.
 extern "C" bool (*ffxVkShaderOverride)(uint32_t effect, uint32_t pass, uint32_t permutationOptions,
-                                       const uint32_t** words, size_t* size);
+                                       const uint32_t** words, size_t* size) = nullptr;
 
 namespace FfxShaders {
 

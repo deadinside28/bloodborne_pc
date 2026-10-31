@@ -14,6 +14,7 @@
 #include "sdl_window.h"
 #include "vulkan/instance.h"
 #include "vulkan/platform.h"
+#include "bbport_settings.h"
 #include "bbport_timeline.h"
 
 namespace Vulkan {
@@ -24,6 +25,16 @@ namespace {
 constexpr vk::SurfaceFormatKHR HdrFormat{
     .format = vk::Format::eA2B10G10R10UnormPack32,
     .colorSpace = vk::ColorSpaceKHR::eHdr10St2084EXT,
+};
+
+/// HDR output formats (bbport_settings.h hdr=1), in order of preference: HDR10 (BT.2020
+/// primaries, PQ), then scRGB (linear BT.709 in FP16, 1.0 = 80 nits).
+constexpr std::array HdrOutputFormats = {
+    HdrFormat,
+    vk::SurfaceFormatKHR{
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .colorSpace = vk::ColorSpaceKHR::eExtendedSrgbLinearEXT,
+    },
 };
 
 vk::PresentModeKHR RequestedPresentMode() {
@@ -68,13 +79,53 @@ void Swapchain::ChooseFormat() {
     // A single undefined format: the surface takes any.
     if (formats.size() == 1 && formats[0].format == vk::Format::eUndefined) {
         sdr_format = {vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear};
+    } else {
+        const auto it = std::ranges::find_if(formats, [](const vk::SurfaceFormatKHR& f) {
+            return f.format == vk::Format::eR8G8B8A8Unorm || f.format == vk::Format::eB8G8R8A8Unorm;
+        });
+        ASSERT_MSG(it != formats.end(), "the surface has no RGBA8 or BGRA8 format");
+        sdr_format = *it;
+    }
+
+    // HDR output (hdr in bbport.ini), chosen once at start: the first of the surface's HDR
+    // formats. The game's own PQ request (platform/videoout, which Bloodborne never makes) is
+    // separate and needs nothing chosen here.
+    auto& settings = BbSettings::Get();
+    if (!settings.startup_hdr) {
         return;
     }
-    const auto it = std::ranges::find_if(formats, [](const vk::SurfaceFormatKHR& f) {
-        return f.format == vk::Format::eR8G8B8A8Unorm || f.format == vk::Format::eB8G8R8A8Unorm;
-    });
-    ASSERT_MSG(it != formats.end(), "the surface has no RGBA8 or BGRA8 format");
-    sdr_format = *it;
+    for (const vk::SurfaceFormatKHR& candidate : HdrOutputFormats) {
+        if (std::ranges::contains(formats, candidate)) {
+            hdr_format = candidate;
+            break;
+        }
+    }
+    if (hdr_format.format == vk::Format::eUndefined) {
+        std::printf("HDR output: the display offers no HDR format (is Windows HDR on?)\n");
+        return;
+    }
+    // The presenter letterboxes the frame into an SDR image of the swapchain's size, draws the
+    // menu over it, and samples it in the encode pass.
+    constexpr vk::FormatFeatureFlags composite_features =
+        vk::FormatFeatureFlagBits::eSampledImage | vk::FormatFeatureFlagBits::eColorAttachment |
+        vk::FormatFeatureFlagBits::eColorAttachmentBlend | vk::FormatFeatureFlagBits::eBlitDst |
+        vk::FormatFeatureFlagBits::eTransferDst;
+    const vk::FormatFeatureFlags features =
+        instance.GetPhysicalDevice().getFormatProperties(sdr_format.format).optimalTilingFeatures;
+    if ((features & composite_features) != composite_features) {
+        std::printf("HDR output: %s cannot hold the SDR picture for the encode; staying SDR\n",
+                    vk::to_string(sdr_format.format).c_str());
+        hdr_format = {};
+        return;
+    }
+    const float display_peak = settings.hdr_display_peak.load();
+    std::printf("HDR output: %s, paper white %.0f nits, peak %.0f nits (%s), highlight boost %.2f\n",
+                hdr_format == HdrFormat ? "HDR10 PQ (BT.2020)" : "scRGB (FP16, linear BT.709)",
+                settings.hdr_paper_white.load(), BbSettings::HdrPeakNits(settings),
+                !settings.hdr_peak_auto.load()           ? "set"
+                : display_peak >= BbSettings::HdrPeakMin ? "the display's"
+                                                         : "the display reports none: the set value",
+                settings.hdr_boost.load());
 }
 
 void Swapchain::ChoosePresentMode() {
@@ -154,7 +205,21 @@ void Swapchain::Create(u32 width_, u32 height_) {
     const std::array families = {instance.GetGraphicsQueueFamilyIndex(),
                                  instance.GetPresentQueueFamilyIndex()};
     const bool exclusive = families[0] == families[1];
-    const auto format = use_hdr ? HdrFormat : sdr_format;
+    // HDR output while the display still offers the HDR format chosen at start (switching
+    // Windows HDR off removes it; the swapchain is SDR until it is back). The game's own PQ
+    // request (SetHDR) keeps the HDR10 format.
+    hdr_output = false;
+    if (hdr_format.format != vk::Format::eUndefined) {
+        const auto formats = Check<"query surface formats">(
+            instance.GetPhysicalDevice().getSurfaceFormatsKHR(surface));
+        hdr_output = std::ranges::contains(formats, hdr_format);
+        if (!hdr_output && !hdr_unavailable_logged) {
+            std::printf("HDR output: the display offers no HDR format now (is Windows HDR on?); "
+                        "SDR until it does\n");
+        }
+        hdr_unavailable_logged = !hdr_output;
+    }
+    const auto format = use_hdr ? HdrFormat : hdr_output ? hdr_format : sdr_format;
     const vk::SwapchainKHR old = swapchain;
     // Low latency (NVIDIA Reflex, render/vk_low_latency): the swapchain takes the driver's
     // latency mode when the device has VK_NV_low_latency2.
@@ -212,6 +277,38 @@ void Swapchain::Create(u32 width_, u32 height_) {
         SetObjectName(device, present_ready[i], "swapchain present ready {}", i);
     }
     frame_index = 0;
+    ApplyHdrMetadata();
+}
+
+void Swapchain::SetHdrMetadata(float max_nits, float content_nits, float frame_average_nits) {
+    if (max_nits == hdr_max_nits && content_nits == hdr_content_nits &&
+        frame_average_nits == hdr_average_nits) {
+        return;
+    }
+    hdr_max_nits = max_nits;
+    hdr_content_nits = content_nits;
+    hdr_average_nits = frame_average_nits;
+    ApplyHdrMetadata();
+}
+
+void Swapchain::ApplyHdrMetadata() {
+    if (!hdr_output || !swapchain || hdr_max_nits <= 0.0f || !instance.HasHdrMetadata()) {
+        return;
+    }
+    // The picture is the SDR frame: BT.709 primaries, D65 white, up to the peak set. MaxCLL is
+    // what the HDR mode can reach (render/presenter.cpp): with expand's lower ceiling the
+    // display has no reason to compress the highlights itself.
+    const vk::HdrMetadataEXT metadata{
+        .displayPrimaryRed = {0.640f, 0.330f},
+        .displayPrimaryGreen = {0.300f, 0.600f},
+        .displayPrimaryBlue = {0.150f, 0.060f},
+        .whitePoint = {0.3127f, 0.3290f},
+        .minLuminance = 0.0f,
+        .maxLuminance = hdr_max_nits,
+        .maxContentLightLevel = hdr_content_nits > 0.0f ? hdr_content_nits : hdr_max_nits,
+        .maxFrameAverageLightLevel = hdr_average_nits,
+    };
+    instance.GetDevice().setHdrMetadataEXT(1, &swapchain, &metadata);
 }
 
 void Swapchain::DestroyResources() {

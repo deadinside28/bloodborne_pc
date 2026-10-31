@@ -28,6 +28,7 @@ struct DumpImage {
     const char* name;
     const char* format;
     vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor;
+    bool float16 = false; ///< RGBA16F: the dump is converted to 8-bit RGBA for viewing
 };
 
 /// Copies `images` into host buffers after the commands recorded so far and writes them to

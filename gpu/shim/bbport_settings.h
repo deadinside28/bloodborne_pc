@@ -42,6 +42,39 @@ enum LowLatencyMode : int { LowLatencyOff = 0, LowLatencyOn = 1, LowLatencyBoost
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugAo = 3, DebugViewCount };
 enum class MenuLanguage { English, Russian };
 
+/// HDR output ("hdr" in bbport.ini, applied at start): the game's SDR picture presented on an
+/// HDR display (HDR10 PQ, or scRGB where the surface offers it), SDR white at paper white,
+/// highlights towards the display's peak. Mode expand stretches the SDR picture's brightest
+/// parts towards the peak. Mode native+ is the scene-referred 16-bit chain (the Native+ port:
+/// the game's final composite tone maps the scene itself, Vanilla+ style, and every pass after
+/// it runs in RGBA16F; render/ and upscale/). Its ini value "psychov30" (lantern.ini's name of
+/// the mode in the source port) is accepted too.
+enum HdrMode : int { HdrModeExpand = 0, HdrModeScene = 1, HdrModeCount };
+inline constexpr const char* HdrModeNames[] = {"expand", "native+"};
+static_assert(sizeof(HdrModeNames) / sizeof(HdrModeNames[0]) == HdrModeCount);
+/// What actually runs (the presenter reports): off, HDR10 (PQ, BT.2020) or scRGB (FP16).
+enum HdrOutput : int { HdrOutputOff = 0, HdrOutputHdr10 = 1, HdrOutputScRgb = 2 };
+/// The game's white on the HDR display (Native+'s Game Brightness, the launcher's Paper white).
+inline constexpr float HdrPaperWhiteDefault = 203.0f, HdrPaperWhiteMin = 80.0f,
+                       HdrPaperWhiteMax = 500.0f;
+/// The display's peak (its report while peak_auto has one, else hdr_peak). The manual floor is
+/// below Native+'s 400-nit slider so a weak HDR display's honest report still counts.
+inline constexpr float HdrPeakDefault = 1000.0f, HdrPeakMin = 100.0f, HdrPeakMax = 4000.0f;
+/// Expand mode only: 0 the SDR picture as it is .. 1 its white at the peak.
+inline constexpr float HdrBoostDefault = 0.25f;
+/// Native+ (the scene chain): the knee below which the game's own curve stands (a fraction of
+/// its white), the glow's strength (50 = the game's), how far the darkest greys are taken down
+/// to true black (nits of the game's white), and the HUD and menus' white (UI Brightness).
+inline constexpr float HdrKneeDefault = 0.60f, HdrKneeMin = 0.10f, HdrKneeMax = 0.95f;
+inline constexpr float HdrBloomDefault = 50.0f;
+inline constexpr float HdrBlackFloorDefault = 0.0f, HdrBlackFloorMax = 2.0f;
+inline constexpr float HdrUiNitsDefault = 203.0f, HdrUiNitsMin = 48.0f, HdrUiNitsMax = 500.0f;
+/// Native+: the RenoDX-style user grading (neutral at 1) and the colour table's own knobs:
+/// its strength (0..100 %, the game's at 100) and the LUT bridge (0 Exact, 1 RenoDX).
+inline constexpr float HdrGradeDefault = 1.0f, HdrGradeMin = 0.0f, HdrGradeMax = 2.0f;
+inline constexpr float HdrSceneGradingDefault = 100.0f, HdrLutBridgeExact = 0.0f,
+                       HdrLutBridgeRenoDx = 1.0f;
+
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
 /// menu label, default (the game's own behaviour).
 struct Effect {
@@ -230,6 +263,49 @@ struct Values {
     std::atomic<bool> dlss_supported{false};
     std::atomic<const char*> dlss_problem{nullptr};
 
+    /// HDR output (render/presenter.cpp and vulkan/swapchain.cpp read these every frame).
+    std::atomic<bool> hdr{false};
+    std::atomic<float> hdr_paper_white{HdrPaperWhiteDefault}, hdr_peak{HdrPeakDefault},
+        hdr_boost{HdrBoostDefault};
+    /// The chain's channel-order test (0..15; bit 0 the composite, 1 the copy, 2 the colour
+    /// table, 3 the display copy — each swaps red and blue). A diagnostic; saved.
+    std::atomic<int> hdr_swap{0};
+    /// Diagnostic: dump this many presented frames (converted for viewing) into BB_DUMP_DIR
+    /// (default out/dump), once per run. 0: off. Saved.
+    std::atomic<int> hdr_dump{0};
+    /// Diagnostic: paint where the chain's image is above the game's white green (0: off, 1..5 as
+    /// BB_HDR_PROBE). Saved.
+    std::atomic<int> hdr_probe{0};
+    /// Diagnostic: the composite's delta without the game's colour matrix (0: the matrix, 1: no
+    /// matrix). Saved.
+    std::atomic<int> hdr_nograde{0};
+    /// The composite's delta pass (1: on). 0 runs the rest of the chain over the game's own image
+    /// (a pass-through bisect). Saved.
+    std::atomic<int> hdr_delta{1};
+    /// The chain's glow source (57f3b8c2) replaced (1) or the game's own (0). A diagnostic:
+    /// a whitish additive glow washes the scene's colour out. Saved.
+    std::atomic<int> hdr_glow{1};
+    /// Native+ (live): the knee below the game's white, the glow's strength, the black floor,
+    /// and the HUD's white (UI Brightness; the masked pixels of the scene chain's frame).
+    std::atomic<float> hdr_knee{HdrKneeDefault}, hdr_bloom{HdrBloomDefault},
+        hdr_black_floor{HdrBlackFloorDefault}, hdr_ui_nits{HdrUiNitsDefault};
+    /// The RenoDX-style user grading (live; neutral at 1): exposure, contrast, highlights,
+    /// shadows, saturation — and the colour table's strength (0..100 %) and LUT bridge
+    /// (0 Exact, 1 RenoDX).
+    std::atomic<float> hdr_exposure{HdrGradeDefault}, hdr_contrast{HdrGradeDefault},
+        hdr_highlights{HdrGradeDefault}, hdr_shadows{HdrGradeDefault},
+        hdr_saturation{HdrGradeDefault}, hdr_scene_grading{HdrSceneGradingDefault},
+        hdr_lut_bridge{HdrLutBridgeExact};
+    /// Peak Brightness from the display (shim/window.cpp's DXGI probe) while the display
+    /// reports one; hdr_peak is the fallback and the manual value.
+    std::atomic<bool> hdr_peak_auto{true};
+    std::atomic<float> hdr_display_peak{0.0f};
+    /// Compare: SDR | HDR (the left half as an SDR display shows the game). Not saved.
+    std::atomic<bool> hdr_compare{false};
+    std::atomic<int> hdr_mode{HdrModeScene};
+    /// What runs (the presenter reports): HdrOutput (off, HDR10 or scRGB).
+    std::atomic<int> hdr_output{HdrOutputOff};
+
     /// Startup settings for the explicit BB_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;
     int startup_upscaler = UpscalerFsr3;
@@ -239,11 +315,23 @@ struct Values {
     /// The output the startup patch was made for (BB_OUTPUT_RES), else 0x0.
     OutputSize startup_output{0, 0};
     int startup_live_resolution = 0;
+    /// HDR output was on at start (the swapchain's format and the encode path are chosen there;
+    /// the menu shows when turning it on or off needs a restart).
+    bool startup_hdr = false;
 };
 
 Values& Get();
 /// Localized overlay text; the Language selector itself stays in English.
 const char* MenuText(const char* english, const char* russian);
+/// The peak that runs: the display's report while peak_auto and it reports one, else the manual
+/// value; clamped. (render/present_passes.cpp and the swapchain's HDR metadata use it.)
+inline float HdrPeakNits(const Values& v) {
+    const float display = v.hdr_display_peak.load(std::memory_order_relaxed);
+    const float peak = v.hdr_peak_auto.load(std::memory_order_relaxed) && display >= HdrPeakMin
+                           ? display
+                           : v.hdr_peak.load(std::memory_order_relaxed);
+    return peak < HdrPeakMin ? HdrPeakMin : peak > HdrPeakMax ? HdrPeakMax : peak;
+}
 
 /// Reads the file, then the environment overrides. Called once at start.
 void Load();

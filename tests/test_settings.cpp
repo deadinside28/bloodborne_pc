@@ -4,11 +4,13 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <unistd.h>
-#include "gpu/shim/bbport_settings.h"
+// File-relative: the target must not put the repo root on the include path (a newer libc++
+// includes <version>, which then finds the repo's VERSION file — Windows is case-insensitive).
+#include "../gpu/shim/bbport_settings.h"
 
 static std::string Read(const char* path) {
     std::ifstream file(path);
@@ -17,17 +19,46 @@ static std::string Read(const char* path) {
     return text.str();
 }
 
+/// A scratch ini in the user's temp directory (Windows and Linux); unlinked by the caller.
+static std::string ScratchIni(const char* contents) {
+    static unsigned serial = 0;
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("bbport-settings-test-" + std::to_string(serial++) + ".ini");
+    std::ofstream file{path, std::ios::binary | std::ios::trunc};
+    assert(file);
+    file << contents;
+    return path.string();
+}
+
+static void ScratchUnlink(const std::string& path) {
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
+/// The machine's BB_* environment (launchers set them for the game) must not leak into the
+/// test's expectations: the ones the settings read, by name.
+static void ClearBbEnv() {
+    for (const char* name :
+         {"BB_CONFIG", "BB_UPSCALER", "BB_UPSCALE_PRESET", "BB_FSR_SHARPNESS", "BB_JITTER",
+          "BB_REACTIVE", "BB_REACTIVE_SCALE", "BB_REACTIVE_THRESHOLD", "BB_REACTIVE_MAX",
+          "BB_OBJECT_MOTION", "BB_FRAME_GEN", "BB_FRAME_GEN_MULTIPLIER", "BB_LOW_LATENCY",
+          "BB_MENU_LANGUAGE", "BB_MONITOR_SIZE", "BB_RENDER_RES", "BB_LIVE_HYBRID", "BB_HDR",
+          "BB_HDR_PAPER_WHITE", "BB_HDR_PEAK", "BB_HDR_BOOST", "BB_HDR_MODE", "BB_HDR_BLOOM",
+          "BB_HDR_BLACK_FLOOR", "BB_HDR_UI_NITS", "BB_TEXTURE_QUALITY", "BB_OUTPUT_RES",
+          "BB_DISPLAY", "BB_FULLSCREEN"}) {
+        unsetenv(name);
+    }
+}
+
 int main() {
+    ClearBbEnv();
     assert(!BbSettings::IsHotEffect(6)); // SSR resizes resources on restart.
     assert(BbSettings::IsHotEffect(7));  // Bloom still switches live.
     assert(!BbSettings::IsHotEffect(8)); // Startup intros.
-    char path[] = "/tmp/bbport-settings-test-XXXXXX";
-    const int fd = mkstemp(path);
-    assert(fd >= 0);
-    const char ini[] = "# launcher\nupscaler=fsr3\nkey.cross=X, Space\npad.circle=a\nshow_fps=0\n"
-                       "fullscreen_hint=1\n";
-    assert(write(fd, ini, sizeof(ini) - 1) == ssize_t(sizeof(ini) - 1));
-    close(fd);
+    const std::string ini_path = ScratchIni(
+        "# launcher\nupscaler=fsr3\nkey.cross=X, Space\npad.circle=a\nshow_fps=0\n"
+        "fullscreen_hint=1\n");
+    const char* path = ini_path.c_str();
     setenv("BB_CONFIG", path, 1);
 
     BbSettings::Load();
@@ -130,6 +161,44 @@ int main() {
     s.frame_generation = BbSettings::FrameGenOff;
     s.low_latency = BbSettings::LowLatencyOff;
     assert(BbSettings::EffectiveLowLatency() == BbSettings::LowLatencyOff);
-    unlink(path);
-    std::puts("PASS: settings save keeps other keys, menu position, menu language, frame generation, low latency");
+    // HDR output: clamps, "psychov30" as lantern.ini's value of native+, BB_HDR_PEAK turning
+    // the display's peak off, HdrPeakNits's floor and ceiling, the comparison not saved.
+    write_frame_gen("hdr=1\nhdr_paper_white=250\nhdr_peak=20000\nhdr_boost=0.75\n"
+                    "hdr_mode=psychov30\n");
+    BbSettings::Load();
+    assert(s.hdr && s.startup_hdr && s.hdr_paper_white == 250.0f && s.hdr_peak == 4000.0f &&
+           s.hdr_boost == 0.75f && s.hdr_mode == BbSettings::HdrModeScene);
+    BbSettings::Save();
+    for (const char* line :
+         {"hdr=1\n", "hdr_paper_white=250\n", "hdr_peak=4000\n", "hdr_boost=0.75\n",
+          "hdr_mode=native+\n"}) {
+        assert(Read(path).find(line) != std::string::npos);
+    }
+    assert(Read(path).find("hdr_compare") == std::string::npos);
+    write_frame_gen("hdr=0\nhdr_paper_white=10\nhdr_peak=nan\nhdr_boost=-1\nhdr_mode=bright\n");
+    BbSettings::Load();
+    assert(!s.hdr && s.hdr_paper_white == BbSettings::HdrPaperWhiteMin &&
+           s.hdr_peak == BbSettings::HdrPeakDefault && s.hdr_boost == 0.0f &&
+           s.hdr_mode == BbSettings::HdrModeScene);
+    setenv("BB_HDR", "1", 1);
+    setenv("BB_HDR_PEAK", "600", 1);
+    setenv("BB_HDR_MODE", "expand", 1);
+    BbSettings::Load();
+    assert(s.hdr && s.startup_hdr && s.hdr_peak == 600.0f &&
+           s.hdr_mode == BbSettings::HdrModeExpand && !s.hdr_peak_auto);
+    unsetenv("BB_HDR");
+    unsetenv("BB_HDR_PEAK");
+    unsetenv("BB_HDR_MODE");
+    write_frame_gen("hdr_peak=800\nhdr_peak_auto=1\n");
+    BbSettings::Load();
+    assert(s.hdr_peak_auto && s.hdr_peak == 800.0f);
+    s.hdr_display_peak = 5.0f; // the display reports nothing sensible: the manual value
+    assert(BbSettings::HdrPeakNits(s) == 800.0f);
+    s.hdr_display_peak = 9000.0f; // above the ceiling: clamped
+    assert(BbSettings::HdrPeakNits(s) == BbSettings::HdrPeakMax);
+    s.hdr_peak_auto = false;
+    s.hdr_display_peak = 450.0f; // set by hand: the display's report does not win
+    assert(BbSettings::HdrPeakNits(s) == 800.0f);
+    ScratchUnlink(ini_path);
+    std::puts("PASS: settings save keeps other keys, menu position, menu language, frame generation, low latency, HDR output");
 }

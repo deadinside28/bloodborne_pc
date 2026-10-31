@@ -42,6 +42,20 @@ public:
         return use_hdr;
     }
 
+    /// HDR output ("hdr" in bbport.ini, chosen at start): the HDR format the surface offered
+    /// (HDR10 PQ, else scRGB FP16); undefined when the display offered none.
+    vk::SurfaceFormatKHR GetHdrFormat() const {
+        return hdr_format;
+    }
+    /// The current swapchain has the HDR output format (it falls back to SDR while the display
+    /// offers no HDR format, e.g. Windows HDR switched off).
+    bool IsHdrOutput() const {
+        return hdr_output;
+    }
+    /// HDR output's static metadata (VK_EXT_hdr_metadata), applied to the current swapchain and
+    /// kept for the ones created later.
+    void SetHdrMetadata(float max_nits, float content_nits, float frame_average_nits);
+
     bool IsPresentable() const {
         return swapchain && !zero_extent;
     }
@@ -82,6 +96,8 @@ private:
     void Create(u32 width, u32 height);
     /// The views and semaphores (and the swapchain unless it is being retired).
     void DestroyResources();
+    /// The HDR output metadata of the current swapchain (Create, SetHdrMetadata).
+    void ApplyHdrMetadata();
 
     const Instance& instance;
     vk::SurfaceKHR surface;
@@ -104,6 +120,12 @@ private:
     bool zero_extent = false; ///< the surface was 0x0 (minimised) at the last Create
     bool use_hdr = false;
     bool supports_hdr = false;
+    // HDR output (GetHdrFormat, IsHdrOutput).
+    vk::SurfaceFormatKHR hdr_format{vk::Format::eUndefined, vk::ColorSpaceKHR::eSrgbNonlinear};
+    bool hdr_output = false;
+    bool hdr_unavailable_logged = false;
+    float hdr_max_nits = 0.0f, hdr_content_nits = 0.0f,
+          hdr_average_nits = 0.0f; ///< SetHdrMetadata; 0: not set
 };
 
 } // namespace Vulkan

@@ -95,6 +95,12 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         for (int g = 0; g < FrameGenCount; ++g) {
             if (value == FrameGenName(g)) v.frame_generation = g;
         }
+        // FSR 3.1 is hidden until its artifacts are fixed (the header's note): only BB_FRAME_GEN
+        // turns it on — the menu has no entry, and a file that says fsr3 loads as off. The env
+        // branch below calls this after the file did, so an env fsr3 stays.
+        if (v.frame_generation == FrameGenFsr3 && !std::getenv("BB_FRAME_GEN")) {
+            v.frame_generation = FrameGenOff;
+        }
     } else if (key == "frame_generation_multiplier") {
         v.frame_generation_multiplier = std::clamp(i, 2, 4);
     } else if (key == "low_latency") {
@@ -128,6 +134,67 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.aspect = AspectAuto;
         for (int a = 0; a < AspectCount; ++a) {
             if (value == AspectKey(a)) v.aspect = a;
+        }
+    } else if (key == "hdr") {
+        v.hdr = i != 0;
+    } else if (key == "hdr_paper_white") {
+        v.hdr_paper_white =
+            Clamp(std::isfinite(f) ? f : HdrPaperWhiteDefault, HdrPaperWhiteMin, HdrPaperWhiteMax);
+    } else if (key == "hdr_peak") {
+        v.hdr_peak = Clamp(std::isfinite(f) ? f : HdrPeakDefault, HdrPeakMin, HdrPeakMax);
+    } else if (key == "hdr_peak_auto") {
+        v.hdr_peak_auto = i != 0;
+    } else if (key == "hdr_boost") {
+        v.hdr_boost = Clamp(std::isfinite(f) ? f : HdrBoostDefault, 0.0f, 1.0f);
+    } else if (key == "hdr_knee") {
+        v.hdr_knee = Clamp(std::isfinite(f) ? f : HdrKneeDefault, HdrKneeMin, HdrKneeMax);
+    } else if (key == "hdr_bloom") {
+        v.hdr_bloom = Clamp(std::isfinite(f) ? f : HdrBloomDefault, 0.0f, 100.0f);
+    } else if (key == "hdr_black_floor") {
+        v.hdr_black_floor =
+            Clamp(std::isfinite(f) ? f : HdrBlackFloorDefault, 0.0f, HdrBlackFloorMax);
+    } else if (key == "hdr_ui_nits") {
+        v.hdr_ui_nits = Clamp(std::isfinite(f) ? f : HdrUiNitsDefault, HdrUiNitsMin, HdrUiNitsMax);
+    } else if (key == "hdr_exposure") {
+        v.hdr_exposure = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_contrast") {
+        v.hdr_contrast = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_highlights") {
+        v.hdr_highlights = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_shadows") {
+        v.hdr_shadows = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_saturation") {
+        v.hdr_saturation = Clamp(std::isfinite(f) ? f : HdrGradeDefault, HdrGradeMin, HdrGradeMax);
+    } else if (key == "hdr_scene_grading") {
+        v.hdr_scene_grading = Clamp(std::isfinite(f) ? f : HdrSceneGradingDefault, 0.0f, 100.0f);
+    } else if (key == "hdr_dump") {
+        v.hdr_dump = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 100);
+    } else if (key == "hdr_probe") {
+        v.hdr_probe = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 10);
+    } else if (key == "hdr_glow") {
+        v.hdr_glow = std::clamp(std::isfinite(f) ? int(f) : 1, 0, 1);
+    } else if (key == "hdr_delta") {
+        v.hdr_delta = std::clamp(std::isfinite(f) ? int(f) : 1, 0, 1);
+    } else if (key == "hdr_nograde") {
+        v.hdr_nograde = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 1);
+    } else if (key == "hdr_swap") {
+        v.hdr_swap = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 15);
+    } else if (key == "hdr_lut_bridge") {
+        const bool reno = value == "renodx" || value == "1";
+        v.hdr_lut_bridge = reno ? HdrLutBridgeRenoDx : HdrLutBridgeExact;
+    } else if (key == "hdr_mode") {
+        // "psychov30": lantern.ini's value of the native+ mode in the source port (a file copied
+        // from there keeps working). Unknown values stay native+ (the point of the port).
+        bool known = value == "psychov30";
+        for (int m = 0; m < HdrModeCount; ++m) {
+            if (value == HdrModeNames[m]) {
+                v.hdr_mode = m;
+                known = true;
+            }
+        }
+        if (!known) {
+            std::printf("Settings: unknown hdr_mode '%s' (expected native+ or expand); native+\n",
+                        value.c_str());
         }
     } else {
         for (int e = 0; e < EffectCount; ++e) {
@@ -322,11 +389,27 @@ void Load() {
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
         {"BB_FRAME_GEN", "frame_generation"},       {"BB_FRAME_GEN_MULTIPLIER", "frame_generation_multiplier"},
         {"BB_LOW_LATENCY", "low_latency"},
+        // BB_HDR is also the swapchain's capability gate (shim/core/emulator_settings.h
+        // IsHdrAllowed), so 1 means both "the display may go HDR" and "HDR output on".
+        {"BB_HDR", "hdr"},                          {"BB_HDR_PAPER_WHITE", "hdr_paper_white"},
+        {"BB_HDR_PEAK", "hdr_peak"},                {"BB_HDR_BOOST", "hdr_boost"},
+        {"BB_HDR_MODE", "hdr_mode"},                {"BB_HDR_BLOOM", "hdr_bloom"},
+        {"BB_HDR_BLACK_FLOOR", "hdr_black_floor"},  {"BB_HDR_UI_NITS", "hdr_ui_nits"},
+        {"BB_HDR_EXPOSURE", "hdr_exposure"},        {"BB_HDR_CONTRAST", "hdr_contrast"},
+        {"BB_HDR_HIGHLIGHTS", "hdr_highlights"},    {"BB_HDR_SHADOWS", "hdr_shadows"},
+        {"BB_HDR_SATURATION", "hdr_saturation"},    {"BB_HDR_SCENE_GRADING", "hdr_scene_grading"},
+        {"BB_HDR_LUT_BRIDGE", "hdr_lut_bridge"},  {"BB_HDR_SWAP", "hdr_swap"},             {"BB_HDR_DUMP", "hdr_dump"},
+        {"BB_HDR_PROBE", "hdr_probe"},          {"BB_HDR_NOGRADE", "hdr_nograde"},
+        {"BB_HDR_DELTA", "hdr_delta"},          {"BB_HDR_GLOW", "hdr_glow"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
             Set(v, key, value);
         }
+    }
+    // A peak set by hand for one run: the display's report must not override it.
+    if (std::getenv("BB_HDR_PEAK")) {
+        v.hdr_peak_auto = false;
     }
     v.startup_preset = v.preset;
     // Settings from before anti_aliasing: the game's AA switched off stays off.
@@ -346,6 +429,7 @@ void Load() {
         if (output && std::sscanf(output, "%dx%d", &w, &h) == 2) v.startup_output = {w, h};
     }
     v.startup_live_resolution = v.live_resolution;
+    v.startup_hdr = v.hdr;
 }
 
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411) {
@@ -491,6 +575,31 @@ void Save() {
     put("frame_generation", FrameGenName(v.frame_generation));
     put("frame_generation_multiplier", std::to_string(v.frame_generation_multiplier.load()));
     put("low_latency", LowLatencyName(v.low_latency));
+    // HDR output (hdr_compare is deliberately absent: the comparison is not saved).
+    put("hdr", flag(v.hdr));
+    put("hdr_paper_white", fixed(v.hdr_paper_white, 0));
+    put("hdr_peak", fixed(v.hdr_peak, 0));
+    put("hdr_peak_auto", flag(v.hdr_peak_auto));
+    put("hdr_boost", fixed(v.hdr_boost, 2));
+    put("hdr_mode", HdrModeNames[std::clamp(v.hdr_mode.load(), 0, HdrModeCount - 1)]);
+    // Native+ (live).
+    put("hdr_knee", fixed(v.hdr_knee, 2));
+    put("hdr_bloom", fixed(v.hdr_bloom, 0));
+    put("hdr_black_floor", fixed(v.hdr_black_floor, 2));
+    put("hdr_ui_nits", fixed(v.hdr_ui_nits, 0));
+    put("hdr_exposure", fixed(v.hdr_exposure, 2));
+    put("hdr_contrast", fixed(v.hdr_contrast, 2));
+    put("hdr_highlights", fixed(v.hdr_highlights, 2));
+    put("hdr_shadows", fixed(v.hdr_shadows, 2));
+    put("hdr_saturation", fixed(v.hdr_saturation, 2));
+    put("hdr_scene_grading", fixed(v.hdr_scene_grading, 0));
+    put("hdr_swap", std::to_string(v.hdr_swap.load()));
+    put("hdr_dump", std::to_string(v.hdr_dump.load()));
+    put("hdr_probe", std::to_string(v.hdr_probe.load()));
+    put("hdr_nograde", std::to_string(v.hdr_nograde.load()));
+    put("hdr_delta", std::to_string(v.hdr_delta.load()));
+    put("hdr_glow", std::to_string(v.hdr_glow.load()));
+    put("hdr_lut_bridge", v.hdr_lut_bridge == HdrLutBridgeRenoDx ? "renodx" : "exact");
     if (v.menu_x >= 0.0f && v.menu_y >= 0.0f) {
         put("menu_pos", fixed(v.menu_x, 4) + "," + fixed(v.menu_y, 4));
     }

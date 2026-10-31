@@ -11,6 +11,7 @@
 #include <cstdlib>
 
 #include "bbport_free_check.h"
+#include "render/hdr_channel.h"
 #include "bbport_guest_memory.h"
 #include "common/scope_exit.h"
 #include "core/memory.h"
@@ -92,6 +93,9 @@ void TextureCache::ProcessDownloadImages() {
 
 void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
     Image& image = slot_images[image_id];
+    if (Vulkan::HdrChannel::Native16()) {
+        Vulkan::HdrChannel::LogFloatAccess(image.info.guest_address, "CPU readback");
+    }
     if (False(image.flags & ImageFlagBits::GpuModified)) {
         return;
     }

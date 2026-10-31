@@ -8,6 +8,7 @@
 #include <vk_mem_alloc.h>
 #include <string>
 #include "vulkan/instance.h"
+#include "render/hdr_channel.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
 #include "vulkan/shader_module.h"
@@ -278,9 +279,11 @@ void SceneTargets::Copy(Entry& e, VideoCore::Image& original, bool to_native) {
     const Runtime::TransferMark mark{runtime, to_native ? "scene proxy resolve" : "scene proxy fill",
                                      original};
     if (debug) {
-        std::printf("Scene %s: %s %ux%u level %u\n", to_native ? "resolve" : "fill",
+        std::printf("Scene %s: %s %ux%u level %u, guest %#llx\n",
+                    to_native ? "resolve" : "fill",
                     vk::to_string(original.info.pixel_format).c_str(), original.info.size.width,
-                    original.info.size.height, e.level);
+                    original.info.size.height, e.level,
+                    (unsigned long long)original.info.guest_address);
     }
     const vk::Image src = to_native ? vk::Image(e.image) : original.GetImage();
     const vk::Image dst = to_native ? original.GetImage() : vk::Image(e.image);
@@ -673,6 +676,22 @@ bool SceneTargets::CopyProxy(VideoCore::ImageId src_id, VideoCore::ImageId dst_i
 SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
     auto& original = *lookup(id, 0);
     const u64 key = Key(original.image_uid, level);
+    auto& entry = entries[key];
+    // Native+ HDR (render/hdr_channel.cpp): the chain's colour proxies carry the frame in
+    // RGBA16F, so the composite's delta and the copies keep the light above the game's white.
+    // A proxy made before its target was marked is remade in float (the fill below brings the
+    // content back, blits convert). Before the recent-scan: a stale-format proxy in it must not
+    // win.
+    const bool hdr16 = !original.info.props.is_depth && HdrChannel::Native16Active() &&
+                       HdrChannel::ChainImage(original.info.guest_address,
+                                              original.info.size.width, original.info.size.height,
+                                              original.info.pixel_format);
+    if (entry && entry->hdr16 != hdr16) {
+        entry->views.clear();
+        entry->image.Destroy();
+        entry->hdr16 = hdr16;
+        entry->state = {};
+    }
     // A draw has up to six targets, mostly the same as the previous draw's.
     for (const auto& [recent_key, recent_entry] : recent) {
         if (recent_entry && recent_key == key) {
@@ -680,16 +699,19 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
             return *recent_entry;
         }
     }
-    auto& entry = entries[key];
     original.scene_proxy = true;
     if (!entry) {
         entry = std::make_unique<Entry>();
         entry->source = id;
         entry->uid = original.image_uid;
         entry->level = level;
+        entry->hdr16 = hdr16;
         entry->image = VideoCore::HostImage(instance.GetDevice(), instance.GetAllocator());
         auto ci = original.backing->image.image_ci;
         ci.pNext = nullptr;
+        if (hdr16) {
+            ci.format = HdrChannel::Native16Format;
+        }
         const auto proxy = ProxySize(original, level);
         ci.extent = vk::Extent3D{proxy.width, proxy.height, 1};
         ci.mipLevels = 1;
@@ -706,7 +728,10 @@ vk::ImageView SceneTargets::View(Entry& e, const VideoCore::Image& original,
     const auto aspect = original.info.props.is_depth
         ? (info.is_storage ? original.aspect_mask : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eDepth))
         : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eColor);
-    const auto format = original.info.props.is_depth ? original.backing->image.image_ci.format : info.format;
+    // Native+ HDR: a float proxy's views are float whatever the guest's format says.
+    const auto format = original.info.props.is_depth
+        ? original.backing->image.image_ci.format
+        : (e.hdr16 ? HdrChannel::Native16Format : info.format);
     auto view = Check(instance.GetDevice().createImageViewUnique({
         .image = e.image, .viewType = vk::ImageViewType::e2D, .format = format,
         .components = info.mapping, .subresourceRange = {aspect,0,1,0,1},

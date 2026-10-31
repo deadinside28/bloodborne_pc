@@ -3,6 +3,7 @@
 #include "upscale/vk_temporal_upscaler.h"
 #include "shim/bb_env.h"
 #include "render/vk_gpu_profiler.h"
+#include "render/hdr_channel.h"
 #include "upscale/motion_history.h"
 #include "upscale/vk_scene_resolution.h"
 #include "upscale/ui_composition.h"
@@ -351,8 +352,41 @@ bool TemporalUpscaler::OnFrameStart() {
         }
         ui_trace.clear();
     }
-    // The display pass of an upscaled frame reads the upscaled UI image.
-    display_redirect = ui_phase;
+    // The display pass of an upscaled frame reads the upscaled UI image; in native+ every frame
+    // goes through the chain's float image (with the redirect off the presenter shows the guest's
+    // 8-bit buffer, where everything above white is clamped: the peak stayed at paper white).
+    display_redirect = ui_phase || HdrChannel::Native16();
+    // Native+ HDR (render/hdr_channel.cpp): the port's output-size images are in use — the
+    // chain's proxies carry the frame, the display redirect floats it. Known before the frame's
+    // draws: the pipeline keys and the proxy formats engage from this frame on.
+    // The chain needs the port's images: they exist while the upscaler runs at a size
+    // other than the game's own (an output-size UI alone is not enough: gameplay
+    // frames end without one, and the chain stayed off with them).
+    // The chain's proxies live in the port's images, which exist while an upscaler runs from
+    // the game's size to the output: engage from the setting, not from a per-frame guess.
+    {
+        static const bool chain_scaled = [] {
+            const bool any = BbSettings::Get().upscaler.load() != BbSettings::UpscalerOff;
+            std::printf("HDR 16-bit: the chain's images %s (upscaler %s)\n",
+                        any ? "in use" : "not in use (no upscaler)",
+                        any ? "on" : "off");
+            return any;
+        }();
+        // On for the whole session when an upscaler is configured (BB_HDR_CHAIN=0 forces it
+        // off, a diagnostic): the pipeline keys and the proxies must be consistent from the
+        // first frame — a per-frame guess here made the engagement flip-flop (the scene stayed
+        // on the game's own 8-bit path: blue, and nothing above paper white).
+        static const bool chain_on = [] {
+            const char* e = std::getenv("BB_HDR_CHAIN");
+            const bool opt_out = e && e[0] == '0';
+            const bool upscaler = BbSettings::Get().upscaler.load() != BbSettings::UpscalerOff;
+            std::printf("HDR 16-bit: the chain's images %s\n",
+                        (upscaler && !opt_out) ? "in use (upscaler on)" : "off");
+            return upscaler && !opt_out;
+        }();
+        HdrChannel::SetNative16Active(chain_on);
+    }
+    HdrChannel::SetDisplayRedirect(display_redirect);
     ui_phase = false;
     ui_read_barrier = false;
     done_this_frame = false;
@@ -417,6 +451,8 @@ void TemporalUpscaler::Run() {
     auto& color = texture_cache.GetImage(scene_color);
     auto& depth = texture_cache.GetImage(camera_motion.Depth());
     const u32 ow = color.info.size.width, oh = color.info.size.height;
+    output_width = ow;
+    output_height = oh;
     const bool reduced = ReducedScene(color) && scene_targets.EligibleScene(depth);
     const u32 w = reduced ? scene_targets.Size().width : ow;
     const u32 h = reduced ? scene_targets.Size().height : oh;

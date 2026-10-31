@@ -103,6 +103,9 @@ private:
         VideoCore::ImageId source{};
         u64 uid = 0;
         u32 level = 0; ///< mip level of the native image this proxy stands for
+        /// Native+ HDR: the proxy is RGBA16F (the chain's light above the game's white lives
+        /// here; render/hdr_channel.cpp).
+        bool hdr16 = false;
         VideoCore::HostImage image;
         std::vector<std::pair<VideoCore::ImageViewInfo, vk::UniqueImageView>> views;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
