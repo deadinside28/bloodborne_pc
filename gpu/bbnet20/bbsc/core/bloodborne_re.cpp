@@ -7536,6 +7536,12 @@ bool BbscRespawnInPlace(std::string_view why) {
     using Warp = void PS4_SYSV_ABI (*)(u64 chr, float* position, float* rotation, u32 flag);
     reinterpret_cast<Warp>(warp)(player, position.data(), rotation.data(), 1);
     WriteValue<u8>(player, 0x1E4, static_cast<u8>(ReadValue<u8>(player, 0x1E4) | 0x02));
+    // Test 2026-10-31: a guest revived at the host's lamp walked in the air with no collision and
+    // the area not loading. Vanilla's reload rebuilds the collision proxy; this path has no reload,
+    // so reset it the way the unstuck key and the partner revive do. HYPOTHESIS: not yet confirmed
+    // as the cause, the bug is intermittent (the host respawned at the same lamp without it).
+    using PhysicsReset = void PS4_SYSV_ABI (*)(u64 chr, u8 flag);
+    reinterpret_cast<PhysicsReset>(image_base + 0x018BCF30)(player, 1);
 
     // 3. leave the death animation
     const u64 behaviour = ReadValue<u64>(modules, 0x30);
