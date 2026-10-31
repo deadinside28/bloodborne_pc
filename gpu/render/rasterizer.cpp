@@ -940,6 +940,22 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                     std::printf(" %.4f", w);
                 }
                 std::printf("\n");
+                float gain[21]{}; // 600..620: the scene gain (616) and the glow's (617)
+                Core::Memory::Instance()->ReadBacking(sharp.base_address + 600u * 4u, gain,
+                                                      sizeof(gain));
+                std::printf("HDR consts: buffer %u (600..620):", n);
+                for (float w : gain) {
+                    std::printf(" %.4f", w);
+                }
+                std::printf("\n");
+                float mats[29]{}; // 856..884: the scene matrix (856..867), the glow's (872..883)
+                Core::Memory::Instance()->ReadBacking(sharp.base_address + 856u * 4u, mats,
+                                                      sizeof(mats));
+                std::printf("HDR consts: buffer %u (856..884):", n);
+                for (float w : mats) {
+                    std::printf(" %.4f", w);
+                }
+                std::printf("\n");
                 ++n;
             }
         }

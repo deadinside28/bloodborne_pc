@@ -417,6 +417,14 @@ void main() {
             }
             delta = hdr_out - game_out;
         }
+        // Chain probe 4 (test): the chain's own input colour in place of the scene. Red missing
+        // here = the sampled textures are wrong; red present = the maths after them is.
+        if (push_data.bb_hdr.z == 4u) {
+            vec3 in_enc = BB_GAMMA ? exp2(bb_c(808u) * log2(max(x, 0.0) + BB_EPS))
+                                   : clamp(x, 0.0, 1.0);
+            frag_color0 = vec4(in_enc - game_out, 0.0);
+            return;
+        }
         // PsychoV30 (scene) replaces the game's curve, so it may also darken.
         frag_color0 = vec4((scaled || psycho_scene) ? delta : max(delta, 0.0), 0.0);
         // Chain probe (in-game menu, test; bb_hdr.z set for this draw by bbport): green where
