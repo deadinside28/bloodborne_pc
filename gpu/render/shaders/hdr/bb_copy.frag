@@ -38,7 +38,9 @@ layout(location = 0) out vec4 frag_color0;
 
 void main() {
     vec4 c = textureLod(sampler2D(fs_img0, fs_samp0), BB_UV(fs_in_attr0), 0.0);
-    frag_color0 = vec4(c.xyz, c.w);
+    // The game's shader is a plain copy WITH the channel swap (its header): ours must convert
+    // the same way, or every pass after it carries red and blue exchanged.
+    frag_color0 = vec4(c.zyx, c.w);
     if (push_data.bb_hdr.z == 5u && max(max(c.x, c.y), c.z) > 1.001) {
         frag_color0 = vec4(1.0, 0.0, 1.0, c.w);
     }
