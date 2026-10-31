@@ -345,10 +345,13 @@ void HdrChannel::NoteGameShader(u64 pgm_hash, std::span<const u32> spv) {
     }
     if (fresh) {
         it->second.spv = std::move(*built);
-        std::printf("HDR pass: composite variant %08x ready (%s%s, %s)\n",
+        std::printf("HDR pass: composite variant %08x ready (%s%s, %s; flags additive %d, grade %d, "
+                    "scene mat %d, glow mat %d, gain %d, floor %d, pre %d)\n",
                  u32(pgm_hash), CurveNames[v->curve < 4 ? v->curve : 3],
                  v->luminance ? " on luminance" : "",
-                 per_vertex ? "inputs per vertex" : "inputs interpolated by the GPU");
+                 per_vertex ? "inputs per vertex" : "inputs interpolated by the GPU",
+                 int(v->additive), int(v->grade), int(v->scene_mat), int(v->glow_mat), int(v->gain),
+                 int(v->floor), int(v->pre));
     } else if (!it->second.conflicting && it->second.spv != *built) {
         it->second.conflicting = true;
         LOG_WARNING(Render_Vulkan,

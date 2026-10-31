@@ -352,8 +352,10 @@ bool TemporalUpscaler::OnFrameStart() {
         }
         ui_trace.clear();
     }
-    // The display pass of an upscaled frame reads the upscaled UI image.
-    display_redirect = ui_phase;
+    // The display pass of an upscaled frame reads the upscaled UI image; in native+ every frame
+    // goes through the chain's float image (with the redirect off the presenter shows the guest's
+    // 8-bit buffer, where everything above white is clamped: the peak stayed at paper white).
+    display_redirect = ui_phase || HdrChannel::Native16();
     // Native+ HDR (render/hdr_channel.cpp): the port's output-size images are in use — the
     // chain's proxies carry the frame, the display redirect floats it. Known before the frame's
     // draws: the pipeline keys and the proxy formats engage from this frame on.
@@ -384,7 +386,7 @@ bool TemporalUpscaler::OnFrameStart() {
         }();
         HdrChannel::SetNative16Active(chain_on);
     }
-    HdrChannel::SetDisplayRedirect(ui_phase);
+    HdrChannel::SetDisplayRedirect(display_redirect);
     ui_phase = false;
     ui_read_barrier = false;
     done_this_frame = false;
@@ -449,6 +451,8 @@ void TemporalUpscaler::Run() {
     auto& color = texture_cache.GetImage(scene_color);
     auto& depth = texture_cache.GetImage(camera_motion.Depth());
     const u32 ow = color.info.size.width, oh = color.info.size.height;
+    output_width = ow;
+    output_height = oh;
     const bool reduced = ReducedScene(color) && scene_targets.EligibleScene(depth);
     const u32 w = reduced ? scene_targets.Size().width : ow;
     const u32 h = reduced ? scene_targets.Size().height : oh;

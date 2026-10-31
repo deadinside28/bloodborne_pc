@@ -300,6 +300,9 @@ private:
     bool hybrid = false;
     int startup_preset = -1; ///< the preset the session's patch was made for (hybrid)
     u32 ui_width = 0, ui_height = 0;
+    /// The output size, remembered while the upscaler runs: the redirect's display image is made
+    /// at that size even on frames the output-size UI does not exist for.
+    u32 output_width = 0, output_height = 0;
     u32 render_width = 0, render_height = 0; ///< the scene's size as drawn (proxies: theirs)
     u32 native_width = 0, native_height = 0; ///< the game's scene size (its targets)
     /// Proxies stand in for the game's scene targets (live presets).

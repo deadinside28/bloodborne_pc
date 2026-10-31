@@ -251,24 +251,35 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
         display.valid = false; // not upscaled: the presenter shows the guest buffer
         return false;
     }
-    if (!display.image || display.format != image.info.pixel_format ||
-        display.width != ui_width || display.height != ui_height) {
+    // Native+ keeps the frame in the port's float image, so the format to compare is the one we
+    // use, not the guest's: comparing those recreated the image every frame (and the churn ended
+    // in "Failed to allocate a frame image").
+    const vk::Format display_format =
+        HdrChannel::Native16() ? HdrChannel::Native16Format : image.info.pixel_format;
+    // The output-size UI is not known on frames without one (ui_width/ui_height are 0 there): the
+    // display image takes the guest buffer's size then, or it would be created 0x0.
+    const u32 display_width = ui_width != 0 ? ui_width
+                                             : (output_width != 0 ? output_width : image.info.size.width);
+    const u32 display_height =
+        ui_height != 0 ? ui_height
+                       : (output_height != 0 ? output_height : image.info.size.height);
+    if (!display.image || display.format != display_format ||
+        display.width != display_width || display.height != display_height) {
         const auto device = instance.GetDevice();
         scheduler.Finish();
         display.views.clear();
-        std::printf("Display: host buffer %ux%u (live)\n", ui_width, ui_height);
+        std::printf("Display: host buffer %ux%u (live)\n", display_width, display_height);
         // Native+ HDR (render/hdr_channel.cpp): the display image is the chain's last target —
         // float, so the frame keeps the light above the game's white to the encode.
-        display.format = HdrChannel::Native16() ? HdrChannel::Native16Format
-                                                : image.info.pixel_format;
-        display.width = ui_width;
-        display.height = ui_height;
+        display.format = display_format;
+        display.width = display_width;
+        display.height = display_height;
         display.image = VideoCore::HostImage(device, instance.GetAllocator());
         display.image.Create(vk::ImageCreateInfo{
             .flags = vk::ImageCreateFlagBits::eMutableFormat,
             .imageType = vk::ImageType::e2D,
             .format = display.format,
-            .extent = {ui_width, ui_height, 1},
+            .extent = {display_width, display_height, 1},
             .mipLevels = 1,
             .arrayLayers = 1,
             .samples = vk::SampleCountFlagBits::e1,
@@ -301,7 +312,7 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
     // the display image's float format via DisplayUpgraded.
     target = {Mirror(vk::Image(display.image), display.views,
                      HdrChannel::Native16() ? HdrChannel::Native16Format : view_info.format, {}),
-              vk::ImageLayout::eGeneral, ui_width, ui_height};
+              vk::ImageLayout::eGeneral, display_width, display_height};
     return true;
 }
 
