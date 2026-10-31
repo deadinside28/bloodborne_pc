@@ -1105,6 +1105,29 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
             left = count;
             if (!bb_env("BB_SEQUENCE_DUMP_COUNT")) index = 0; // batches: numbered on
         }
+        // hdr_dump (bbport.ini): the same dumps once per run, with no environment needed (runs
+        // from the launcher cannot set one). The frame as the display chain made it.
+        static int hdr_dump_left = -1;
+        static int hdr_dump_total = 0;
+        static std::chrono::steady_clock::time_point hdr_dump_start{};
+        if (hdr_dump_left < 0) {
+            hdr_dump_left =
+                HdrChannel::Enabled() ? std::clamp(int(BbSettings::Get().hdr_dump.load()), 0, 100) : 0;
+            hdr_dump_total = hdr_dump_left;
+            hdr_dump_start = std::chrono::steady_clock::now();
+            if (hdr_dump_left > 0) {
+                std::printf("HDR: dumping %d presented frames, from 25 s in\n", hdr_dump_left);
+            }
+        }
+        if (hdr_dump_left > 0 && left == 0) {
+            // In the session, not on the splash: 25 s, then one frame every 2 s.
+            const auto due = hdr_dump_start + std::chrono::seconds(25 + 2 * (hdr_dump_total - hdr_dump_left));
+            if (std::chrono::steady_clock::now() >= due) {
+                --hdr_dump_left;
+                left = 1;
+                if (!bb_env("BB_SEQUENCE_DUMP_COUNT")) index = 0;
+            }
+        }
         if (left > 0 && !blank) {
             --left;
             const vk::Image dumped = source ? source : frame->image;

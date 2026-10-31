@@ -431,9 +431,12 @@ constexpr bool ChainFormat(vk::Format format) {
 // The shaders after the composite that write its image or the copy the AA reads: PointSample
 // Color1 (copy), EmissiveToGlowPS (copy for the glow, clamped by bbport), DLAA, and the glow's
 // addition.
+// Every draw of the chain: the copy, the glow source, the colour table and the display copy. The
+// last two matter for the gates: their targets carry the above-white, so they must be marked and
+// upgraded — an 8-bit target clamps it (the peak sat at paper white).
 constexpr bool ChainShader(u64 ps_hash) {
     return ps_hash == 0xf7229091 || ps_hash == 0x57f3b8c2 || ps_hash == 0xda1faca9 ||
-           ps_hash == 0x8c08444c;
+           ps_hash == 0x8c08444c || ps_hash == 0xed4c7668 || ps_hash == 0x38d65b32;
 }
 } // namespace
 
