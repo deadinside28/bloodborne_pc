@@ -561,12 +561,12 @@ bool HdrChannel::ChainImage(VAddr address, u32 width, u32 height, vk::Format for
 
 u32 HdrChannel::ChainProbe() {
     const int setting = int(BbSettings::Get().hdr_probe.load(std::memory_order_relaxed));
-    if (setting >= 1 && setting <= 5) {
+    if (setting >= 1 && setting <= 6) {
         return u32(setting);
     }
     const char* probe = std::getenv("BB_HDR_PROBE");
     const int value = probe ? std::atoi(probe) : 0;
-    return value >= 1 && value <= 5 ? u32(value) : 0u;
+    return value >= 1 && value <= 6 ? u32(value) : 0u;
 }
 
 bool HdrChannel::Native16Fixed() {

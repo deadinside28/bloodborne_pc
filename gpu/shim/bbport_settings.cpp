@@ -170,7 +170,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "hdr_dump") {
         v.hdr_dump = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 100);
     } else if (key == "hdr_probe") {
-        v.hdr_probe = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 5);
+        v.hdr_probe = std::clamp(std::isfinite(f) ? int(f) : 0, 0, 6);
     } else if (key == "hdr_glow") {
         v.hdr_glow = std::clamp(std::isfinite(f) ? int(f) : 1, 0, 1);
     } else if (key == "hdr_delta") {
