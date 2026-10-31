@@ -444,6 +444,12 @@ std::vector<u32> HdrChannel::ChainReplacement(u64 pgm_hash, std::span<const u32>
     if (!Native16()) {
         return {};
     }
+    // hdr_glow=0 (a diagnostic): the glow's source left to the game's own shader. An additive
+    // whitish glow over everything is what washes a scene's colour out.
+    if (pgm_hash == 0x57f3b8c2 &&
+        BbSettings::Get().hdr_glow.load(std::memory_order_relaxed) == 0) {
+        return {};
+    }
     // The game shader's input fs_in_attr0 (none for the display copy): per vertex, the build
     // that reads it so; else the one that reads it as the GPU interpolates it (bb_inputs.glsl).
     const SpvInterface in = ReadInterface(game);

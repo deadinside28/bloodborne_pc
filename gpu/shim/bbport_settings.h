@@ -282,6 +282,9 @@ struct Values {
     /// The composite's delta pass (1: on). 0 runs the rest of the chain over the game's own image
     /// (a pass-through bisect). Saved.
     std::atomic<int> hdr_delta{1};
+    /// The chain's glow source (57f3b8c2) replaced (1) or the game's own (0). A diagnostic:
+    /// a whitish additive glow washes the scene's colour out. Saved.
+    std::atomic<int> hdr_glow{1};
     /// Native+ (live): the knee below the game's white, the glow's strength, the black floor,
     /// and the HUD's white (UI Brightness; the masked pixels of the scene chain's frame).
     std::atomic<float> hdr_knee{HdrKneeDefault}, hdr_bloom{HdrBloomDefault},
