@@ -899,6 +899,51 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
                                  u32(offsetof(Shader::PushData, bb_hdr)), 16u, chain_reg.data());
         });
     }
+    // One-shot diagnostic: the words the composite's shader reads. Those values say whether our
+    // offsets are the ones the game's own shader used (the chain's image is coherent but dark and
+    // red-less — a per-channel scale at its input would do that).
+    if (ps_info && HdrChannel::Native16() && HdrChannel::IsCompositeVariant(ps_info->pgm_hash)) {
+        static std::atomic<bool> hdr_consts_done{false};
+        if (!hdr_consts_done.exchange(true)) {
+            const auto* stage = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+            u32 n = 0;
+            for (const auto& buffer : stage ? stage->buffers : decltype(stage->buffers){}) {
+                if (n >= 4) {
+                    break;
+                }
+                if (buffer.IsSpecial()) {
+                    continue;
+                }
+                const auto sharp = buffer.GetSharp(*stage);
+                const u64 size = sharp.GetSize();
+                if (sharp.base_address == 0 || size < (852u + 1u) * 4u) {
+                    std::printf("HDR consts: buffer %u: %#llx, %llu bytes (too small)\n", n,
+                                (unsigned long long)sharp.base_address,
+                                (unsigned long long)size);
+                    ++n;
+                    continue;
+                }
+                float words[53]{}; // 800..852
+                Core::Memory::Instance()->ReadBacking(sharp.base_address + 800u * 4u, words,
+                                                      sizeof(words));
+                std::printf("HDR consts: buffer %u @%#llx %llu bytes (800..852):", n,
+                            (unsigned long long)sharp.base_address, (unsigned long long)size);
+                for (float w : words) {
+                    std::printf(" %.4f", w);
+                }
+                std::printf("\n");
+                float tint[16]{}; // 744..759
+                Core::Memory::Instance()->ReadBacking(sharp.base_address + 744u * 4u, tint,
+                                                      sizeof(tint));
+                std::printf("HDR consts: buffer %u (744..759):", n);
+                for (float w : tint) {
+                    std::printf(" %.4f", w);
+                }
+                std::printf("\n");
+                ++n;
+            }
+        }
+    }
     // The draw's color target joins the 16-bit chain (composite variants and the chain's
     // shaders): from the next frame on it is drawn as RGBA16F.
     if (ps_info && HdrChannel::Native16() && regs.color_buffers[0]) {
