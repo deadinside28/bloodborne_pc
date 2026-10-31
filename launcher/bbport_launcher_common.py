@@ -146,6 +146,7 @@ TEXTURE_QUALITY = [("Авто", "auto", "Половина при 3 ГБ виде
                    ("Четверть", "quarter", "Вчетверо меньше по каждой стороне")]
 MODEL_LOD = [("Как в игре", "0"), ("Максимальная (-2)", "-2"), ("Ниже (1)", "1"),
              ("Минимальная (2)", "2")]
+RETRO_RESOLUTIONS = [("320x240 (Low-Res 240p)", "320x240"), ("640x480 (High-Res 480p)", "640x480")]
 FPS_MODES = [("Без ограничения", "uncap"), ("60", "60"), ("90", "90"),
              ("30 (как на PS4)", "30")]
 # Issue #299 (runtime_pad.c button_prompts): the button icons of a device whatever is used.
@@ -252,6 +253,12 @@ INI_DEFAULTS = {
     "button_prompts": "auto",
     "game_text_language": "auto",
     "game_voice_language": "auto",
+    "retro_mode": "0",
+    "retro_dither": "1",
+    "retro_point_filter": "0",
+    "retro_vertex_snap": "0",
+    "retro_affine": "0",
+    "retro_snap_res": "320x240",
     **{key: "1" if default else "0" for key, _, default in EFFECTS},
 }
 

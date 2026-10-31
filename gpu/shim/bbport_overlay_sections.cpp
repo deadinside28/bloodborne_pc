@@ -749,7 +749,12 @@ void GameEffectsSection(BbSettings::Values& s) {
 
     bool restart =
         s.object_motion != s.startup_object_motion || s.model_lod != s.startup_model_lod ||
-        BbSettings::ResolutionNeedsRestart();
+        BbSettings::ResolutionNeedsRestart() ||
+        s.retro_mode != s.startup_retro_mode ||
+        s.retro_vertex_snap != s.startup_retro_vertex_snap ||
+        s.retro_affine != s.startup_retro_affine ||
+        s.retro_snap_w != s.startup_retro_snap_w ||
+        s.retro_snap_h != s.startup_retro_snap_h;
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         restart |= !BbSettings::IsHotEffect(e) && s.effects[e] != s.startup_effects[e];
     }
@@ -793,4 +798,44 @@ void FrameRateLimitSection(BbSettings::Values& s) {
     }
 }
 
+
+void RetroGraphicsSection(BbSettings::Values& s) {
+    ImGui::SeparatorText(BbSettings::MenuText("Retro Graphics", "Ретро-графика"));
+    bool mode = s.retro_mode.load();
+    if (ImGui::Checkbox(BbSettings::MenuText("Enable Retro Graphics", "Включить ретро-графику"), &mode)) {
+        dirty = true;
+        BbSettings::SetRetroMode(mode);
+    }
+    if (s.retro_mode != s.startup_retro_mode) {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s",
+                           BbSettings::MenuText("Mode change will apply after restarting the game",
+                                                "Смена режима применится после перезапуска игры"));
+    } else {
+        Hint(BbSettings::MenuText(
+            "Emulates retro 32-bit graphical constraints (15-bit color, Bayer dithering, nearest-neighbor, affine UVs, vertex snap).",
+            "Эмуляция графических ограничений 32-битной эпохи (15-битный цвет, дизеринг, nearest-neighbor, аффинные UV, дрожание вершин)."));
+    }
+    if (s.retro_mode) {
+        ImGui::Indent();
+        Checkbox(BbSettings::MenuText("15-bit color & Bayer dithering", "15-битный цвет и дизеринг"), s.retro_dither);
+        Checkbox(BbSettings::MenuText("Point texture filtering (nearest)", "Точечная фильтрация текстур (nearest)"), s.retro_point_filter);
+        Checkbox(BbSettings::MenuText("Vertex wobble / snap (grid jitter)", "Дрожание вершин (Vertex Snap)"), s.retro_vertex_snap);
+        Checkbox(BbSettings::MenuText("Affine texture mapping (NoPerspective)", "Аффинное наложение текстур"), s.retro_affine);
+        static const char* snap_resolutions[] = {"320x240", "640x480"};
+        int snap_idx = (s.retro_snap_w == 640 && s.retro_snap_h == 480) ? 1 : 0;
+        if (ImGui::Combo(BbSettings::MenuText("Vertex snap grid", "Сетка дрожания вершин"), &snap_idx, snap_resolutions, 2)) {
+            if (snap_idx == 1) {
+                s.retro_snap_w = 640;
+                s.retro_snap_h = 480;
+            } else {
+                s.retro_snap_w = 320;
+                s.retro_snap_h = 240;
+            }
+            BbSettings::Save();
+        }
+        ImGui::Unindent();
+    }
+}
+
 } // namespace BbOverlay::detail
+

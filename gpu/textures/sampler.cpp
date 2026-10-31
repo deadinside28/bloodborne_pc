@@ -8,6 +8,7 @@
 #include "common/logging/log.h"
 #include "render/gcn_to_vk.h"
 #include "vulkan/instance.h"
+#include "bbport_settings.h"
 
 namespace VideoCore {
 
@@ -30,19 +31,21 @@ Sampler::Sampler(const Vulkan::Instance& instance, const Gcn::Sampler& sampler,
         custom.format = vk::Format::eR32G32B32A32Sfloat;
     }
     const float max_bias = instance.MaxSamplerLodBias();
+    const bool retro_point = BbSettings::Get().retro_mode.load(std::memory_order_relaxed) &&
+                             BbSettings::Get().retro_point_filter.load(std::memory_order_relaxed);
     const vk::SamplerCreateInfo create_info = {
         .pNext = border == vk::BorderColor::eFloatCustomEXT ? &custom : nullptr,
-        .magFilter = ToVk::Filter(sampler.xy_mag_filter),
-        .minFilter = ToVk::Filter(sampler.xy_min_filter),
-        .mipmapMode = ToVk::MipFilter(sampler.mip_filter),
+        .magFilter = retro_point ? vk::Filter::eNearest : ToVk::Filter(sampler.xy_mag_filter),
+        .minFilter = retro_point ? vk::Filter::eNearest : ToVk::Filter(sampler.xy_min_filter),
+        .mipmapMode = retro_point ? vk::SamplerMipmapMode::eNearest : ToVk::MipFilter(sampler.mip_filter),
         .addressModeU = ToVk::ClampMode(sampler.clamp_x),
         .addressModeV = ToVk::ClampMode(sampler.clamp_y),
         .addressModeW = ToVk::ClampMode(sampler.clamp_z),
         .mipLodBias = std::clamp(sampler.LodBias() + extra_lod_bias, -max_bias, max_bias),
-        .anisotropyEnable = anisotropic,
+        .anisotropyEnable = retro_point ? false : anisotropic,
         .maxAnisotropy =
-            anisotropic ? std::clamp(sampler.MaxAniso(), 1.0f, instance.MaxSamplerAnisotropy())
-                        : 1.0f,
+            (anisotropic && !retro_point) ? std::clamp(sampler.MaxAniso(), 1.0f, instance.MaxSamplerAnisotropy())
+                                          : 1.0f,
         .compareEnable = is_depth,
         .compareOp = ToVk::DepthCompare(sampler.depth_compare_func),
         .minLod = sampler.MinLod(),
