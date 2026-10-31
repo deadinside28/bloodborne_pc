@@ -1116,12 +1116,12 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
             hdr_dump_total = hdr_dump_left;
             hdr_dump_start = std::chrono::steady_clock::now();
             if (hdr_dump_left > 0) {
-                std::printf("HDR: dumping %d presented frames, from 25 s in\n", hdr_dump_left);
+                std::printf("HDR: dumping %d presented frames, from 60 s in\n", hdr_dump_left);
             }
         }
         if (hdr_dump_left > 0 && left == 0) {
             // In the session, not on the splash: 25 s, then one frame every 2 s.
-            const auto due = hdr_dump_start + std::chrono::seconds(25 + 2 * (hdr_dump_total - hdr_dump_left));
+            const auto due = hdr_dump_start + std::chrono::seconds(60 + 2 * (hdr_dump_total - hdr_dump_left));
             if (std::chrono::steady_clock::now() >= due) {
                 --hdr_dump_left;
                 left = 1;
