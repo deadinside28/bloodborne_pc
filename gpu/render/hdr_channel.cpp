@@ -565,14 +565,24 @@ bool HdrChannel::Native16() {
 }
 
 bool HdrChannel::Native16Active() {
-    return Native16() && native16_active.load(std::memory_order_relaxed);
+    // The chain's proxies live in the port's images, which exist while an upscaler runs from the
+    // game's size to the output. That is a session fact (the setting), not a per-frame one: the
+    // pipeline keys and the proxies must agree from the first draw, and a per-frame flag made
+    // the engagement depend on the upscaler's frame path.
+    static const bool on = [] {
+        const char* e = std::getenv("BB_HDR_CHAIN");
+        const bool opt_out = e && e[0] == '0';
+        const bool upscaler = BbSettings::Get().upscaler.load() != BbSettings::UpscalerOff;
+        std::printf("HDR 16-bit: the chain's images %s\n",
+                    (upscaler && !opt_out) ? "in use (upscaler on)"
+                                           : "off (BB_HDR_CHAIN=0 or no upscaler)");
+        return upscaler && !opt_out;
+    }();
+    return Native16() && on;
 }
 
-void HdrChannel::SetNative16Active(bool active) {
-    if (Native16() && native16_active.exchange(active) != active) {
-        std::printf("HDR 16-bit: %s\n", active ? "on (output-size images)"
-                                                          : "off (no output-size images)");
-    }
+void HdrChannel::SetNative16Active(bool) {
+    // Kept for the call sites: the state is the setting (see Native16Active).
 }
 
 void HdrChannel::NoteTarget(u64 ps_hash, VAddr address, u32 width, u32 height,
