@@ -13,6 +13,7 @@ Frozen with PyInstaller (packaging/windows/package.sh) into Bloodborne.exe; `Blo
 the idea of a frozen Tkinter launcher follow Supermedo's Windows port (github.com/Supermedo/
 bloodborne_pc, GPL-2.0), written anew for this tree.
 """
+import locale
 import json
 import os
 from pathlib import Path
@@ -140,7 +141,10 @@ def game_environment(s):
     env['BB_LANGUAGE'] = s['language']
     # The new launcher's language (Bloodborne.exe, WPF) is the port menu's too.
     # The port's in-game menu has Russian and English: the other launcher languages get English.
-    env['BB_MENU_LANGUAGE'] = 'ru' if (s.get('ui_language') or 'ru') == 'ru' else 'en'
+    # No choice saved (settings made without the launcher window): the system's language, as the
+    # launcher picks its own, not Russian for everybody.
+    ui_language = s.get('ui_language') or (locale.getlocale()[0] or '')
+    env['BB_MENU_LANGUAGE'] = 'ru' if ui_language.lower().startswith('ru') else 'en'
     env['BB_FULLSCREEN'] = '1' if s['fullscreen'] else '0'
     env['BB_PRESENT_MODE'] = s['present_mode']
     # The monitor (its name, or number) and the controller (SDL GUID) the launcher chose.
