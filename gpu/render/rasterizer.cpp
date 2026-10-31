@@ -833,8 +833,15 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         const bool dynamic_masks = instance.IsDynamicColorWriteMaskSupported();
         const auto game_masks = scheduler.GetDynamicState().CurrentColorWriteMasks();
         scheduler.Record([=](vk::CommandBuffer cmdbuf) {
-            cmdbuf.pushConstants(layout, AllGraphicsStageBits, reg_offset, reg_size, probe.data());
             cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, hdr_handle);
+            cmdbuf.pushConstants(layout, AllGraphicsStageBits, reg_offset, reg_size, probe.data());
+            {
+                static std::atomic<int> told{0};
+                if (told.fetch_add(1) < 3) {
+                    std::printf("HDR delta draw: probe z %u, %u bytes at %u, pipeline %p layout %p\n",
+                                probe[2], reg_size, reg_offset, (void*)hdr_handle, (void*)layout);
+                }
+            }
             if (dynamic_masks) {
                 // The delta goes to the color channels; the game's alpha (its grain) stays.
                 constexpr auto rgb = vk::ColorComponentFlags{vk::ColorComponentFlagBits::eR} |
