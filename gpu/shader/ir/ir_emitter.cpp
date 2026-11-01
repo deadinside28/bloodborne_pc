@@ -151,6 +151,10 @@ void IREmitter::DebugPrint(const char* fmt, boost::container::small_vector<Value
 
 // Registers.
 
+F32 IREmitter::ToneCurveParam(u32 index) {
+    return Inst<F32>(Opcode::ToneCurveParam, Imm32(index));
+}
+
 U32 IREmitter::GetUserData(IR::ScalarReg reg) {
     ASSERT(static_cast<u32>(reg) < IR::NumScalarRegs);
     return Inst<U32>(Opcode::GetUserData, reg);

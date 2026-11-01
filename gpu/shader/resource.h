@@ -285,6 +285,9 @@ struct PushData {
     static constexpr u32 SceneSizeIndex = MotionParamIndex + 1;
     static constexpr u32 BbHdrIndex = SceneSizeIndex + 1;
     static constexpr u32 BbHdr2Index = BbHdrIndex + 4;
+    /// The tone curve extension's parameters (shader/native/tone_curve.h): knee, peak, strength,
+    /// enabled. The reference puts them at offset 128, which is bb_hdr's here; after bb_hdr2 instead.
+    static constexpr u32 ToneCurveIndex = BbHdr2Index + 8;
     /// The game's prefix: what a pipeline's push range declares unless native+ is on.
     static constexpr u32 GameSize = 128;
 
@@ -302,6 +305,8 @@ struct PushData {
     /// GLSL (render/shaders/hdr/) hard-codes these offsets.
     std::array<u32, 4> bb_hdr{};
     std::array<u32, 8> bb_hdr2{};
+    /// Shader::Native::ToneCurvePush as floats (shader/native/tone_curve.h).
+    std::array<float, 4> tone_curve{};
 
     void AddOffset(u32 binding, u32 offset) {
         ASSERT(offset < 256 && binding < buf_offsets.size());
@@ -309,6 +314,6 @@ struct PushData {
     }
 };
 static_assert(offsetof(PushData, bb_hdr) == PushData::GameSize);
-static_assert(sizeof(PushData) == 176, "PushData's HDR extension moved (bbport GLSL hard-codes 128/144)");
+static_assert(sizeof(PushData) == 192, "PushData's HDR extension moved (bbport GLSL hard-codes 128/144; tone_curve is at 192)");
 
 } // namespace Shader

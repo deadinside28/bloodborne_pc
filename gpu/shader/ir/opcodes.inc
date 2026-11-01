@@ -62,6 +62,7 @@ OPCODE(SharedAtomicCmpSwap64, U64, U32, U64, U64)
 
 // Context getters/setters
 OPCODE(GetUserData, U32, ScalarReg)
+OPCODE(ToneCurveParam, F32, U32)
 OPCODE(GetScalarRegister, U32, ScalarReg)
 OPCODE(SetScalarRegister, Void, ScalarReg, U32)
 OPCODE(GetVectorRegister, U32, VectorReg)

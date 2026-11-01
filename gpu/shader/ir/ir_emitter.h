@@ -52,6 +52,8 @@ public:
     void DeviceMemoryBarrier();
 
     [[nodiscard]] U32 GetUserData(IR::ScalarReg reg);
+    /// The tone curve extension's parameters at PushData::ToneCurveIndex (native/tone_curve.h).
+    [[nodiscard]] F32 ToneCurveParam(u32 index);
 
     template <typename T = U32>
     [[nodiscard]] T GetScalarReg(IR::ScalarReg reg);
