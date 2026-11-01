@@ -183,7 +183,8 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline, bool dry_run) {
                                       image.info.size.height, image.info.pixel_format);
     };
     if (HdrChannel::Native16() && chain(src) && chain(dst) && src.info.num_samples == 1 &&
-        dst.info.num_samples == 1 && scene_targets->CopyProxy(src_id, dst_id)) {
+        dst.info.num_samples == 1 &&
+        (scene_targets->CopyProxies(src_id, dst_id) || scene_targets->CopyProxy(src_id, dst_id))) {
         // Copied between the chain's proxies; the native copy (a resolve each) is skipped.
     } else {
         if (HdrChannel::Native16() && chain(src) && !chain(dst) && !dst.info.props.is_depth &&
@@ -192,7 +193,8 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline, bool dry_run) {
             HdrChannel::NoteCopyTarget(dst.info.guest_address, dst.info.size.width,
                                        dst.info.size.height, dst.info.pixel_format);
         }
-        if (!scene_targets->CopyProxy(src_id, dst_id)) {
+        if (!scene_targets->CopyProxies(src_id, dst_id) &&
+            !scene_targets->CopyProxy(src_id, dst_id)) {
             runtime.CopyColorAndDepth(&src, &dst);
         }
     }

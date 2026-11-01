@@ -339,8 +339,9 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
 }
 
 bool Rasterizer::ReducedPass(const GraphicsPipeline* pipeline,
-                             std::optional<SceneResolution::Size>& pass_size) {
+                             std::optional<SceneResolution::Size>& pass_size, bool& own_size) {
     const auto& key = pipeline->GetGraphicsKey();
+    own_size = false;
     // A proxy attachment cannot represent MSAA or a feedback loop that reads the same image
     // through the guest's native descriptor during this draw.
     bool reduced = scene_started && upscaler->RasterScaling() && key.num_samples == 1;
@@ -392,6 +393,46 @@ bool Rasterizer::ReducedPass(const GraphicsPipeline* pipeline,
     if (db_desc.first && (!scene_targets->Eligible(texture_cache.GetImage(db_desc.first)) ||
                           !same_size(texture_cache.GetImage(db_desc.first), 0))) {
         reduced = false;
+    }
+    // bbport HDR, native+: a pass that draws only into targets of the 16-bit chain draws them
+    // through their same-size RGBA16F proxies (SceneTargets::OwnSize) — the game's own
+    // coordinates, no scaling. This is where the chain keeps its light above white: with the
+    // guest's 8-bit attachment every write clamped, so the composite's delta pass contributed
+    // nothing at all.
+    if (!reduced && HdrChannel::Native16Fixed() && HdrChannel::Native16Active() &&
+        key.num_samples == 1 && !db_desc.first &&
+        !(upscaler->Enabled() && upscaler->RasterScaling())) {
+        u32 chain_targets = 0;
+        bool all = true;
+        pass_size.reset();
+        for (u32 cb = 0; cb < num_attachments; ++cb) {
+            const auto& [id, desc] = cb_descs[cb];
+            if (!id) {
+                continue;
+            }
+            const auto& image = texture_cache.GetImage(id);
+            if (scene_targets->OwnSize(image) && scene_targets->Eligible(image) &&
+                !image.binding.is_bound && !image.binding.needs_rebind &&
+                !desc.view_info.range.base.layer && !desc.view_info.range.base.level &&
+                same_size(image, 0)) {
+                ++chain_targets;
+            } else {
+                all = false;
+            }
+        }
+        own_size = all && chain_targets > 0;
+        reduced = own_size;
+        if (own_size) {
+            static u32 told = 0;
+            if (told++ < 8) {
+                const auto proxy = pass_size.value_or(SceneResolution::Size{});
+                std::printf("HDR chain pass: own-size float proxies %ux%u, %u target(s), ps %08x\n",
+                            proxy.width, proxy.height, chain_targets,
+                            key.mrt_mask ? u32(pipeline->GetStage(Shader::SwStage::Fragment)
+                                                   .pgm_hash)
+                                         : 0u);
+            }
+        }
     }
     if (debug_pass) {
         if (db_desc.first) {
@@ -683,8 +724,12 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         scene_started = true;
     }
     std::optional<SceneResolution::Size> pass_size;
-    const bool reduced = ReducedPass(pipeline, pass_size);
-    push_data.scene_size = reduced ? SceneResolution::Pack(scene_targets->ShaderSceneSize()) : 0;
+    bool own_size = false;
+    const bool reduced = ReducedPass(pipeline, pass_size, own_size);
+    // The chain's own-size proxies are drawn with the game's coordinates: pushing the scene size
+    // would have the shaders scale, which is what a reduced proxy needs and this does not.
+    push_data.scene_size =
+        reduced && !own_size ? SceneResolution::Pack(scene_targets->ShaderSceneSize()) : 0;
 
     RenderState state;
     state.width = instance.GetMaxFramebufferWidth();
@@ -706,8 +751,9 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         const auto proxy = pass_size.value_or(size);
         state.width = proxy.width;
         state.height = proxy.height;
-        target_scale = {float(size.width) / float(native.width),
-                        float(size.height) / float(native.height)};
+        target_scale = own_size ? std::array{1.0f, 1.0f}
+                                : std::array{float(size.width) / float(native.width),
+                                             float(size.height) / float(native.height)};
     }
     if (FrameCapture::Active()) {
         std::array<const VideoCore::ImageInfo*, Gcn::NUM_COLOR_BUFFERS> colors{};
@@ -875,7 +921,9 @@ void Rasterizer::Resolve() {
                                src.info.pixel_format)) {
         HdrChannel::NoteCopyTarget(dst.info.guest_address, dst.info.size.width,
                                    dst.info.size.height, dst.info.pixel_format);
-        if (scene_targets->CopyProxy(src_id, texture_cache.FindImage(dst_desc, true))) {
+        const auto dst_id = texture_cache.FindImage(dst_desc, true);
+        if (scene_targets->CopyProxies(src_id, dst_id) ||
+            scene_targets->CopyProxy(src_id, dst_id)) {
             return;
         }
     }

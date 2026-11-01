@@ -330,9 +330,10 @@ private:
         std::pair<vk::ImageView, vk::ImageLayout> original_color{};
     };
     /// Whether the pass draws into the reduced scene proxies; `pass_size`:
-    /// the proxies' common size.
+    /// the proxies' common size. `own_size`: the pass draws into the 16-bit chain's targets, which
+    /// are proxied at their own size (RGBA16F, no scaling).
     bool ReducedPass(const GraphicsPipeline* pipeline,
-                     std::optional<SceneResolution::Size>& pass_size);
+                     std::optional<SceneResolution::Size>& pass_size, bool& own_size);
     void BindColorAttachments(RenderState& state, const GraphicsPipelineKey& key, bool reduced,
                               TargetRedirect& redirect);
     void BindDepthAttachment(RenderState& state, bool reduced, TargetRedirect& redirect);

@@ -48,6 +48,10 @@ public:
     bool EligibleScene(const VideoCore::Image&) const;
     /// The proxy size of an eligible image: the scene size divided like the native size.
     SceneResolution::Size ProxySize(const VideoCore::Image&, u32 level = 0) const;
+    /// bbport HDR, native+ with the startup-patched render size: a colour target of the 16-bit
+    /// chain (render/hdr_channel.cpp). Its proxy stands in at the image's own size — RGBA16F, no
+    /// scaling — so the passes that draw the chain write float with native coordinates.
+    bool OwnSize(const VideoCore::Image&) const;
     struct Target {
         vk::Image image;
         vk::ImageView view;
@@ -91,6 +95,10 @@ public:
     /// `dst`'s native image is left to resolve on a native access, instead of resolving `src`
     /// first (the game copies its targets every frame for the next one). False: not done.
     bool CopyProxy(VideoCore::ImageId src, VideoCore::ImageId dst);
+    /// bbport HDR, native+: a guest copy of a chain target into another (the game's color
+    /// resolve) done between their RGBA16F proxies, so the light above white survives it; false
+    /// (nothing done) when either is not an up-to-date proxy of the same size and format.
+    bool CopyProxies(VideoCore::ImageId src, VideoCore::ImageId dst);
     void ResolveAll();
     void CleanupStaleEntries(); ///< Remove proxy entries for images no longer in texture cache
     bool debug = false; ///< BB_SCENE_DEBUG frame: print resolves and fills

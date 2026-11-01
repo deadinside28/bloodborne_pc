@@ -100,9 +100,15 @@ static u32 SizeDivisor(const VideoCore::ImageInfo& i, SceneResolution::Size scen
     }
     return 0;
 }
+bool SceneTargets::OwnSize(const VideoCore::Image& image) const {
+    return HdrChannel::Native16Fixed() && !image.info.props.is_depth &&
+           HdrChannel::Upgraded(image.info.guest_address, image.info.size.width,
+                                image.info.size.height, image.info.pixel_format);
+}
 bool SceneTargets::Eligible(const VideoCore::Image& image) const {
     const auto& i = image.info;
-    const u32 div = SizeDivisor(i, size, native);
+    // A target of the 16-bit chain is proxied at its own size, whatever the scene size is.
+    const u32 div = OwnSize(image) ? 1u : SizeDivisor(i, size, native);
     if (!div || i.size.depth != 1 || i.resources.layers != 1 || i.num_samples != 1 ||
         i.props.is_block || !image.backing || image.backing->num_samples != 1) {
         return false;
@@ -128,6 +134,12 @@ bool SceneTargets::EligibleScene(const VideoCore::Image& image) const {
     return NativeSized(image.info.size.width, image.info.size.height, native) && Eligible(image);
 }
 SceneResolution::Size SceneTargets::ProxySize(const VideoCore::Image& image, u32 level) const {
+    if (OwnSize(image)) {
+        // The chain's proxy is the target's own image, in float: no scaling, so the pass that
+        // draws it keeps the game's coordinates.
+        return {std::max(1u, image.info.size.width >> level),
+                std::max(1u, image.info.size.height >> level)};
+    }
     const u32 div = std::max(1u, SizeDivisor(image.info, size, native));
     return {std::max(1u, size.width / div >> level), std::max(1u, size.height / div >> level)};
 }
@@ -673,6 +685,45 @@ bool SceneTargets::CopyProxy(VideoCore::ImageId src_id, VideoCore::ImageId dst_i
     return true;
 }
 
+bool SceneTargets::CopyProxies(VideoCore::ImageId src_id, VideoCore::ImageId dst_id) {
+    auto& src = *lookup(src_id, 0);
+    auto& dst = *lookup(dst_id, 0);
+    if (src.info.props.is_depth || dst.info.props.is_depth || &src == &dst || !Eligible(src) ||
+        !Eligible(dst) || ProxySize(src, 0) != ProxySize(dst, 0)) {
+        return false;
+    }
+    auto& s = Get(src_id, 0);
+    auto& d = Get(dst_id, 0);
+    // Only between two proxies of one format: a float source into an 8-bit destination is the
+    // guest's copy, which clamps, and is not what this is for.
+    if (s.image.image_ci.format != d.image.image_ci.format || !ProxyCurrent(src, 0, 1)) {
+        return false;
+    }
+    scheduler.EndRendering();
+    Transition(s, src.aspect_mask, vk::ImageLayout::eTransferSrcOptimal,
+               vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+    Transition(d, dst.aspect_mask, vk::ImageLayout::eTransferDstOptimal,
+               vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferWrite);
+    const auto extent = s.image.image_ci.extent;
+    const vk::ImageCopy region{
+        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .extent = {extent.width, extent.height, 1},
+    };
+    const vk::Image from = vk::Image(s.image), to = vk::Image(d.image);
+    scheduler.Record([from, to, region](vk::CommandBuffer cmd) {
+        cmd.copyImage(from, vk::ImageLayout::eTransferSrcOptimal, to,
+                      vk::ImageLayout::eTransferDstOptimal, region);
+    });
+    d.state.ProxyWrite();
+    if (debug) {
+        std::printf("Scene proxy copy: chain %s %#llx -> %#llx (their float proxies)\n",
+                    vk::to_string(s.image.image_ci.format).c_str(),
+                    (unsigned long long)src.info.guest_address,
+                    (unsigned long long)dst.info.guest_address);
+    }
+    return true;
+}
 SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
     auto& original = *lookup(id, 0);
     const u64 key = Key(original.image_uid, level);
@@ -687,14 +738,21 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
                                               original.info.size.width, original.info.size.height,
                                               original.info.pixel_format);
     if (entry && entry->hdr16 != hdr16) {
-        entry->views.clear();
-        entry->image.Destroy();
-        entry->hdr16 = hdr16;
-        entry->state = {};
+        // The proxy has the wrong format now (the target joined or left the 16-bit chain): retire
+        // it once the GPU is done with it, and remake it below. The recent-scan pointers into it
+        // go with it.
+        scheduler.DeferOperation([old = std::move(entry)]() mutable { old.reset(); });
+        entry.reset();
+        recent = {};
+        ++generation;
     }
     // A draw has up to six targets, mostly the same as the previous draw's.
     for (const auto& [recent_key, recent_entry] : recent) {
         if (recent_entry && recent_key == key) {
+            // A float target must not be drawn into an 8-bit proxy that is still in the scan.
+            if (hdr16 && recent_entry->image.image_ci.format != HdrChannel::Native16Format) {
+                break;
+            }
             if (!recent_entry->state.valid) Copy(*recent_entry, original, false);
             return *recent_entry;
         }
@@ -765,12 +823,45 @@ bool SceneTargets::ProxyCurrent(const VideoCore::Image& image, u32 level, u32 le
     // depth): else each read resolved the reduced depth to the native size first.
     // BB_SCENE_DEPTH_PROXIES=0: depth images are read at the native size.
     static const bool depth_proxies = !bb_env_off("BB_SCENE_DEPTH_PROXIES");
-    if (copying || !image.scene_proxy || (image.info.props.is_depth && !depth_proxies) ||
-        levels != 1) {
+    const bool chain = HdrChannel::Native16Active() && !image.info.props.is_depth &&
+                       HdrChannel::ChainImage(image.info.guest_address, image.info.size.width,
+                                              image.info.size.height, image.info.pixel_format);
+    // Native+ HDR: a chain target whose proxy is not current is read from its 8-bit image, which
+    // is where the light above white dies (the delta pass wrote it into the proxy). Say which of
+    // the conditions failed, once per image.
+    const auto tell = [&](const char* why) {
+        static std::mutex told_mutex;
+        static std::unordered_set<u64> told;
+        std::scoped_lock lock{told_mutex};
+        if (chain && told.size() < 16 && told.insert(image.image_uid).second) {
+            std::printf("HDR proxy: %#llx (uid %llu L%u) not sampled: %s\n",
+                        (unsigned long long)image.info.guest_address,
+                        (unsigned long long)image.image_uid, level, why);
+        }
+    };
+    if (copying) {
+        tell("copying");
+        return false;
+    }
+    if (!image.scene_proxy) {
+        tell("no proxy was ever made for this image");
+        return false;
+    }
+    if (image.info.props.is_depth && !depth_proxies) {
+        return false;
+    }
+    if (levels != 1) {
+        tell("more than one level");
         return false;
     }
     const auto it = entries.find(Key(image.image_uid, level));
-    return it != entries.end() && it->second->state.valid;
+    const bool known = it != entries.end();
+    const bool current = known && it->second->state.valid;
+    if (!current) {
+        tell(known ? "the proxy is not current (the native image was accessed)"
+                   : "no entry for this uid (a second image of the same address)");
+    }
+    return current;
 }
 vk::ImageLayout SceneTargets::PrepareSample(const VideoCore::Image& image, u32 level) {
     auto& e = *entries.find(Key(image.image_uid, level))->second;

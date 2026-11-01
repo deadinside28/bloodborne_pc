@@ -331,12 +331,19 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         color_buffer.data_format = col_buf.GetDataFmt();
         color_buffer.num_format = col_buf.GetNumberFmt();
         color_buffer.num_conversion = col_buf.GetNumberConversion();
-        // Native+ HDR: the chain's targets are drawn into the guest's own images — the port
-        // marks them and reports 'is RGBA16F', but the attachment is the 8-bit image, and a
-        // pipeline built for float against an integer attachment writes nothing (the delta pass
-        // silently did nothing at all). The key follows the guest's format, which is what the
-        // attachment is; the float images only exist where the upscaler redirects them (the
-        // display buffer), and those are not drawn through this key.
+        // Native+ HDR: a target of the 16-bit chain is drawn into a same-size RGBA16F proxy of
+        // the port's (render/hdr_channel.cpp, SceneTargets::OwnSize), so the pipeline's
+        // attachment format is float. The key must say the same: a pipeline built for the guest's
+        // 8-bit format against a float attachment is a mismatch (ErrorDevGPU) — and the reverse,
+        // a float pipeline against the 8-bit image, is the draw that quietly wrote nothing.
+        if (HdrChannel::Native16Active() &&
+            HdrChannel::Upgraded(col_buf.Address(), col_buf.Pitch(), col_buf.Height(),
+                                 GcnToVk::SurfaceFormat(col_buf.GetDataFmt(),
+                                                        col_buf.GetNumberFmt()))) {
+            color_buffer.data_format = Gcn::DataFormat::Format16_16_16_16;
+            color_buffer.num_format = Gcn::NumberFormat::Float;
+            color_buffer.num_conversion = Gcn::NumberConversion::None;
+        }
         color_buffer.export_format = regs.color_export_format.GetFormat(cb);
         color_buffer.swizzle = col_buf.Swizzle();
         const auto& bc = regs.blend_control[cb];
