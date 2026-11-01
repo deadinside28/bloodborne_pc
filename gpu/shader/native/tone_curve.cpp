@@ -421,7 +421,7 @@ bool ExtendToneCurve(IR::Program& program) {
         clamp->SetArg(1, before.Imm32(0.0f));
         clamp->SetArg(2, upper);
     }
-    // bbport: Info has no uses_tone_curve flag yet (see docs); the push range is set by the port.
+    program.info.uses_tone_curve = true;
     if (tone_curve_lab_channels) {
         tone_curve_lab_channels->clear();
         for (const F32& value : extended) {

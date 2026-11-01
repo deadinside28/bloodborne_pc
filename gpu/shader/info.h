@@ -92,6 +92,9 @@ struct InfoPersistent {
 };
 
 struct Info : InfoPersistent {
+    /// The fragment program had its tone curve extended (shader/native/tone_curve.h): the pipeline
+    /// pushes ToneCurvePush after PushData and sizes its range for it.
+    bool uses_tone_curve{};
     /// Per attribute, the components read or written.
     struct AttributeFlags {
         bool Get(IR::Attribute attrib, u32 comp = 0) const {
