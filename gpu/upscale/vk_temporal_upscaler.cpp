@@ -943,6 +943,14 @@ void TemporalUpscaler::RunScaled() {
                 const vk::ImageView excess_source = HdrChannel::CompositeTargetView()
                                                        ? HdrChannel::CompositeTargetView()
                                                        : color_view;
+                {
+                    static std::atomic<int> told_source{0};
+                    if (told_source.fetch_add(1) < 4) {
+                        std::printf("HDR excess source: composite view %p, colour view %p, using %p\n",
+                                    (void*)HdrChannel::CompositeTargetView(), (void*)(VkImageView)color_view,
+                                    (void*)(VkImageView)excess_source);
+                    }
+                }
                 const vk::DescriptorImageInfo chain_frame{.imageView = excess_source,
                                                           .imageLayout = vk::ImageLayout::eGeneral};
                 const vk::DescriptorImageInfo excess_out{.imageView = *hdr_excess_view,

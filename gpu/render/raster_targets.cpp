@@ -536,9 +536,16 @@ void Rasterizer::BindColorAttachments(RenderState& state, const GraphicsPipeline
         // the passes after the composite draw the same address natively, and their guest view
         // overwrote this one — the transfer then read the game's alpha (1) and the present
         // measured no excess at all (BB_HDR_DEBUG=1: 81% white, no red).
-        if (reduced && cb == 0 && HdrChannel::Native16() &&
+        if (cb == 0 && HdrChannel::Native16() &&
             image->info.guest_address == HdrChannel::CompositeTargetAddress()) {
-            HdrChannel::NoteCompositeTargetView(attachment.image_view);
+            static u32 told = 0;
+            if (told++ < 6) {
+                std::printf("HDR composite view: reduced %d, noting %p\n", int(reduced),
+                            (void*)attachment.image_view);
+            }
+            if (reduced) {
+                HdrChannel::NoteCompositeTargetView(attachment.image_view);
+            }
         }
         image->usage.render_target = 1u;
         // Native+ HDR: which image a chain target really draws into (reduced: the port's 16F
