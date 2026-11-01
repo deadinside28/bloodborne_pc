@@ -532,12 +532,20 @@ void TemporalUpscaler::Run() {
     }
     last_frame = now;
 
+    // Native+ HDR: with the chain in use the reconstruction reads the scene proxy, which is a
+    // float image. Described with the guest's 8-bit format it is sampled as UNORM, and UNORM
+    // clamps at 1 by definition — which is why the panel reported exactly paper white however the
+    // tone curve was configured, while the composite's own draw reported "float target yes".
+    const vk::Format upscaler_input_format = (reduced && HdrChannel::Native16())
+                                                 ? HdrChannel::Native16Format
+                                                 : color.info.pixel_format;
+
     bool dispatched = false;
     if (BbSettings::Get().upscaler == BbSettings::UpscalerTaa) {
         RecordTaa(cmdbuf, input_color_view, input_depth_view);
         dispatched = true;
     } else if (UseFsr4()) {
-        dispatched = RecordFsr4(cmdbuf, {input_color, input_color_view, w, h, color.info.pixel_format},
+        dispatched = RecordFsr4(cmdbuf, {input_color, input_color_view, w, h, upscaler_input_format},
                                 {input_depth, input_depth_view, w, h, depth_format}, w, h, ow, oh,
                                 frame_ms);
         if (dispatched && has_reactive) {
@@ -546,7 +554,7 @@ void TemporalUpscaler::Run() {
     } else if (UseDlss()) {
         dispatched = RecordDlss(
             cmdbuf,
-            {input_color, input_color_view, color.info.pixel_format, vk::ImageAspectFlagBits::eColor, w, h},
+            {input_color, input_color_view, upscaler_input_format, vk::ImageAspectFlagBits::eColor, w, h},
             {input_depth, input_depth_view, depth_format, vk::ImageAspectFlagBits::eDepth, w, h}, w, h,
             ow, oh, frame_ms, true);
     } else {
