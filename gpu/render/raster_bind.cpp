@@ -3,6 +3,8 @@
 // bbport render: Rasterizer, resource binding: push data, buffers, vertex and index buffers, and the texture
 // binding helper thread.
 
+#include "render/hdr_channel.h"
+#include "shim/bbport_settings.h"
 #include "bbport_button_prompts.h"
 #include "shim/bb_env.h"
 #include "render/raster_internal.h"
@@ -368,6 +370,16 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     // Bind resource buffers and textures.
     Shader::Backend::Bindings binding{};
     push_data = MakeUserData(Regs());
+    // bbport Native+: the tone curve extension's parameters (shader/native/tone_curve.h) — the
+    // knee, the peak in units of the game's white, the strength and the switch. Pushed with every
+    // draw; only a program whose curve was extended (Info::uses_tone_curve) reads them.
+    if (HdrChannel::Native16()) {
+        const auto& bb = BbSettings::Get();
+        const float paper = std::clamp(bb.hdr_paper_white.load(std::memory_order_relaxed),
+                                       BbSettings::HdrPaperWhiteMin, BbSettings::HdrPaperWhiteMax);
+        push_data.tone_curve = {HdrChannel::Knee(),
+                                HdrChannel::PeakNits() / std::max(paper, 1.0f), 1.0f, 1.0f};
+    }
     if (!HelperEligible(pipeline)) {
         ++helper_serial;
         for (const auto* stage : pipeline->GetStages()) {
