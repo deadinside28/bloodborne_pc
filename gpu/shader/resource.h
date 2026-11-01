@@ -288,6 +288,11 @@ struct PushData {
     /// The tone curve extension's parameters (shader/native/tone_curve.h): knee, peak, strength,
     /// enabled. The reference puts them at offset 128, which is bb_hdr's here; after bb_hdr2 instead.
     static constexpr u32 ToneCurveIndex = BbHdr2Index + 8;
+    /// The same fields as the SPIR-V push block numbers them: that block type carries the game
+    /// prefix and the HDR tails as its own members (bb_hdr one U32[4], bb_hdr2 two), which is what
+    /// an OpAccessChain indexes - not the field order above.
+    static constexpr u32 BbHdrSpvIndex = SceneSizeIndex + 1;
+    static constexpr u32 ToneCurveSpvIndex = BbHdrSpvIndex + 3;
     /// The game's prefix: what a pipeline's push range declares unless native+ is on.
     static constexpr u32 GameSize = 128;
 

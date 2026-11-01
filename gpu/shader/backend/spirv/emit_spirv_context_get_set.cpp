@@ -55,7 +55,7 @@ static std::pair<Id, bool> OutputAttrComponentType(EmitContext& ctx, IR::Attribu
 /// The tone curve extension's parameters: floats in the push data (native/tone_curve.h).
 Id EmitToneCurveParam(EmitContext& ctx, u32 index) {
     const Id pointer{ctx.OpAccessChain(ctx.TypePointer(spv::StorageClass::PushConstant, ctx.F32[1]),
-                                      ctx.push_data_block, ctx.ConstU32(PushData::ToneCurveIndex),
+                                      ctx.push_data_block, ctx.ConstU32(PushData::ToneCurveSpvIndex),
                                       ctx.ConstU32(index & 3))};
     return ctx.OpLoad(ctx.F32[1], pointer);
 }

@@ -419,7 +419,9 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
             // Deferred until the producer side exists: ToneCurveParam reads push constants at
             // bytes 176..192, and the pipeline layout still declares less, which is undefined
             // behaviour. Recognition is logged above and is the question being asked here.
+            std::printf("HDR tone curve: extending %08x\n", u32(info.pgm_hash));
             Shader::Native::ExtendToneCurve(ir_program);
+            std::printf("HDR tone curve: extended %08x, emitting\n", u32(info.pgm_hash));
         }
     }
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);

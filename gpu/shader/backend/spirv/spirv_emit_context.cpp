@@ -771,7 +771,7 @@ void EmitContext::DefineOutputs() {
 /// offsets, motion parameter, scene size.
 void EmitContext::DefinePushDataBlock() {
     const Id struct_type{Name(TypeStruct(F32[1], F32[1], F32[1], F32[1], U32[4], U32[4], U32[4],
-                                         U32[4], U32[4], U32[4], U32[2], U32[1], U32[1]),
+                                         U32[4], U32[4], U32[4], U32[2], U32[1], U32[1], U32[4], U32[4], U32[4], F32[4]),
                               "AuxData")};
     Decorate(struct_type, spv::Decoration::Block);
     struct Member {
@@ -793,6 +793,10 @@ void EmitContext::DefinePushDataBlock() {
         Member{PushData::BufOffsetIndex + 2, "buf_offsets2", 112U},
         Member{PushData::MotionParamIndex, "motion_param", 120U},
         Member{PushData::SceneSizeIndex, "scene_size", 124U},
+        Member{PushData::BbHdrSpvIndex + 0, "bb_hdr", 128U},
+        Member{PushData::BbHdrSpvIndex + 1, "bb_hdr2_lo", 144U},
+        Member{PushData::BbHdrSpvIndex + 2, "bb_hdr2_hi", 160U},
+        Member{PushData::ToneCurveSpvIndex, "tone_curve", 176U},
     };
     for (const Member& member : Members) {
         MemberName(struct_type, member.index, member.name);
