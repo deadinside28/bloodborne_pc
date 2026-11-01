@@ -412,6 +412,7 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     // in the IR so its shader writes above white (shader/native/tone_curve.h).
     if (Shader::Native::ToneCurveEnabled() && info.hw_stage == Shader::HwStage::Fragment) {
         const auto curves = Shader::Native::FindToneCurves(ir_program);
+        std::printf("HDR tone curve: fragment %08x, %zu curve(s)\n", u32(info.pgm_hash), curves.size());
         if (Shader::Native::IsComposite(curves)) {
             std::printf("HDR tone curve: composite recognised, %zu channel(s), extending\n",
                         curves.size());
