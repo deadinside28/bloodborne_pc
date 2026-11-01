@@ -416,7 +416,10 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
         if (Shader::Native::IsComposite(curves)) {
             std::printf("HDR tone curve: composite recognised, %zu channel(s), extending\n",
                         curves.size());
-            Shader::Native::ExtendToneCurve(ir_program);
+            // Deferred until the producer side exists: ToneCurveParam reads push constants at
+            // bytes 176..192, and the pipeline layout still declares less, which is undefined
+            // behaviour. Recognition is logged above and is the question being asked here.
+            // Shader::Native::ExtendToneCurve(ir_program);
         }
     }
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
