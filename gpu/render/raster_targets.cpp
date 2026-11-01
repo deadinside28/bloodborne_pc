@@ -523,19 +523,21 @@ void Rasterizer::BindColorAttachments(RenderState& state, const GraphicsPipeline
             is_clear ? GcnToVk::ColorBufferClearValue(col_buf) : vk::ClearValue{};
         attachment.image_view = *view.image_view;
         attachment.image_layout = image->backing->state.layout;
-        // Native+ HDR: the composite's own target carries the excess above white in its alpha;
-        // the upscaler's transfer samples this view (not its colour image, whose alpha is the
-        // game's).
-        if (cb == 0 && HdrChannel::Native16() &&
-            image->info.guest_address == HdrChannel::CompositeTargetAddress()) {
-            HdrChannel::NoteCompositeTargetView(*view.image_view);
-        }
         attachment.clear_value = clear_value.color.uint32;
         attachment.is_clear = is_clear;
         if (reduced) {
             const auto target = scene_targets->Attachment(image_id, desc.view_info);
             attachment.image_view = target.view;
             attachment.image_layout = target.layout;
+        }
+        // Native+ HDR: the composite's own target carries what the chain made above the game's
+        // white; the upscaler's transfer samples this view (not its colour image, whose alpha is
+        // the game's). It is recorded AFTER the proxy substitution, because the view that has the
+        // excess is the one the draw went into: recorded from the guest's 8-bit view instead, the
+        // transfer read a picture with nothing above white in it and the panel sat at paper white.
+        if (cb == 0 && HdrChannel::Native16() &&
+            image->info.guest_address == HdrChannel::CompositeTargetAddress()) {
+            HdrChannel::NoteCompositeTargetView(attachment.image_view);
         }
         image->usage.render_target = 1u;
         // Native+ HDR: which image a chain target really draws into (reduced: the port's 16F
