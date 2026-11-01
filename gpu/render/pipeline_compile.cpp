@@ -4,6 +4,7 @@
 // compiled (on this thread or in the background, with the compile time measured), and the shader
 // modules. Split out of pipeline_cache.cpp (2026-10-26).
 
+#include "shader/native/tone_curve.h"
 #include <algorithm>
 #include "shim/bb_env.h"
 #include <atomic>
@@ -406,7 +407,17 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
         in_info.emplace(info);
         BbShaderCapture::BeginInput();
     }
-    const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
+    auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
+    // bbport: Native+ HDR by the reference's mechanism: the game's own composite curve, extended
+    // in the IR so its shader writes above white (shader/native/tone_curve.h).
+    if (Shader::Native::ToneCurveEnabled() && info.hw_stage == Shader::HwStage::Fragment) {
+        const auto curves = Shader::Native::FindToneCurves(ir_program);
+        if (Shader::Native::IsComposite(curves)) {
+            std::printf("HDR tone curve: composite recognised, %zu channel(s), extending\n",
+                        curves.size());
+            Shader::Native::ExtendToneCurve(ir_program);
+        }
+    }
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
     if (keep_input) {
         PipelineStore::SaveShaderInput(
