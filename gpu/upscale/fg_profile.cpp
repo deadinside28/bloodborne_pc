@@ -11,7 +11,7 @@
 
 #include "vulkan/instance.h"
 
-extern "C" void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z);
+extern "C" void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z) = nullptr;
 
 namespace FgProfile {
 

@@ -19,6 +19,7 @@ public:
         u32 srgb_input = 0;
         /// RCAS strength (0: none) on the finished frame: sharpening without an upscaler.
         float sharpen = 0.0f;
+        u32 retro_dither = 0;
     };
 
     EncodePass(vk::Device device, vk::Format output_format);

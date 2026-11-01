@@ -10,6 +10,7 @@
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/thread.h"
+#include "shim/bbport_settings.h"
 
 namespace BbCache {
 
@@ -42,8 +43,9 @@ void BlobStore::Open() {
     if (opened) {
         return;
     }
+    const bool is_retro = BbSettings::Get().retro_mode.load(std::memory_order_relaxed);
     dir = Common::FS::GetUserPath(Common::FS::PathType::CacheDir) /
-          Common::ElfInfo::Instance().GameSerial();
+          (std::string(Common::ElfInfo::Instance().GameSerial()) + (is_retro ? "_retro" : ""));
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     writer = std::jthread([this](std::stop_token stop) { Writer(stop); });

@@ -460,6 +460,24 @@ EN = {
     "Золотой": "Gold",
     "Серебряный": "Silver",
     "Бронзовый": "Bronze",
+    # Retro Graphics
+    "Ретро-графика": "Retro Graphics",
+    "Эмуляция графических ограничений 32-битной эпохи":
+        "32-bit era retro graphical constraints emulation",
+    "Включить ретро-графику": "Enable Retro Graphics",
+    "Общий переключатель ретро-эффектов": "Master switch for retro visual effects",
+    "15-битный цвет и дизеринг": "15-bit color and dithering",
+    "Таблица 4x4 Bayer и квантование RGB555": "4x4 Bayer matrix and RGB555 quantization",
+    "Точечная фильтрация текстур": "Point texture filtering",
+    "Nearest-neighbor выборка текстур (убирает билинейное размытие)":
+        "Nearest-neighbor texture sampling (disables bilinear blur)",
+    "Дрожание вершин (Vertex Snap)": "Vertex snapping (jitter)",
+    "Привязка экранных координат к целочисленной сетке":
+        "Snaps screen-space coordinates to integer pixel grid",
+    "Аффинное наложение текстур": "Affine texture mapping",
+    "Линейная интерполяция UV без учета перспективы":
+        "Linear UV interpolation without perspective correction",
+    "Сетка дрожания вершин": "Vertex snap grid resolution",
 }
 
 PT_BR = {
