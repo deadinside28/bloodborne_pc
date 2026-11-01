@@ -463,9 +463,16 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 Vulkan::HdrChannel::Native16Active() &&
                 Vulkan::HdrChannel::ChainImage(image.info.guest_address, image.info.size.width,
                                                image.info.size.height, image.info.pixel_format);
+            bool proxy_tried = false;
+            // Measured: the guard below is load-bearing, not an oversight. The chain's final image
+            // is the image the UI composite draws into, and the upscaler redirects that read; when
+            // this was relaxed so that a chain target read its float proxy even here, the frame
+            // came back at the chain's 2560x1440 in the corner of a 3840x2160 output. So the
+            // above-white cannot arrive through this sample: it has to survive the redirect path.
             if ((binding_proxy_ok[binding_index] || chain_sampled) && !is_storage &&
                 !binding.force_general && !binding.is_target &&
                 !(upscaler->Enabled() && upscaler->RedirectsSampled(image_id))) {
+                proxy_tried = true;
                 if (const auto proxy = scene_targets->SampleProxy(image, desc.view_info)) {
                     image.usage.texture = 1u;
                     image_infos.emplace_back(VK_NULL_HANDLE, proxy->view, proxy->layout);
@@ -496,13 +503,16 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 std::scoped_lock lock{told_mutex};
                 if (told.size() < 16 && told.insert(2 * image.info.guest_address).second) {
                     std::printf("HDR sample: %#llx read natively (proxy allowed %d, target %d, "
-                                "general %d, image %s, %ux%u)\n",
+                                "general %d, image %s, %ux%u); proxy %s, storage %d, "
+                                "upscaler-redirected %d\n",
                                 (unsigned long long)image.info.guest_address,
                                 int(binding_proxy_ok[binding_index]), int(binding.is_target),
                                 int(binding.force_general),
                                 vk::to_string(image.backing ? image.backing->image.image_ci.format
                                                             : vk::Format::eUndefined).c_str(),
-                                image.info.size.width, image.info.size.height);
+                                image.info.size.width, image.info.size.height,
+                                proxy_tried ? "declined" : "not tried", int(is_storage),
+                                int(upscaler->Enabled() && upscaler->RedirectsSampled(image_id)));
                 }
             }
             barrier |= TransitSampled(image, desc, binding, is_storage);
