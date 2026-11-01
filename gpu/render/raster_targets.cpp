@@ -532,10 +532,11 @@ void Rasterizer::BindColorAttachments(RenderState& state, const GraphicsPipeline
         }
         // Native+ HDR: the composite's own target carries what the chain made above the game's
         // white; the upscaler's transfer samples this view (not its colour image, whose alpha is
-        // the game's). It is recorded AFTER the proxy substitution, because the view that has the
-        // excess is the one the draw went into: recorded from the guest's 8-bit view instead, the
-        // transfer read a picture with nothing above white in it and the panel sat at paper white.
-        if (cb == 0 && HdrChannel::Native16() &&
+        // the game's). Recorded only from a pass that draws the target through its float proxy:
+        // the passes after the composite draw the same address natively, and their guest view
+        // overwrote this one — the transfer then read the game's alpha (1) and the present
+        // measured no excess at all (BB_HDR_DEBUG=1: 81% white, no red).
+        if (reduced && cb == 0 && HdrChannel::Native16() &&
             image->info.guest_address == HdrChannel::CompositeTargetAddress()) {
             HdrChannel::NoteCompositeTargetView(attachment.image_view);
         }
