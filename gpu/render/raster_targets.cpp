@@ -411,6 +411,13 @@ bool Rasterizer::ReducedPass(const GraphicsPipeline* pipeline,
                 continue;
             }
             const auto& image = texture_cache.GetImage(id);
+            // A display buffer keeps its own redirect: the upscaler draws it at the output size,
+            // and taking that draw into an own-size proxy left the composition at the chain's
+            // 2560x1440 in the corner of a 3840x2160 frame.
+            if (FrameCapture::IsDisplayBuffer(image.info.guest_address)) {
+                all = false;
+                continue;
+            }
             if (scene_targets->OwnSize(image) && scene_targets->Eligible(image) &&
                 !image.binding.is_bound && !image.binding.needs_rebind &&
                 !desc.view_info.range.base.layer && !desc.view_info.range.base.level &&
