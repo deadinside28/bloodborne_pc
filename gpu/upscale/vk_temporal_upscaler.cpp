@@ -525,6 +525,18 @@ void TemporalUpscaler::Run() {
 
     const bool has_reactive = mask_ready || RecordReactive(input_color_view);
 
+    {
+        static std::atomic<int> told_input{0};
+        if (told_input.fetch_add(1) < 3) {
+            std::printf("HDR upscaler in: reduced %d native16 %d input %p composite %#llx "
+                        "colour %#llx %ux%u\n",
+                        int(reduced), int(HdrChannel::Native16()), (void*)input_color,
+                        (unsigned long long)HdrChannel::CompositeTargetAddress(),
+                        (unsigned long long)color.info.guest_address, color.info.size.width,
+                        color.info.size.height);
+        }
+    }
+
     const auto now = std::chrono::steady_clock::now();
     float frame_ms = std::chrono::duration<float, std::milli>(now - last_frame).count();
     if (frame_ms <= 0.0f || frame_ms > 200.0f) {
@@ -788,7 +800,15 @@ void TemporalUpscaler::RunScaled() {
         source_height = h;
     } else {
         depth_view = CachedView(depth, depth_format, vk::ImageAspectFlagBits::eDepth);
-        color_view = CachedView(color, color.info.pixel_format, vk::ImageAspectFlagBits::eColor);
+        // Native+: the chain's image is a float proxy, so its view has to be float too. A view
+        // created with the guest's 8-bit format clamps every read to [0, 1] — resource and view
+        // formats are separate things, and this is the alias that was taking the light above
+        // white out of the chain before the upscaler saw it (the display path already does this:
+        // upscaler_redirect.cpp's display_format).
+        color_view = CachedView(color,
+                                HdrChannel::Native16() ? HdrChannel::Native16Format
+                                                       : color.info.pixel_format,
+                                vk::ImageAspectFlagBits::eColor);
         runtime.Transit(&depth, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
         runtime.Transit(&color, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
@@ -914,6 +934,20 @@ void TemporalUpscaler::RunScaled() {
                              {depth_image, depth_view, depth_format, vk::ImageAspectFlagBits::eDepth,
                               source_width, source_height},
                              w, h, ow, oh, frame_ms, HdrChannel::Native16());
+            if (hdr_transfer) {
+                // TEMP: two peaks per firing — the chain frame the decode reads (`color_image`)
+                // and the linear image the decode writes, which is what DLSS is handed. If the
+                // first has content and the second is zero, the decode is the broken link.
+                static std::atomic<int> in_dumps{0};
+                if (in_dumps.fetch_add(1) % 60 == 30) {
+                    DumpPresentedFloat16(instance, scheduler, cmdbuf, vk::Image(color_image),
+                                         source_width, source_height, 902, "chain_in",
+                                         vk::Format::eR16G16B16A16Sfloat);
+                    DumpPresentedFloat16(instance, scheduler, cmdbuf, vk::Image(fsr4_linear_image),
+                                         source_width, source_height, 901, "dlss_in",
+                                         vk::Format::eR16G16B16A16Sfloat);
+                }
+            }
             if (ok4 && hdr_transfer) {
                 // Native+: the excess above the game's white, per output pixel, written here and
                 // sampled by the present. Created here rather than with the other resources: those

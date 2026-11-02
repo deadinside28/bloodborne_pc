@@ -322,7 +322,9 @@ void DumpUpscalerPeaksIfDue(const Instance& instance, Scheduler& scheduler,
                             vk::Image output, u32 out_w, u32 out_h) {
     constexpr int kFirstS = 8;
     constexpr int kEveryS = 3;
-    static const int total = std::clamp(int(BbSettings::Get().hdr_dump.load()), 0, 100);
+    // TEMP: forced on for one measurement (bb_env rejects names it does not know, so there is no
+    // env var to turn this on without registering one first).
+    static const int total = 4;
     static int left = total;
     static int index = 0;
     static const auto start = std::chrono::steady_clock::now();
