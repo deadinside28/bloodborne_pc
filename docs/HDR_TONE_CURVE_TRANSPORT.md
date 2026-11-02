@@ -1,4 +1,18 @@
-# Native+ tone curve: the extension runs, and above white now reaches the display
+# Native+ tone curve: the carrier question, and the presentation bug under it
+
+## Correction (2026-11-03, later): the numbers below are not evidence
+
+The 791.0144 reading below came from a **corrupted frame** and the `max()` form it was measured
+with was wrong (it replaced the whole frame with the carrier image below white, which is not the
+same quantity there — the picture went magenta). The display pass now only takes the *height* above
+white and applies it by scaling, so the colour stays the game's.
+
+More importantly, the game is presented at **1920x1080 inside a 3840x2160 swapchain**, letterboxed
+into the top-left quarter — the game's own log says `HDR present: upscaled 1, frame 1920x1080 …
+swapchain 3840x2160` and `presenter.cpp` letterboxes `{frame->width, frame->height}` into the
+output extent by design. **Every panel reading on that screen, including all of the ones below,
+measured that quarter-sized image.** Until the presented frame is the chain's output-size image, no
+HDR number from this install means anything.
 
 ## Solved: the carrier was never written (2026-11-03)
 

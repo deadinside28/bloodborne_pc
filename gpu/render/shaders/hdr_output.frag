@@ -129,10 +129,16 @@ void main() {
     }
     // Native+: the light the chain made above the game's white. The chain's own frame stays
     // RGBA16F through the reconstruction (hdr/hdr_upscale_transfer.comp) and the display pass
-    // reads it instead of the game's 8-bit image: taking the larger of the two leaves the frame
-    // as it is below white and restores the chain's value above it, in the hue the chain gave it.
+    // reads it beside the game's 8-bit image. Only the height above white is taken from it, and
+    // it is applied by scaling: the colour stays the one the 8-bit image has at white, so this
+    // cannot tint the frame — where the frame has room left the chain is not consulted at all.
     if ((hdr.flags & FLAG_EXCESS) != 0u) {
-        game_srgb = max(game_srgb, texelFetch(excess, pixel, 0).rgb);
+        const vec3 chain = texelFetch(excess, pixel, 0).rgb;
+        const float brightest = max(game_srgb.r, max(game_srgb.g, game_srgb.b));
+        const float top = max(chain.r, max(chain.g, chain.b));
+        if (brightest > 0.5 && top > brightest) {
+            game_srgb *= top / brightest;
+        }
     }
     const float white = max(mix(1.0, peak_white, clamp(hdr.boost, 0.0, 1.0)), 1.0);
     vec3 sdr_linear = (hdr.flags & FLAG_LINEAR_FRAME) != 0u
