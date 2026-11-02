@@ -1,7 +1,34 @@
-# Native+ tone curve: the extension runs; the transport still clamps at 1.0
+# Native+ tone curve: the extension runs, and above white now reaches the display
 
-Status note added after the push-block fix. Earlier sections below still hold
-for the mechanism and the ruled-out list.
+## Solved: the carrier was never written (2026-11-03)
+
+The frame was pinned at exactly paper white because of the **carrier**, not the curve. Above-white
+left the chain encoded into the *alpha* of the render-size frame (`bb_composite_hdr.frag`), and the
+display pass decoded it as `max(alpha - 0.25, 0) * 2`. The game's own composite — the draw the IR
+extension actually modifies — never writes that alpha, so the decoded excess was 0 on every frame,
+whatever the curve produced. The presented maximum was therefore the brightest value the 8-bit
+display image can hold: exactly 1.0, i.e. 202.9121 nits at paper white 203.
+
+The fix is the shape the reference proves (`nativeplus-engine.patch`: its `generated_image` and
+`hudless_image` stay RGBA16F, so above white rides in RGB and there is no side channel at all):
+the reconstruction's result is written to the output-size RGBA16F image beside the game's 8-bit one,
+whole and unclamped (`hdr/hdr_upscale_transfer.comp`), and the display pass takes the larger of the
+two (`hdr_output.frag`). The alpha carrier, its hue-preserving scale and its ramp are gone.
+
+Measured on the same harness, `BB_HDR_SCENE_CURVE=1`, DLSS quality, 3840x2160, paper white 203:
+
+| run | frame | panel max | panel avg |
+|---|---|---|---|
+| before | any | 202.9121 (paper white, pinned) | — |
+| after, bright frame | 791.0144 (the configured clamp) | 102.4680 |
+| after, dark corridor | 202.9121 | 11.37059 |
+
+The presented maximum now follows the chain's content instead of being pinned at 1.0 — a dark frame
+with nothing above white still reads paper white, a bright one reaches the clamp, which is also what
+the reference reads (791.01). The run-to-run scene differs, so a like-for-like comparison against
+the reference's frame still needs the same spot in the game.
+
+Earlier sections below still hold for the mechanism and the ruled-out list.
 
 ## What now works (commit `1e00a7b`)
 

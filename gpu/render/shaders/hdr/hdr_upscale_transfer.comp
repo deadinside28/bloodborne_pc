@@ -19,10 +19,13 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #ifdef BB_TRANSFER_ENCODE
 // Back to the game's chain: in place, the upscaler's output image.
 layout(binding = 0, rgba16f) uniform image2D target_img;
-// The frame the upscaler reconstructed, render size: its alpha carries what the chain made above
-// the game's white (bb_composite_hdr.frag). The reconstruction's own alpha does not survive, so it
-// is taken from here — nearest, by output pixel — and the display copy adds it back.
-layout(binding = 1) uniform texture2D excess_img;
+// Unused since the chain's frame travels whole (below): kept so the descriptor set the host binds
+// stays the same shape.
+layout(binding = 1) uniform texture2D chain_frame;
+// The chain's own frame, output size, gamma 2.2: the whole value, above white included. This is
+// the image the display pass reads instead of the game's 8-bit one, which cannot hold it (the
+// reference's Native+ does the same: its reconstructed frame stays RGBA16F, nativeplus-engine
+// .patch, generated_image/hudless_image).
 layout(binding = 2, rgba16f) uniform writeonly image2D excess_out;
 #else
 // Into linear light for the reconstruction: the chain's frame -> a 16F image beside it.
@@ -41,12 +44,15 @@ void main() {
     }
 #ifdef BB_TRANSFER_ENCODE
     const vec4 c = imageLoad(target_img, p);
-    const vec2 uv = (vec2(p) + 0.5) / vec2(imageSize(target_img));
-    const float over = texelFetch(excess_img,
-                                  ivec2(uv * vec2(textureSize(excess_img, 0))), 0).a;
-    // The frame keeps its own alpha; the excess goes to the image the present samples.
-    imageStore(excess_out, p, vec4(clamp(over, 0.0, 1.0), 0.0, 0.0, 1.0));
-    imageStore(target_img, p, vec4(bb_upscale_encode(c.rgb), c.a));
+    // The reconstruction's result, gamma 2.2 BT.709 with everything above white kept.
+    const vec3 chain = bb_upscale_encode(c.rgb);
+    // The display pass reads this image: it holds the chain's frame, so the light above the
+    // game's white is carried in the value itself rather than encoded into an alpha (which the
+    // reconstruction does not preserve, and which the game's own composite never writes).
+    imageStore(excess_out, p, vec4(chain, 1.0));
+    // The game's own image keeps what the game's later passes (UI, display copy) expect: white
+    // is the top of the range it can hold.
+    imageStore(target_img, p, vec4(clamp(chain, 0.0, 1.0), c.a));
 #else
     const vec4 c = texelFetch(source_img, p, 0);
     imageStore(target_img, p, vec4(bb_upscale_decode(c.rgb), c.a));

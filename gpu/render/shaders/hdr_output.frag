@@ -118,40 +118,21 @@ void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     vec3 game_srgb = texelFetch(game, pixel, 0).rgb;
     const float peak_white = max(hdr.peak / hdr.paper_white, 1.0);
-    // TEMP probe (BB_HDR_DEBUG=1): the composite's code in the alpha — white: the chain's draw
-    // did not cover the pixel (the game's 1), red: has_hdr and above white, blue: has_hdr only,
-    // black: no HDR branch.
+    // TEMP probe (BB_HDR_DEBUG=1): how far the chain's own frame reaches above white — white:
+    // nothing, blue: above white somewhere, red: at least half a stop over.
     if ((hdr.flags & FLAG_DEBUG) != 0u && (hdr.flags & FLAG_EXCESS) != 0u) {
-        const float code = texelFetch(excess, pixel, 0).r;
-        vec3 shown = vec3(0.0);
-        if (code > 0.9) {
-            shown = vec3(1.0, 1.0, 1.0);
-        } else if (code > 0.6) {
-            shown = vec3(1.0, 0.0, 0.0);
-        } else if (code > 0.3) {
-            shown = vec3(0.0, 0.0, 1.0);
-        }
+        const vec3 chain = texelFetch(excess, pixel, 0).rgb;
+        const float over = max(chain.r, max(chain.g, chain.b)) - 1.0;
+        vec3 shown = over > 0.5 ? vec3(1.0, 0.0, 0.0) : (over > 0.0 ? vec3(0.0, 0.0, 1.0) : vec3(1.0));
         color = vec4(shown, 1.0);
         return;
     }
-    // Native+: the light the chain made above the game's white. The composite keeps the colour
-    // with its brightest channel at white (its 8-bit target cannot hold more) and writes how far
-    // above white the pixel is into the frame's alpha, offset by a quarter so that the game's own
-    // alpha (1, where the chain has nothing to say) is not a value a real excess can take.
+    // Native+: the light the chain made above the game's white. The chain's own frame stays
+    // RGBA16F through the reconstruction (hdr/hdr_upscale_transfer.comp) and the display pass
+    // reads it instead of the game's 8-bit image: taking the larger of the two leaves the frame
+    // as it is below white and restores the chain's value above it, in the hue the chain gave it.
     if ((hdr.flags & FLAG_EXCESS) != 0u) {
-        const float encoded = texelFetch(excess, pixel, 0).r;
-        const float over = encoded > 0.75 ? 0.0 : max(encoded - 0.25, 0.0) * 2.0;
-        // Above white is where the 8-bit frame has nothing left: below it the frame itself is the
-        // chain's value and the excess means nothing.
-        const float brightest = max(game_srgb.r, max(game_srgb.g, game_srgb.b));
-        const float ramp = smoothstep(0.96, 1.0, brightest);
-        if (over > 0.0 && ramp > 0.0 && brightest > 1e-4) {
-            // Scaling the colour up to the chain's value keeps the hue it gave the pixel. Adding
-            // the excess to all three channels instead (as this did) turned every bright window
-            // white: measured saturation of the frame's brightest band 0.004 against the
-            // reference's 0.105, i.e. no colour left above an encoded 0.7.
-            game_srgb *= exp2(ramp * 2.2 * log2((brightest + over) / brightest));
-        }
+        game_srgb = max(game_srgb, texelFetch(excess, pixel, 0).rgb);
     }
     const float white = max(mix(1.0, peak_white, clamp(hdr.boost, 0.0, 1.0)), 1.0);
     vec3 sdr_linear = (hdr.flags & FLAG_LINEAR_FRAME) != 0u
