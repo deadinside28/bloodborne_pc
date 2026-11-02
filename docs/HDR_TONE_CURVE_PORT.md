@@ -102,3 +102,42 @@ experimenting further.
   `hdr=1 hdr_mode=native+ hdr_peak=790 hdr_paper_white=203`.
 - Measurement is the ReShade HDR Analysis panel: crop the top-left 700x240 and
   read max/avg. Screenshots are 3840x2160 and must be downscaled before viewing.
+
+## Session record, 2026-11-02 (late)
+
+Head `12744b7`, twelve commits past `16087ae`. **The local branch is ahead of
+the fork** (fork still at `16087ae`), so push before anything else.
+
+Landed after the text above was written:
+
+- `10319bd`, `1e00a7b` â€” the producer side the "next steps" asked for: the push
+  block carries the HDR tails (`ToneCurveIndex`, 192 bytes), the curve
+  parameters are addressable, and they are pushed per draw.
+- `10319bd` also **enables the extension**: the composite's own curve now writes
+  past 1.0. The mechanism works; this is the first time the game's own shader is
+  the source of above-white in this port.
+- `12744b7` â€” the upscaler's input is described as the float image it is.
+
+Measured after enabling: the curve runs, but the frame **still clamps at 1.0**
+(ReShade panel max 202.9121 nits). So the light is being lost *after* the
+shader, not by it.
+
+Ruled out, do not redo: three attempts to carry the curve through the read path
+broke the composition (`a4edffb`), and the tone-curve/transport split was
+recorded when the extension first ran (`a65fd34`).
+
+New understanding (`75ebca0`): the chain order is **composite then upscaler**, so
+above-white has to survive the *upscaler*. That is the next place to look: the
+upscaler's input and output formats and the transfer around it
+(`hdr/upscale_transfer.glsl`, which re-encodes to gamma 2.2 between them).
+
+Next steps:
+
+1. Push the branch (it is twelve commits ahead of the fork).
+2. With `BB_HDR_SCENE_CURVE=1`, confirm in the log which fragments are extended
+   and that the composite's own draw reports a float target
+   (`HDR chain draw: ... float target yes`).
+3. Find the clamp: composite target -> upscaler input -> upscaler output ->
+   display copy -> present. One probe value above white, read at each stage.
+4. Only then retire `bb_composite_hdr.frag`, `bb_tonemap_variants.h`, the delta
+   pipeline and `hdr_delta`.
