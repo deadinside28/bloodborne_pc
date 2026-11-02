@@ -272,6 +272,13 @@ Frame* Presenter::PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute
         texture_cache.UpdateImage(image_id);
     }
     Frame* frame = GetRenderFrame();
+    // The frame's own size is the guest's request (and a scratch size for the encode); the image
+    // the frame is made from is the upscaler's display image, which is the chain's output size.
+    // The present letterboxes and blits the source, so it has to know that size and not the
+    // frame's: with 1920x1080 here and 3840x2160 there, the picture was cropped to the frame's
+    // top-left and the rest of the screen stayed whatever the swapchain held.
+    frame->source_width = upscaled ? display.width : 0;
+    frame->source_height = upscaled ? display.height : 0;
 
     // Native+ HDR: the display pass's masked pre-UI snapshot (the HUD at UI Brightness).
     if (upscaled) {
@@ -796,9 +803,14 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
     BbGameMenu::Poll();
     const bool overlay_visible = BbOverlay::Visible();
 
-    // The frame into the composite, letterboxed; the bars stay at the clear.
-    const vk::Rect2D rect =
-        frame ? Letterbox({frame->width, frame->height}, extent) : vk::Rect2D{{0, 0}, {0, 0}};
+    // The frame into the composite, letterboxed; the bars stay at the clear. The geometry is the
+    // source image's (the chain's output), not the frame's own: the frame is the guest's size and
+    // a scratch target for the encode, while the whole picture lives in the source.
+    const vk::Extent2D content =
+        frame && frame->source_width
+            ? vk::Extent2D{frame->source_width, frame->source_height}
+            : vk::Extent2D{frame ? frame->width : 0, frame ? frame->height : 0};
+    const vk::Rect2D rect = frame ? Letterbox(content, extent) : vk::Rect2D{{0, 0}, {0, 0}};
     const vk::ClearColorValue black{std::array{0.0f, 0.0f, 0.0f, 1.0f}};
     const vk::ImageMemoryBarrier2 to_dst{
         .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
@@ -823,7 +835,7 @@ void Presenter::RecordHdrPresent(vk::CommandBuffer cmdbuf, const Frame* frame, v
         const vk::ImageBlit region{
             .srcSubresource = layers,
             .srcOffsets = std::array{vk::Offset3D{0, 0, 0},
-                                     vk::Offset3D{s32(frame->width), s32(frame->height), 1}},
+                                     vk::Offset3D{s32(content.width), s32(content.height), 1}},
             .dstSubresource = layers,
             .dstOffsets = std::array{vk::Offset3D{rect.offset.x, rect.offset.y, 0},
                                      vk::Offset3D{rect.offset.x + s32(rect.extent.width),
@@ -1133,7 +1145,7 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
         source = frame->interp_image[index];
     }
     if (!blank && last) {
-        DumpFinalFrameIfDue(instance, present_scheduler, cmdbuf, frame->image, frame->width,
+        DumpFinalFrameIfDue(instance, present_scheduler, frame->image, frame->width,
                             frame->height,
                             HdrChannel::Native16() ? HdrChannel::Native16Format
                                                    : swapchain.GetSurfaceFormat().format);
@@ -1154,44 +1166,33 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
         }
         // hdr_dump (bbport.ini): the same dumps once per run, with no environment needed (runs
         // from the launcher cannot set one). The frame as the display chain made it.
-        // Early and often: the diagnostics this dump exists for (the peak a frame reaches) are
-        // settled by the first seconds in the level, and a short session must produce one.
-        constexpr int kHdrDumpFirstS = 8;
-        constexpr int kHdrDumpEveryS = 3;
+        // The schedule is the chain frame's, not this stream's: this one starts at the first
+        // present (the splash screen), seconds before the level, and a session that reads the
+        // numbers closes the game a second into it.
         static int hdr_dump_left = -1;
-        static int hdr_dump_total = 0;
-        static std::chrono::steady_clock::time_point hdr_dump_start{};
         if (hdr_dump_left < 0) {
             hdr_dump_left =
                 HdrChannel::Enabled() ? std::clamp(int(BbSettings::Get().hdr_dump.load()), 0, 100) : 0;
-            hdr_dump_total = hdr_dump_left;
-            hdr_dump_start = std::chrono::steady_clock::now();
             if (hdr_dump_left > 0) {
-                std::printf("HDR: dumping %d presented frames, from %d s in, every %d s\n",
-                            hdr_dump_left, kHdrDumpFirstS, kHdrDumpEveryS);
+                std::printf("HDR: dumping %d presented frames, on the chain frame's schedule\n",
+                            hdr_dump_left);
             }
         }
-        if (hdr_dump_left > 0 && left == 0) {
-            // One frame every kHdrDumpEveryS: a session short enough to end before the splash is
-            // gone still produces one (the .max sidecar is the frame's peak, the number to check).
-            const auto due = hdr_dump_start + std::chrono::seconds(
-                                                  kHdrDumpFirstS + kHdrDumpEveryS * (hdr_dump_total - hdr_dump_left));
-            if (std::chrono::steady_clock::now() >= due) {
-                --hdr_dump_left;
-                left = 1;
-                if (!bb_env("BB_SEQUENCE_DUMP_COUNT")) index = 0;
-            }
+        if (hdr_dump_left > 0 && left == 0 && TakePresentPeakRequest()) {
+            --hdr_dump_left;
+            left = 1;
+            if (!bb_env("BB_SEQUENCE_DUMP_COUNT")) index = 0;
         }
         if (left > 0 && !blank) {
             --left;
             const vk::Image dumped = source ? source : frame->image;
             if (HdrChannel::Native16()) {
                 // Native+: the frame is the chain's float image — converted for viewing.
-                DumpPresentedFloat16(instance, present_scheduler, cmdbuf, dumped,
+                DumpPresentedFloat16(instance, present_scheduler, dumped,
                                      frame->width, frame->height, index++,
                                      source ? "interp" : "real", frame->source_format);
             } else {
-                DumpPresented(instance, present_scheduler, cmdbuf, dumped,
+                DumpPresented(instance, present_scheduler, dumped,
                               frame->width, frame->height, swapchain.GetSurfaceFormat().format,
                               index++, source ? "interp" : "real");
             }

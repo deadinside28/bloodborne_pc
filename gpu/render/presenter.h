@@ -78,6 +78,11 @@ struct Frame {
     /// Native+ HDR: the format of the image this frame was encoded from (16F when the chain
     /// engaged; the game's 8-bit form otherwise) — the frame dump reads it as that format.
     vk::Format source_format{};
+    /// The size of the image the frame was encoded from when it is not the frame's own: the
+    /// upscaler's display image, which is the chain's output whatever size the guest asked for.
+    /// The present blits and letterboxes *this* size (0: the frame's own, the unscaled path).
+    u32 source_width = 0;
+    u32 source_height = 0;
     /// Low latency: the frame's ID for the driver (0: a blank frame).
     u64 present_id = 0;
 };
