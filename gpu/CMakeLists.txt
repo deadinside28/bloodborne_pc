@@ -55,9 +55,33 @@ elseif (BB_PGO STREQUAL "use")
 endif()
 
 find_package(Vulkan REQUIRED)
+# The renderer uses VK_VALVE_shader_mixed_float_dot_product (Vulkan-Headers 1.4.357). Older system
+# headers (Fedora 44: 1.4.341) get that release's headers in front of them; the loader is still
+# the system's.
+file(STRINGS "${Vulkan_INCLUDE_DIR}/vulkan/vulkan_core.h" BB_VK_HAS_MIXED_DOT
+     REGEX "VK_VALVE_shader_mixed_float_dot_product")
+if(NOT BB_VK_HAS_MIXED_DOT)
+    message(STATUS "Vulkan headers ${Vulkan_VERSION} lack VK_VALVE_shader_mixed_float_dot_product: using Vulkan-Headers 1.4.357")
+    include(FetchContent)
+    FetchContent_Declare(bb_vulkan_headers GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+                         GIT_TAG v1.4.357 GIT_SHALLOW TRUE SOURCE_SUBDIR none)
+    FetchContent_MakeAvailable(bb_vulkan_headers)
+    foreach(target Vulkan::Headers Vulkan::Vulkan)
+        if(TARGET ${target})
+            get_target_property(dirs ${target} INTERFACE_INCLUDE_DIRECTORIES)
+            if(NOT dirs)
+                set(dirs "")
+            endif()
+            list(PREPEND dirs "${bb_vulkan_headers_SOURCE_DIR}/include")
+            set_target_properties(${target} PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${dirs}")
+        endif()
+    endforeach()
+endif()
 find_package(fmt REQUIRED)
 find_package(Boost REQUIRED)
-find_package(magic_enum QUIET)
+# 0.9.6 moved the headers into include/magic_enum/, as the sources include them (Fedora 44 ships
+# 0.9.5, with the headers directly in include/).
+find_package(magic_enum 0.9.6 QUIET)
 if(NOT magic_enum_FOUND)
     # Header-only; packaged on few systems (the Windows cross build's MSYS2 has none).
     include(FetchContent)
@@ -88,7 +112,13 @@ if(NOT miniz_FOUND)
         add_library(miniz::miniz ALIAS miniz)
     endif()
 endif()
-find_package(Zydis REQUIRED)
+find_package(Zydis QUIET)
+if(NOT TARGET Zydis::Zydis)
+    # Packages with pkg-config only, no CMake config (Fedora).
+    pkg_check_modules(ZYDIS REQUIRED IMPORTED_TARGET zydis)
+    add_library(Zydis::Zydis INTERFACE IMPORTED)
+    target_link_libraries(Zydis::Zydis INTERFACE PkgConfig::ZYDIS)
+endif()
 find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 
 set(SIRIT_USE_SYSTEM_SPIRV_HEADERS OFF CACHE BOOL "" FORCE)
