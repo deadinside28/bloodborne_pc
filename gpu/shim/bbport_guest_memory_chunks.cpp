@@ -124,16 +124,22 @@ void FreeChunk(u64 phys, u64 size) {
 
 
 std::uint32_t FindHostType(std::uint32_t bits) {
-    // Cached host memory first, then any host-visible type the import allows.
-    for (const bool cached : {true, false}) {
-        for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-            const auto flags = memory_properties.memoryTypes[i].propertyFlags;
-            if (!(bits & (1u << i)) || !(flags & vk::MemoryPropertyFlagBits::eHostVisible) ||
-                (flags & vk::MemoryPropertyFlagBits::eDeviceLocal) || !TypeAllowed(flags) ||
-                (cached &&!(flags & vk::MemoryPropertyFlagBits::eHostCached))) {
-                continue;
+    // Cached host memory first, then any host-visible type the import allows. System-memory types
+    // (not device-local) come first; a GPU with one memory pool (Intel ANV on integrated Arc/Xe:
+    // every type is device-local, the imports allow only those) then takes a device-local
+    // host-visible type: the pages stay the CPU's own, cached, memory.
+    for (const bool device_local : {false, true}) {
+        for (const bool cached : {true, false}) {
+            for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+                const auto flags = memory_properties.memoryTypes[i].propertyFlags;
+                if (!(bits & (1u << i)) || !(flags & vk::MemoryPropertyFlagBits::eHostVisible) ||
+                    bool(flags & vk::MemoryPropertyFlagBits::eDeviceLocal) != device_local ||
+                    !TypeAllowed(flags) ||
+                    (cached && !(flags & vk::MemoryPropertyFlagBits::eHostCached))) {
+                    continue;
+                }
+                return i;
             }
-            return i;
         }
     }
     return ~0u;
