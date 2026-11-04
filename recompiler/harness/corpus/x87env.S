@@ -12,6 +12,7 @@
 t_x87_env:
     sub rsp, 40
     fnstcw [rsp]                    // the caller's control word
+    fninit                          // the status word: what ran before (x87.c) leaves flags and C1
     mov ax, [rsp]
     mov [rcx], ax
     mov ax, di
