@@ -105,8 +105,17 @@ output, which must equal the x86-64 run's.
   `[rdi]`, and on x86-64 hosts the runtime runs it as itself, in a routine made once per
   encoding (`push rsi; popfq; insn; pushfq; pop rax; ret`): exact, and the x87 state stays the
   FPU's, shared with code still running original (long doubles return in st(0)). The guest's
-  flags go in (fcmovcc) and come back (fcomi/fucomi). Other hosts need an x87 emulator behind
-  the same call (not written yet; `corpus/x87.c`, `txf_*`, runs on x86-64 only).
+  flags go in (fcmovcc) and come back (fcomi/fucomi). Other hosts (AArch64, or any build with
+  `-DRECOMP_X87_EMU`) emulate the x87 behind the same two calls (`harness/recomp_x87_emu.h`):
+  the register stack, tags, control and status words per thread; every form the game's libc
+  uses (loads and stores in all formats, arithmetic, compares, fcmov, fsqrt, frndint, fscale,
+  fxtract, fprem/fprem1, constants) in software, bit for bit as the hardware, exceptions taken
+  as masked. Not emulated: the transcendentals, packed BCD, fnsave/frstor (they stop with a
+  message). `harness/x87_fuzz.c` runs each of the 394 forms from random states and operands on
+  the x87 and in the emulator and compares the whole FPU state, memory and flags; it is the
+  reference for AMD's details (C1 after each instruction, which NaN wins, when DE is raised,
+  fprem's partial step of 32 + d mod 32 bits). `run.sh` runs it, then the corpus through the
+  emulator on x86-64 and under QEMU (`corpus/x87.c`, `txf_*`).
 - **Configurations:** settings install hooks of their own (`BB_FRAME_STATS`: one at 0x26aa860), so
   a library is built against one dump per configuration it must run in
   (`build_aot.sh EBOOT LIST dump1.bin,dump2.bin NAME`); bbport refuses it in any other.
@@ -189,7 +198,7 @@ output, which must equal the x86-64 run's.
 4. Fallback for dispatch misses; host-PC → guest-address map for fault reporting.
 5. Code size: libz is 3.4× its original `.text` on AArch64 with `--abi` (flags and general
    register traffic are the next targets); `--tso` adds 43% for its inline alignment checks.
-6. Instruction gaps: x87 (the game's handful of sites are junk decodes so far), 16-bit
+6. Instruction gaps: x87 transcendentals and BCD (unused by the game), 16-bit
    `shld/shrd`, BMI2 (not needed for Jaguar), segment register moves, `lahf/sahf`.
 7. LLVM 23.1.4's AArch64 backend crashes ("Cannot select") on an unaligned 16-bit store it builds
    itself by merging two byte stores of a big-endian value

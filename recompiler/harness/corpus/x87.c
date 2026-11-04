@@ -2,8 +2,8 @@
 // x87: long double, which x86-64 compilers keep on the x87 stack (as the game's libc does for its
 // long double functions): arithmetic, compares (fucomi, fcmov), conversions (fild, fistp /
 // fisttp), fsqrt and fabs, 80-bit stores, and long doubles passed between functions (in memory)
-// and returned in st(0). txf_* (signature as fp_simd.c's tf_*): checked on x86-64 hosts only,
-// where the runtime runs x87 instructions as themselves (recomp_x87.h); recorded everywhere.
+// and returned in st(0). txf_* (signature as fp_simd.c's tf_*): recorded on x86-64; the runtime
+// runs x87 instructions as themselves there, and emulates them elsewhere (recomp_x87.h).
 #include <stdint.h>
 
 #define TXF(name) __attribute__((noinline, used, visibility("default"))) double txf_##name( \

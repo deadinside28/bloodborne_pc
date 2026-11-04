@@ -27,6 +27,12 @@ if [[ $(uname -m) == x86_64 && ${BB_RECOMP_HYBRID:-1} != 0 ]]; then
     cc -c "$here/recomp_hybrid_x86.S" -o "$out/hybrid_x86.o"
 fi
 status=0
+# The x87 emulator (recomp_x87_emu.h, the AArch64 hosts' x87) against the hardware: every form.
+if [[ $(uname -m) == x86_64 && -z ${1:-} ]]; then
+    cc -O2 -o "$out/x87_fuzz" "$here/x87_fuzz.c"
+    printf '%-18s ' "x87 emulator"
+    "$out/x87_fuzz" ${BB_X87_FUZZ:-2000} | tail -1 || { status=1; grep '^FAIL' <("$out/x87_fuzz" 200) | head -10; }
+fi
 for v in $variants; do
     march=btver2; [[ $v == *:* ]] && march=${v#*:}
     base=${v%%:*}; cc=${base%-*}; opt=-${base#*-}
@@ -51,6 +57,12 @@ for v in $variants; do
         printf '%-18s %6s KiB aarch64  ' "$t" $(( $(stat -c %s "$out/corpus-$t.aarch64.o") / 1024 ))
         "$out/runner-$t" "$so" -r "$out/expected-$v.bin" ${1:+-f "$1"} 2>"$out/runner-$t.log" | tail -1 || {
             status=1; grep -E '^(FAIL|    )' <("$out/runner-$t" "$so" ${1:+-f "$1"} 2>/dev/null) | head -20; }
+        if [[ $(uname -m) == x86_64 ]]; then  # x87 through the emulator, as on AArch64
+            cc -O1 -g -DRECOMP_X87_EMU -I"$here" -o "$out/runner-$t-x87emu" "$here/runner.c" "$here/recomp_loader.c" "$out/lifted-$t.o"
+            printf '  %-28s ' "x87 emulated"
+            "$out/runner-$t-x87emu" "$so" -c "$out/expected-$v.bin" ${1:+-f "$1"} 2>"$out/runner-$t-x87emu.log" | tail -1 || {
+                status=1; grep -E '^(FAIL|    )' <("$out/runner-$t-x87emu" "$so" -c "$out/expected-$v.bin" ${1:+-f "$1"} 2>/dev/null) | head -10; }
+        fi
         if (( hybrid )); then
             # Hybrid execution: a subset recompiled (all, either half, a third), entered from the
             # original code through entry patches and calling back into it.

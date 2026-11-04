@@ -5,7 +5,8 @@
 // 7 fninit; returns the status word. Include in exactly one translation unit of a runtime.
 //
 // x86-64 hosts run the instruction itself, so original code still running next to the recompiled
-// code (x87 in libc) sees the same FPU. Other hosts keep the two words per thread.
+// code (x87 in libc) sees the same FPU. Other hosts (or -DRECOMP_X87_EMU) emulate the x87 per
+// thread: recomp_x87_emu.h, checked bit for bit against the hardware by x87_fuzz.c.
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +15,13 @@
 
 #include "recomp_rt.h"
 
+#if !defined(__x86_64__) && !defined(RECOMP_X87_EMU)
+#define RECOMP_X87_EMU 1
+#endif
+#if defined(RECOMP_X87_EMU)
+#include "recomp_x87_emu.h"
+#endif
+
 uint64_t __recomp_x87(RecompState *st, int32_t op, uint64_t addr);
 uint64_t __recomp_x87_insn(RecompState *st, uint64_t enc, uint64_t addr, uint64_t flags);
 
@@ -21,8 +29,8 @@ uint64_t __recomp_x87_insn(RecompState *st, uint64_t enc, uint64_t addr, uint64_
 // the memory operand at [rdi] (bytes little-endian, the length in the top byte). x86-64 hosts
 // run it as itself: a small routine per encoding, made once (push rsi; popfq; the instruction;
 // pushfq; pop rax; ret), called with rdi = the address and rsi = the guest's flags; the flags
-// after it come back (fcomi/fucomi). Other hosts need an x87 emulator: not there yet.
-#if defined(__x86_64__)
+// after it come back (fcomi/fucomi). Other hosts: the emulator.
+#if !defined(RECOMP_X87_EMU)
 #include <pthread.h>
 #include <sys/mman.h>
 typedef uint64_t (*X87Routine)(uint64_t addr, uint64_t flags);
@@ -74,20 +82,22 @@ static X87Routine x87_routine(uint64_t enc) {
 
 uint64_t __recomp_x87_insn(RecompState *st, uint64_t enc, uint64_t addr, uint64_t flags) {
     (void)st;
-#if defined(__x86_64__)
+#if defined(RECOMP_X87_EMU)
+    return x87emu_insn(enc, addr, flags);
+#else
     const X87Routine fn = x87_routine(enc);
     if (fn) return fn(addr, flags);
-#else
-    (void)addr; (void)flags;
-#endif
-    fprintf(stderr, "x87 instruction %#llx: no x87 here (an emulator is to come)\n", (unsigned long long)enc);
+    fprintf(stderr, "x87 instruction %#llx: no room for its routine\n", (unsigned long long)enc);
     abort();
+#endif
 }
 
 uint64_t __recomp_x87(RecompState *st, int32_t op, uint64_t addr) {
     (void)st;
+#if defined(RECOMP_X87_EMU)
+    return x87emu_env(op, addr);
+#else
     void *p = (void *)(uintptr_t)addr;
-#if defined(__x86_64__)
     uint16_t sw;
     switch (op) {
     case 0: __asm__ volatile("fnstenv (%0)" ::"r"(p) : "memory"); break;
@@ -100,25 +110,6 @@ uint64_t __recomp_x87(RecompState *st, int32_t op, uint64_t addr) {
     default: break;
     }
     __asm__ volatile("fnstsw %0" : "=a"(sw));
-    return sw;
-#else
-    // The words alone: the tag word reads empty, pointers zero (no x87 code runs here).
-    static _Thread_local uint16_t cw = 0x037f, sw;
-    uint16_t env[14] = { 0 };
-    switch (op) {
-    case 0:
-        env[0] = cw; env[2] = sw; env[4] = 0xffff;
-        memcpy(p, env, 28);
-        cw |= 0x3f;  // fnstenv masks every exception after storing
-        break;
-    case 1: memcpy(env, p, 28); cw = env[0]; sw = env[2]; break;
-    case 2: memcpy(p, &cw, 2); break;
-    case 3: memcpy(&cw, p, 2); break;
-    case 4: memcpy(p, &sw, 2); break;
-    case 6: sw &= 0x7f00; break;  // exception flags, ES and B cleared
-    case 7: cw = 0x037f; sw = 0; break;
-    default: break;
-    }
     return sw;
 #endif
 }
