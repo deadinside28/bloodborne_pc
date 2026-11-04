@@ -74,11 +74,15 @@ std::uint32_t FindType(std::uint32_t bits, bool in_vram) {
         }
     }
     const auto want = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached;
-    for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-        const auto flags = memory_properties.memoryTypes[i].propertyFlags;
-        if ((bits & (1u << i)) && (flags & want) == want &&
-            !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal) && TypeAllowed(flags)) {
-            return i;
+    // System memory (not device-local) first; on an integrated GPU whose every type is
+    // device-local (Intel's), its cached host-visible types.
+    for (const bool device_local : {false, true}) {
+        for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+            const auto flags = memory_properties.memoryTypes[i].propertyFlags;
+            if ((bits & (1u << i)) && (flags & want) == want &&
+                bool(flags & vk::MemoryPropertyFlagBits::eDeviceLocal) == device_local && TypeAllowed(flags)) {
+                return i;
+            }
         }
     }
     return ~0u;
