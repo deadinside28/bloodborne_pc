@@ -8,6 +8,7 @@
 // table and calls it through a C bridge (on AArch64 that call is the SysV -> AAPCS64 bridge).
 #define _GNU_SOURCE
 #include "recomp_loader.h"
+#include "recomp_x87.h"  // __recomp_x87 (defined there)
 
 #include <dlfcn.h>
 #include <signal.h>

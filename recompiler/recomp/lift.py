@@ -647,6 +647,31 @@ def _nop(L, ins, b):
     pass
 
 
+# x87 environment: control and status words, no register stack. The runtime does them
+# (__recomp_x87: on x86-64 hosts the instruction itself, so code still running original sees the
+# same FPU); op: 0 fnstenv, 1 fldenv, 2 fnstcw, 3 fldcw, 4 fnstsw m16, 5 fnstsw ax, 6 fnclex,
+# 7 fninit. Returns the status word (fnstsw ax).
+X87_OPS = {M.FNSTENV: 0, M.FLDENV: 1, M.FNSTCW: 2, M.FLDCW: 3, M.FNSTSW: 4, M.FNCLEX: 6, M.FNINIT: 7}
+
+
+@sem(*X87_OPS)
+def _x87_env(L, ins, b):
+    op = X87_OPS[ins.mnemonic]
+    addr = "0"
+    if ins.op_count and ins.op0_kind == OK.MEMORY:
+        addr = L.ea(ins)
+    elif ins.mnemonic == M.FNSTSW:
+        op = 5  # fnstsw ax
+    sw = L.op(f"call i64 @__recomp_x87(ptr %st, i32 {op}, i64 {addr})")
+    if op == 5:
+        L.write_reg(R.AX, L.op(f"trunc i64 {sw} to i16"), 16)
+
+
+@sem(M.WAIT)
+def _fwait(L, ins, b):
+    pass  # x87 exceptions stay masked
+
+
 @sem(M.CLD, M.STD)
 def _df(L, ins, b):
     L.e(f"store i1 {'true' if ins.mnemonic == M.STD else 'false'}, ptr %df")
@@ -1258,7 +1283,7 @@ def _call(L, ins, b):
         L.call_target(ins.near_branch_target)
     else:
         L.e(f"call void @__recomp_dispatch(ptr %st, i64 {target})")
-    if direct and L.mod.is_noreturn(ins.near_branch_target):
+    if direct and (L.mod.is_noreturn(ins.near_branch_target) or ins.ip in L.cfg.noreturn_calls):
         L.trap(6)  # a function that never returns did
         return True
     L.reload()
@@ -1523,6 +1548,7 @@ class ModuleLifter:
             "declare void @__recomp_dispatch_jump(ptr, i64)",
             "declare void @__recomp_setjmp(ptr) #0",
             "attributes #0 = { returns_twice }",
+            "declare i64 @__recomp_x87(ptr, i32, i64)",
         ] + sorted(self.intrinsics)
         return "\n".join(head) + "\n\n" + "\n\n".join(bodies) + "\n", errors
 

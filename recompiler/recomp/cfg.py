@@ -30,6 +30,7 @@ class FunctionCFG:
     errors: list = field(default_factory=list)
     tail_targets: set = field(default_factory=set)
     call_targets: set = field(default_factory=set)
+    noreturn_calls: set = field(default_factory=set)  # calls followed by bytes that do not decode
 
 
 def decode_at(image, addr):
@@ -42,10 +43,14 @@ def decode_at(image, addr):
     return ins
 
 
-def recover(image, fn, function_starts, noreturn=None):
-    """noreturn(target) -> True for a direct call target that never returns (the path ends)."""
+def recover(image, fn, function_starts, noreturn=None, _limits=None, _noret=frozenset()):
+    """noreturn(target) -> True for a direct call target that never returns (the path ends).
+    _limits: {jmp address: entries} for tables cut short (see the end of pass 1); _noret: calls
+    found not to return (a decode failure further down their straight-line path)."""
     cfg = FunctionCFG(fn.start, fn.end)
+    _limits = _limits or {}
     noreturn = noreturn or (lambda t: False)
+    new_noret = set()
 
     def inside(a):
         if a != fn.start and a in function_starts:
@@ -61,10 +66,17 @@ def recover(image, fn, function_starts, noreturn=None):
     tables = {}
     while work:
         a = work.pop()
+        last_call = None  # the last direct call on this straight-line path
         while a not in insns:
             ins = decode_at(image, a)
             if ins is None:
-                cfg.errors.append((a, "decode failure"))
+                if last_call is not None:
+                    # The path ran from a call into bytes that end in an invalid instruction:
+                    # data after a call that never returns, decoded until it broke (xchg, sti,
+                    # out, std...). The call is taken as noreturn and the function recovered again.
+                    new_noret.add(last_call)
+                else:
+                    cfg.errors.append((a, "decode failure"))
                 break
             insns[a] = ins
             fc = ins.flow_control
@@ -82,6 +94,16 @@ def recover(image, fn, function_starts, noreturn=None):
                 if fc == FC.CALL:
                     cfg.call_targets.add(ins.near_branch_target)
                     if noreturn(ins.near_branch_target):
+                        break
+                    if ins.ip in _noret:
+                        cfg.noreturn_calls.add(ins.ip)
+                        break
+                    last_call = ins.ip
+                    if inside(nxt) and decode_at(image, nxt) is None:
+                        # What follows the call does not decode (padding or data): the callee
+                        # never returns here (if it did, the original would run into the same
+                        # bytes). A function the import tables do not mark noreturn (0x13b1960).
+                        cfg.noreturn_calls.add(ins.ip)
                         break
                 a = nxt
                 if not inside(a):
@@ -107,6 +129,9 @@ def recover(image, fn, function_starts, noreturn=None):
                 break
             if fc == FC.INDIRECT_BRANCH:
                 tbl = jumptable.match(image, insns, ins, fn.start, fn.end)
+                if tbl is not None and ins.ip in _limits:
+                    tbl.targets = tbl.targets[:_limits[ins.ip]]
+                    tbl.count = len(tbl.targets)
                 if tbl is not None:
                     targets = [t for t in tbl.targets if inside(t)]
                     if len(targets) == len(tbl.targets):
@@ -117,6 +142,20 @@ def recover(image, fn, function_starts, noreturn=None):
                 break
             # RETURN, INTERRUPT (int3), EXCEPTION (ud2): end of the path
             break
+
+    # A table bounded only by an index mask (and rcx, 1Fh) may run into the next table of the
+    # function: entries past that table's start are its entries added to the wrong base, cases
+    # the program never takes, and their "targets" fall into the middle of instructions
+    # (0x2f06e0). Cut there and recover again without them; a computed target outside the
+    # table's set still goes to the dispatcher at run time.
+    bases = {t.address for t in tables.values()}
+    cut = {}
+    for jmp, t in tables.items():
+        inner = [b for b in bases if t.address < b < t.address + 4 * len(t.targets)]
+        if inner and jmp not in _limits:
+            cut[jmp] = (min(inner) - t.address) // 4
+    if cut or new_noret:
+        return recover(image, fn, function_starts, noreturn, {**_limits, **cut}, _noret | new_noret)
 
     # Pass 2: blocks.
     for lead in sorted(leaders):
@@ -143,7 +182,7 @@ def recover(image, fn, function_starts, noreturn=None):
                 break
             if fc in (FC.RETURN, FC.EXCEPTION) or fc == FC.INTERRUPT and ins.mnemonic == X.Mnemonic.INT3:
                 break
-            if fc == FC.CALL and noreturn(ins.near_branch_target):
+            if fc == FC.CALL and (noreturn(ins.near_branch_target) or ins.ip in cfg.noreturn_calls):
                 break
             if nxt in leaders:
                 if inside(nxt):

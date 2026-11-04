@@ -32,6 +32,7 @@
 #include <x86intrin.h>
 #include <cpuid.h>
 #include "../recompiler/harness/recomp_hybrid.h"
+#include "../recompiler/harness/recomp_x87.h"  /* __recomp_x87 (defined there) */
 
 uint64_t __recomp_slide;  /* the image's link address 0 (exported: the library reads it) */
 void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);

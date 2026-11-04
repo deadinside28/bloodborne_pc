@@ -138,7 +138,12 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    setjmp in recompiled code (__recomp_setjmp + libc's longjmp replaced): **165,518 functions,
    255 original** (151 x87/unsupported in libc, 81 changed by bbport, 21 CFG errors, the 2
    setjmp/longjmp); 5M calls back per 3 min; same FPS and frame pacing as unmodified measured
-   side by side (61 vs 62; the PC itself varied between 63 and 81 over the day): on x86-64 the original and the recompiled code can run in one process. Patch
+   side by side (61 vs 62; the PC itself varied between 63 and 81 over the day). Then CFG
+   recovery (calls that never return found from undecodable bytes after them; jump tables cut at
+   the next table) and the x87 environment (fnstenv/fldenv/fnstcw/fldcw/fnstsw/fnclex/fninit
+   through __recomp_x87): **165,554 recompiled, 219 original** (135 x87 maths in libc, 81
+   changed by bbport, setjmp/longjmp, 1 CFG error); in gameplay the calls into original code
+   go only to functions bbport changes. Next: bbport's hooks as recompiler input: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT
