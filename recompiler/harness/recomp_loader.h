@@ -15,9 +15,9 @@ typedef struct {
 typedef void (*RecompBridge)(RecompState *st, uint64_t host_fn);
 
 extern RecompImage recomp_image;
-extern sigjmp_buf recomp_trap_jmp;
-extern int recomp_trap_armed;
-extern uint64_t recomp_dispatch_misses, recomp_import_calls;
+extern _Thread_local sigjmp_buf recomp_trap_jmp;
+extern _Thread_local int recomp_trap_armed;
+extern _Atomic uint64_t recomp_dispatch_misses, recomp_import_calls;
 
 void recomp_load(const char *path);                       // map, relocate, bind imports
 uint64_t recomp_symbol(const char *name);                  // exported symbol -> link address (0: none)

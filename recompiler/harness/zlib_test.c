@@ -4,7 +4,10 @@
 // byte and stream field is compared. libz's imports (malloc, free, memcpy, memset, ...) are bound
 // to the host libc (recomp_loader.c), as the game's will be bound to bbport's runtime.
 //
-//   zlib_test /usr/lib/libz.so.1 [-q]
+//   zlib_test /usr/lib/libz.so.1 [-q] [-d]
+// Every output the checks look at is hashed into a digest (printed at the end). -d runs only the
+// recompiled code (for hosts that cannot run x86-64, e.g. AArch64): its digest must equal the
+// one an x86-64 run prints, where the recompiled outputs were compared to the original's.
 // zlib.h is used only for z_stream and the constants; this program does not link libz.
 #include <inttypes.h>
 #include <stdio.h>
@@ -16,7 +19,14 @@
 
 typedef uint64_t (*Fn8)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
-static int checks, failures, quiet;
+static int checks, failures, quiet, lifted_only;
+static uint64_t digest = 0xcbf29ce484222325ull;  // FNV-1a over all checked outputs
+
+static void dg(const void *p, size_t n) {
+    const uint8_t *b = p;
+    for (size_t i = 0; i < n; i++) { digest ^= b[i]; digest *= 0x100000001b3ull; }
+}
+static void dgv(uint64_t v) { dg(&v, 8); }
 
 static uint64_t link_of(const char *name) {
     uint64_t l = recomp_symbol(name);
@@ -24,7 +34,10 @@ static uint64_t link_of(const char *name) {
     return l;
 }
 
+static uint64_t lifted(const char *name, const uint64_t *a, int n);
+
 static uint64_t orig(const char *name, const uint64_t *a, int n) {
+    if (lifted_only) return lifted(name, a, n);
     uint64_t v[8] = { 0 };
     memcpy(v, a, (size_t)n * 8);
     Fn8 f = (Fn8)(uintptr_t)(__recomp_slide + link_of(name));
@@ -94,6 +107,7 @@ static void test_checksums(void) {
             const char *f = (const char *[]){ "adler32", "crc32", "crc32_z" }[k];
             const uint64_t a[3] = { seed, P(buf + (r & 3)), n };
             uint64_t o = orig(f, a, 3) & 0xffffffff, l = lifted(f, a, 3) & 0xffffffff;
+            dgv(l);
             snprintf(what, sizeof what, "%s(len %zu): %#" PRIx64 " recompiled, %#" PRIx64 " original", f, n, l, o);
             check(o == l, what);
         }
@@ -101,12 +115,15 @@ static void test_checksums(void) {
         for (int k = 0; k < 2; k++) {
             const char *f = k ? "crc32_combine" : "adler32_combine";
             uint64_t o = orig(f, c, 3), l = lifted(f, c, 3);
+            dgv(l);
             snprintf(what, sizeof what, "%s: %#" PRIx64 " vs %#" PRIx64, f, l, o);
             check(o == l, what);
         }
     }
     const uint64_t one[1] = { 123456 };
-    check(orig("compressBound", one, 1) == lifted("compressBound", one, 1), "compressBound");
+    uint64_t cb = lifted("compressBound", one, 1);
+    dgv(cb);
+    check(orig("compressBound", one, 1) == cb, "compressBound");
 }
 
 // ---- one-shot compress / uncompress ----------------------------------------------------------------
@@ -125,6 +142,7 @@ static void test_compress(void) {
                 const uint64_t ao[5] = { P(o), P(&ol), P(src), n, (uint64_t)(int64_t)level };
                 const uint64_t al[5] = { P(l), P(&ll), P(src), n, (uint64_t)(int64_t)level };
                 int ro = (int)orig("compress2", ao, 5), rl = (int)lifted("compress2", al, 5);
+                dgv((uint64_t)rl); dgv(ll); dg(l, ll < cap ? ll : 0);
                 snprintf(what, sizeof what, "compress2(%s, %zu bytes, level %d): ret %d/%d, len %lu/%lu",
                          kind_name[kind], n, level, rl, ro, (unsigned long)ll, (unsigned long)ol);
                 check(ro == rl && ol == ll && !memcmp(o, l, ol), what);
@@ -132,6 +150,7 @@ static void test_compress(void) {
                 uLongf uo = cap, ul = cap;
                 const uint64_t bo[4] = { P(u1), P(&uo), P(o), ol }, bl[4] = { P(u2), P(&ul), P(o), ol };
                 int qo = (int)orig("uncompress", bo, 4), ql = (int)lifted("uncompress", bl, 4);
+                dgv((uint64_t)ql); dgv(ul);
                 snprintf(what, sizeof what, "uncompress(%s, %zu, level %d): ret %d/%d", kind_name[kind], n, level, ql, qo);
                 check(qo == ql && qo == Z_OK && uo == n && ul == n && !memcmp(u1, src, n) && !memcmp(u2, src, n), what);
             }
@@ -209,6 +228,7 @@ static void test_streams(void) {
         int eo, el;
         long no = stream_deflate(orig, src, n, o, cap, level, wb, mem, strategy, chunk, &eo);
         long nl = stream_deflate(lifted, src, n, l, cap, level, wb, mem, strategy, chunk, &el);
+        dgv((uint64_t)nl); dgv((uint64_t)el); if (nl > 0) dg(l, (size_t)nl);
         snprintf(what, sizeof what, "deflate(%s %zu B, level %d, wbits %d, mem %d, strategy %d, chunk %u): %ld/%ld bytes, ret %d/%d",
                  kind_name[kind], n, level, wb, mem, strategy, chunk, nl, no, el, eo);
         check(no == nl && eo == el && (no < 0 || !memcmp(o, l, (size_t)no)), what);
@@ -220,6 +240,8 @@ static void test_streams(void) {
             uint64_t mo, ml;
             long ro = stream_inflate(orig, o, (size_t)no, io, cap, iwb, window, &mo);
             long rl = stream_inflate(lifted, o, (size_t)no, il, cap, iwb, window, &ml);
+            dgv((uint64_t)rl); if (rl > 0) dg(il, (size_t)rl);
+            if (ml) dg((const char *)(uintptr_t)ml, strlen((const char *)(uintptr_t)ml));  // text, not address
             size_t cmp = ro > 0 ? (size_t)ro : 0;
             snprintf(what, sizeof what, "inflate(%s %zu B, window %u%s): %ld/%ld, msg %s/%s", kind_name[kind], n, window,
                      corrupt ? ", corrupted" : "", rl, ro, ml ? (char *)(uintptr_t)ml : "-", mo ? (char *)(uintptr_t)mo : "-");
@@ -231,7 +253,10 @@ static void test_streams(void) {
 
 int main(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: zlib_test LIBZ.so [-q]\n"); return 2; }
-    quiet = argc > 2 && !strcmp(argv[2], "-q");
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "-q")) quiet = 1;
+        if (!strcmp(argv[i], "-d")) lifted_only = 1;
+    }
     recomp_load(argv[1]);
     const uint64_t none[1] = { 0 };
     printf("zlibVersion: original %s, recompiled %s\n", (char *)(uintptr_t)orig("zlibVersion", none, 0),
@@ -242,6 +267,7 @@ int main(int argc, char **argv) {
     printf("compress2/uncompress: %d checks, %d failed\n", checks, failures);
     test_streams();
     printf("streams: %d checks total, %d failed; import calls %" PRIu64 ", dispatch misses %" PRIu64 "\n",
-           checks, failures, recomp_import_calls, recomp_dispatch_misses);
+           checks, failures, (uint64_t)recomp_import_calls, (uint64_t)recomp_dispatch_misses);
+    printf("digest: %016" PRIx64 "%s\n", digest, lifted_only ? " (recompiled code only)" : "");
     return failures ? 1 : 0;
 }

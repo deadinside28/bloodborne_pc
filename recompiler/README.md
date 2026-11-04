@@ -11,10 +11,10 @@ yet, and not yet run on the game's eboot.
 | Inputs | ELF64 x86-64 images; functions from symbols or from `.eh_frame` FDEs (the game's only source) |
 | Control flow | recursive descent per function; tail calls; jump tables (GCC/Clang PIC tables, hoisted bases, `cmp/ja`, `and`-mask and range-scan bounds); overlapping instruction streams |
 | Semantics | ~580 mnemonics: integer, flags, partial registers, mul/div with #DE, string ops (`rep movs/stos`), `lock` atomics incl. bit strings, BMI1, MOVBE, pushfq/popfq, SSE–SSE4.1, AVX1 (VEX), masked moves |
-| Imports | ELF `GLOB_DAT`/`JUMP_SLOT`/`R_X86_64_64`/`RELATIVE`/`DT_RELR` relocations; imports bound to host functions (`dlsym`), called from recompiled code through a C bridge (`harness/recomp_loader.c`); guest FS thread block for the stack protector |
+| Imports | ELF `GLOB_DAT`/`JUMP_SLOT`/`R_X86_64_64`/`RELATIVE`/`DT_RELR` relocations; imports bound by name to host functions (an explicit table first, `dlsym` second), called from recompiled code through a C bridge (`harness/recomp_loader.c`); per-thread guest stack and FS thread block (stack protector canary) |
 | Tests | corpus: 136 functions (C integer, C FP/SIMD, and `flags.S`: flag-exact assembly tests) × 9 compiler/flag builds × 2 lifting modes = 18 configurations, all passing against the original code on x86-64 |
 | Whole library | the system's **libz.so 1.3.2** (unmodified distribution build, FDE discovery only): 1,581 checks of checksums, compress2/uncompress at all levels, streaming deflate (window sizes, memLevel, strategies, raw/zlib/gzip, flush modes) and inflate (small output windows, corrupted streams): all identical to the original, both lifting modes, ~1M import calls into host libc |
-| AArch64 | every lifted module (corpus, libz, lz4, libpng, zstd) compiles for AArch64 (`-march=armv8.2-a+rcpc`), with and without x86 memory ordering; **not yet executed on ARM**, and the C runtime/drivers not yet compiled for it (no QEMU, no AArch64 sysroot on the dev machine) |
+| AArch64 | **runs under QEMU user mode** (static binaries built with Zig's musl toolchain): the corpus passes in all 36 AArch64 configurations (18 builds × with/without x86 memory ordering), replaying results recorded from the original code on x86-64; recompiled libz produces the same output digest on AArch64 as on x86-64 in all four lifting modes. Not yet run on real ARM hardware: QEMU on an x86 host runs ARM threads with x86's ordering, so it cannot expose memory-ordering bugs or measure speed |
 | Real code | zlib, lz4 and libpng (≈80,000 instructions) lift with no unsupported instruction and no CFG error; libzstd lifts and compiles (gaps: BMI2, which Jaguar lacks, and data inside its asm FDE ranges) |
 
 ## Use
@@ -26,6 +26,13 @@ clang -O2 --target=aarch64-linux-gnu -c out.ll -o out.o
 harness/run.sh [FILTER]          # corpus differential tests (needs gcc, clang)
 harness/run_zlib.sh [LIBZ.so]    # whole-library test against the system libz
 ```
+
+Both scripts also run the AArch64 builds under QEMU when they find `zig` (0.13) and
+`qemu-aarch64-static` (default `~/.local/opt/zig/zig` and
+`~/.local/opt/qemu/usr/bin/qemu-aarch64-static`; override with `BB_ZIG` / `BB_QEMU`). The
+corpus runner replays a record of the original code's results (`runner -r` on x86-64, `-c` on
+AArch64); `zlib_test -d` runs only the recompiled code and prints a digest of every checked
+output, which must equal the x86-64 run's.
 
 - `--fde`: function ranges from `.eh_frame` instead of the symbol table.
 - `--abi`: assume the SysV ABI for vector registers at calls (arguments xmm0-7, results xmm0-1,
@@ -62,8 +69,8 @@ harness/run_zlib.sh [LIBZ.so]    # whole-library test against the system libz
 
 ## Not done yet (in order)
 
-1. Run the AArch64 build: install `qemu-user` + an AArch64 sysroot/linker (`lld` or
-   `aarch64-linux-gnu-gcc`), then `runner -c expected-*.bin` replays the x86 results on ARM.
+1. Real ARM hardware: the same static test binaries on an Android phone over `adb` (in
+   `/data/local/tmp`), for memory ordering (`--tso`) and the first speed numbers.
 2. Imports with float or stack arguments need per-function bridges (the generic bridge passes six
    integer registers); for the game, NID imports (701) bind to bbport's runtime functions. Callbacks
    from host code into guest code (e.g. `qsort` comparators) are not handled yet.

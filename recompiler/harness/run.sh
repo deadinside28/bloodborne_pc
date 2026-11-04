@@ -13,6 +13,13 @@ cflags="-fno-math-errno -fPIC -shared -nostdlib -ffreestanding -fno-stack-protec
 # variant: compiler-opt[:march]; march defaults to btver2 (Jaguar, the PS4 CPU: AVX, VEX encodings).
 # x86-64 / x86-64-v2 variants exercise the legacy SSE encodings.
 variants=${BB_RECOMP_VARIANTS:-"clang-O1 clang-O2 clang-O3 gcc-O1 gcc-O2 gcc-O3 clang-O2:x86-64 gcc-O3:x86-64 clang-O3:x86-64-v2"}
+# AArch64 replay under QEMU (skipped when the tools are missing): BB_ZIG, BB_QEMU
+zig=${BB_ZIG:-$HOME/.local/opt/zig/zig}
+qemu=${BB_QEMU:-$HOME/.local/opt/qemu/usr/bin/qemu-aarch64-static}
+arm=1
+if [[ ! -x $zig || ! -x $qemu ]]; then arm=0; echo "AArch64 replay skipped (need zig and qemu-aarch64-static; BB_ZIG / BB_QEMU)"; fi
+arm_cc() { "$zig" cc -target aarch64-linux-musl -O1 -static -Wno-deprecated-non-prototype "$@" 2>&1 \
+    | grep -vE 'dlstart|GETFUNCSYM|rcrt1|conflicting prototype|__dls2|warning generated|^ *\^|^ +[0-9]+ \|' || true; }
 status=0
 for v in $variants; do
     march=btver2; [[ $v == *:* ]] && march=${v#*:}
@@ -37,6 +44,14 @@ for v in $variants; do
         printf '%-18s %6s KiB aarch64  ' "$t" $(( $(stat -c %s "$out/corpus-$t.aarch64.o") / 1024 ))
         "$out/runner-$t" "$so" -r "$out/expected-$v.bin" ${1:+-f "$1"} 2>"$out/runner-$t.log" | tail -1 || {
             status=1; grep -E '^(FAIL|    )' <("$out/runner-$t" "$so" ${1:+-f "$1"} 2>/dev/null) | head -20; }
+        if (( arm )); then
+            for ir in corpus-$t corpus-$t.tso; do
+                arm_cc -I"$here" -o "$out/$ir.runner.a64" "$here/runner.c" "$here/recomp_loader.c" "$out/$ir.aarch64.o"
+                printf '  %-28s ' "aarch64 ${ir#corpus-}"
+                "$qemu" "$out/$ir.runner.a64" "$so" -c "$out/expected-$v.bin" ${1:+-f "$1"} 2>"$out/$ir.a64.log" | tail -1 || {
+                    status=1; grep -E '^(FAIL|    )' <("$qemu" "$out/$ir.runner.a64" "$so" -c "$out/expected-$v.bin" ${1:+-f "$1"} 2>/dev/null) | head -10; }
+            done
+        fi
     done
 done
 exit $status

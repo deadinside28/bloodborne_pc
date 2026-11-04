@@ -19,13 +19,14 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 
 uint64_t __recomp_slide;
 
 RecompImage recomp_image;
-sigjmp_buf recomp_trap_jmp;
-int recomp_trap_armed;
-uint64_t recomp_dispatch_misses, recomp_import_calls;
+_Thread_local sigjmp_buf recomp_trap_jmp;
+_Thread_local int recomp_trap_armed;
+_Atomic uint64_t recomp_dispatch_misses, recomp_import_calls;
 
 static void die(const char *m) { perror(m); exit(2); }
 
@@ -50,21 +51,53 @@ static void bridge_stack_chk_fail(RecompState *st, uint64_t host) {
     abort();
 }
 
+// Imports bound by name, before dlsym: what a static build (no dynamic symbol lookup, e.g. the
+// AArch64 test binaries) needs, and the shape the game's NID import table will take.
+static void bridge_unbound(RecompState *st, uint64_t host);
+static int unbound_count;
+static char unbound_slots[256];  // distinct addresses standing for imports nobody provides
+
+static const struct { const char *name; void *fn; } host_imports[] = {
+    { "malloc", (void *)malloc }, { "free", (void *)free }, { "calloc", (void *)calloc },
+    { "realloc", (void *)realloc }, { "memcpy", (void *)memcpy }, { "memmove", (void *)memmove },
+    { "memset", (void *)memset }, { "memchr", (void *)memchr }, { "memcmp", (void *)memcmp },
+    { "strlen", (void *)strlen }, { "strerror", (void *)strerror }, { "read", (void *)read },
+    { "write", (void *)write }, { "close", (void *)close }, { "lseek64", (void *)lseek },
+    { "lseek", (void *)lseek }, { "__errno_location", (void *)__errno_location },
+};
+
 static Import *find_import(uint64_t host) {
     for (int i = 0; i < n_imports; i++)
         if (imports[i].host == host) return &imports[i];
     return NULL;
 }
 
-static uint64_t bind_import(const char *name) {
-    void *p = dlsym(RTLD_DEFAULT, name);
-    if (!p) return 0;
-    uint64_t host = (uint64_t)(uintptr_t)p;
-    if (!find_import(host) && n_imports < 1024) {
-        RecompBridge b = !strcmp(name, "__stack_chk_fail") ? bridge_stack_chk_fail : bridge_int6;
-        imports[n_imports++] = (Import){ host, strdup(name), b };
+static uint64_t bind_import(const char *name, int weak) {
+    void *p = NULL;
+    RecompBridge b = bridge_int6;
+    for (size_t i = 0; i < sizeof host_imports / sizeof host_imports[0]; i++)
+        if (!strcmp(host_imports[i].name, name)) p = host_imports[i].fn;
+    if (!p && !strcmp(name, "__stack_chk_fail")) { p = (void *)abort; b = bridge_stack_chk_fail; }
+    if (!p) p = dlsym(RTLD_DEFAULT, name);
+    if (!p) {
+        if (weak) return 0;
+        // Nobody provides it: a placeholder address whose bridge reports the call. Original
+        // code calling it natively would crash, so this is only reached in static builds.
+        if (unbound_count >= (int)sizeof unbound_slots) { fprintf(stderr, "too many unbound imports\n"); exit(2); }
+        p = &unbound_slots[unbound_count++];
+        b = bridge_unbound;
     }
+    uint64_t host = (uint64_t)(uintptr_t)p;
+    if (!find_import(host) && n_imports < 1024) imports[n_imports++] = (Import){ host, strdup(name), b };
     return host;
+}
+
+static void bridge_unbound(RecompState *st, uint64_t host) {
+    (void)st;
+    Import *im = find_import(host);
+    fprintf(stderr, "call to unbound import %s\n", im ? im->name : "?");
+    if (recomp_trap_armed) siglongjmp(recomp_trap_jmp, 5);
+    abort();
 }
 
 void recomp_set_bridge(const char *name, RecompBridge bridge) {
@@ -94,12 +127,8 @@ static uint64_t resolve(uint32_t symidx, uint8_t *at, int *weak_missing) {
     const char *nm = dynstr + s->st_name;
     *weak_missing = 0;
     if (s->st_shndx != SHN_UNDEF) return (uint64_t)(uintptr_t)at + s->st_value;  // defined here
-    uint64_t host = bind_import(nm);
-    if (!host) {
-        if (ELF64_ST_BIND(s->st_info) == STB_WEAK) { *weak_missing = 1; return 0; }
-        fprintf(stderr, "unresolved import %s\n", nm);
-        exit(2);
-    }
+    uint64_t host = bind_import(nm, ELF64_ST_BIND(s->st_info) == STB_WEAK);
+    if (!host) *weak_missing = 1;
     return host;
 }
 
@@ -242,9 +271,11 @@ void __recomp_trap(RecompState *st, uint64_t addr, int32_t kind) {
     abort();
 }
 
-// The guest thread block FS points at: the stack protector reads its canary at fs:[0x28].
-static uint8_t guest_tcb[4096] __attribute__((aligned(64)));
-static uint8_t guest_stack[8 << 20] __attribute__((aligned(64)));
+// Per host thread: the guest thread block FS points at (the stack protector reads its canary at
+// fs:[0x28]) and an 8 MiB guest stack.
+static _Thread_local uint8_t guest_tcb[4096] __attribute__((aligned(64)));
+static _Thread_local uint8_t *guest_stack;
+#define GUEST_STACK_SIZE (8u << 20)
 
 int recomp_call(RecompFn fn, const uint64_t *args, int nargs, const uint64_t *fargs, int nfargs,
                 RecompState *st, char *why) {
@@ -258,7 +289,11 @@ int recomp_call(RecompFn fn, const uint64_t *args, int nargs, const uint64_t *fa
     static const int saved[] = { G_RBX, G_RBP, G_R12, G_R13, G_R14, G_R15 };
     uint64_t saved_v[6];
     for (int i = 0; i < 6; i++) st->gpr[saved[i]] = saved_v[i] = 0x5a5a000000000000ull ^ ((uint64_t)i << 40) ^ (uint64_t)(uintptr_t)fn;
-    uint64_t top = ((uint64_t)(uintptr_t)(guest_stack + sizeof guest_stack - 4096)) & ~15ull;
+    if (!guest_stack) {
+        guest_stack = mmap(NULL, GUEST_STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (guest_stack == MAP_FAILED) die("guest stack");
+    }
+    uint64_t top = ((uint64_t)(uintptr_t)(guest_stack + GUEST_STACK_SIZE - 4096)) & ~15ull;
     int nstack = nargs > 6 ? nargs - 6 : 0;
     top -= (uint64_t)((nstack + 1) & ~1) * 8;  // keep rsp + 8 16-byte aligned at entry
     for (int i = 0; i < nstack; i++) ((uint64_t *)(uintptr_t)top)[i] = args[6 + i];
