@@ -221,8 +221,8 @@ int main(int argc, char **argv) {
     if (hybrid) {
         printf("%d functions tested, %d failed; hybrid: %" PRIu64 " functions recompiled, entered "
                "%" PRIu64 "x from original code, %" PRIu64 " calls back, %" PRIu64 " jumps back\n",
-               tests, failed, __recomp_table_size, recomp_hybrid_self ? recomp_hybrid_self->entries : 0,
-               recomp_hybrid_native_calls, recomp_hybrid_native_jumps);
+               tests, failed, __recomp_table_size, recomp_hybrid_totals().entries,
+               recomp_hybrid_totals().native_calls, recomp_hybrid_totals().native_jumps);
         return failed ? 1 : 0;
     }
 #endif

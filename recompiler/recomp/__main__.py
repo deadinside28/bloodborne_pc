@@ -51,8 +51,9 @@ def main():
     gp.add_argument("--tso", action="store_true")
     gp.add_argument("--only", metavar="FILE",
                     help="hybrid execution: lift only these functions (link addresses, one per line)")
-    gp.add_argument("--live", metavar="IMAGE",
-                    help="with --only: bbport's image as it runs (BB_AOT_DUMP); functions it changed stay original")
+    gp.add_argument("--live", metavar="IMAGE", action="append",
+                    help="with --only: bbport's image as it runs (BB_AOT_DUMP); functions it changed stay original. "
+                         "Repeat for each configuration the library must run in (settings install hooks)")
     gp.add_argument("--volatile", action="store_true", help=vhelp)
     a = ap.parse_args()
     if a.cmd == "game":
@@ -60,7 +61,7 @@ def main():
         from .ps4 import load_ps4
         img = load_ps4(a.eboot)
         only = read_addresses(a.only) if a.only else None
-        live = open(a.live, "rb").read() if a.live else None
+        live = [open(p, "rb").read() for p in a.live] if a.live else None
         total = game.run(img, out=a.out, shard_size=a.shard, workers=a.workers, tso=a.tso, abi=a.abi, limit=a.limit,
                          only=only, live=live, volatile=a.volatile)
         print(game.report(total, a.report))

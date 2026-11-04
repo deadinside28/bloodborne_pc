@@ -41,14 +41,34 @@ static const RecompEntry *table;
 static uint64_t table_size;
 static int enabled;
 
-static RecompFn lookup(uint64_t link) {
-    uint64_t lo = 0, hi = table_size;
-    while (lo < hi) {
-        const uint64_t mid = (lo + hi) / 2;
-        if (table[mid].guest == link) return table[mid].fn;
-        if (table[mid].guest < link) lo = mid + 1; else hi = mid;
+/* Link address -> recompiled function: open addressing, at most half full (every call of
+ * recompiled code to a target it does not have directly asks this). */
+static RecompEntry *hash;
+static uint64_t hash_mask;
+static unsigned hash_shift;
+
+static uint64_t slot_of(uint64_t link) { return (link * 0x9e3779b97f4a7c15ull) >> hash_shift; }
+
+static int hash_build(void) {
+    unsigned bits = 4;
+    while ((1ull << bits) < 2 * table_size) ++bits;
+    hash = calloc(1ull << bits, sizeof(*hash));
+    if (!hash) return -1;
+    hash_mask = (1ull << bits) - 1;
+    hash_shift = 64 - bits;
+    for (uint64_t i = 0; i < table_size; ++i) {
+        uint64_t s = slot_of(table[i].guest);
+        while (hash[s].fn) s = (s + 1) & hash_mask;
+        hash[s] = table[i];
     }
-    return NULL;
+    return 0;
+}
+
+static RecompFn lookup(uint64_t link) {
+    for (uint64_t s = slot_of(link);; s = (s + 1) & hash_mask) {
+        if (hash[s].guest == link && hash[s].fn) return hash[s].fn;
+        if (!hash[s].fn) return NULL;
+    }
 }
 
 /* The thread's last dispatches into the original code (fault reports): target, the guest rsp and
@@ -167,9 +187,10 @@ static void dump_image(const char *path, const unsigned char *image, uint64_t si
 }
 
 static void report(void) {
+    const HybridTotals n = recomp_hybrid_totals();
     printf("AOT: recompiled code entered %" PRIu64 "x from the original code; %" PRIu64 " calls back, %" PRIu64
-           " jumps back for good\n", recomp_hybrid_total_entries(), (uint64_t)recomp_hybrid_native_calls,
-           (uint64_t)recomp_hybrid_native_jumps);
+           " jumps back for good; deepest open entries %" PRIu64 "\n", n.entries, n.native_calls, n.native_jumps,
+           n.max_depth);
     fflush(stdout);
 }
 
@@ -197,6 +218,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
         return -1;
     }
     table_size = *count;
+    if (hash_build()) { printf("AOT: no memory for the lookup table\n"); return -1; }
     __recomp_slide = (uint64_t)(uintptr_t)image;
     uint64_t changed = 0;
     for (uint64_t i = 0; i < table_size; ++i) {

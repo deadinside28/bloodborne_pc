@@ -2,7 +2,10 @@
 # A hybrid execution library for bbport (BB_AOT): the listed game functions recompiled for x86-64.
 #   recompiler/harness/build_aot.sh EBOOT LIST LIVE [NAME]
 #     LIST: link addresses, one per line ('#' comments); LIVE: bbport's code as it runs
-#     (BB_AOT_DUMP=out/aot/live.bin bash run.sh, closed once it is written).
+#     (BB_AOT_DUMP=out/aot/live.bin bash run.sh, closed once it is written), or several dumps
+#     separated by commas, one per configuration the library must run in: settings install hooks
+#     of their own (BB_FRAME_STATS: the GPU range collector, 0x26aa860), and bbport refuses a
+#     library when any of its functions differs from the code it was lifted from.
 #   -> recompiler/out/aot/NAME/libbbaot.so; run with BB_AOT=<that path> bash run.sh
 # Env: BB_RECOMP_MODE=default (whole register file at calls, the default) | abi; BB_RECOMP_VOLATILE=0.
 # Derived from your game dump: it stays under recompiler/out, never commit it.
@@ -10,7 +13,9 @@ set -euo pipefail
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 root=$(dirname "$here")
 py=${BB_RECOMP_PY:-$(cd "$root/.." && pwd)/.venv-recomp/bin/python}
-eboot=$(readlink -f "$1"); list=$(readlink -f "$2"); live=$(readlink -f "$3"); name=${4:-$(basename "$2" .txt)}
+eboot=$(readlink -f "$1"); list=$(readlink -f "$2"); name=${4:-$(basename "$2" .txt)}
+live=(); IFS=, read -r -a dumps <<< "$3"
+for d in "${dumps[@]}"; do live+=(--live "$(readlink -f "$d")"); done
 dir=${BB_RECOMP_OUT:-$root/out}/aot/$name
 lf=(); [[ ${BB_RECOMP_MODE:-default} == abi ]] && lf=(--abi)
 # Guest memory accesses are volatile: the x86 hardware keeps their order, and LLVM can no longer
@@ -22,7 +27,7 @@ rm -rf "$dir"; mkdir -p "$dir"
 # them by the faulting instruction's address (gpu/games/bloodborne.cpp DynamicWriters).
 keep_original='^0x(2ab7350|20858a0)$'
 grep -v '^\s*#' "$list" | awk '{print $1}' | grep -v '^$' | grep -viE "$keep_original" > "$dir/list.txt" || true
-(cd "$root" && "$py" -W ignore -m recomp game "$eboot" "${lf[@]}" --only "$dir/list.txt" --live "$live" \
+(cd "$root" && "$py" -W ignore -m recomp game "$eboot" "${lf[@]}" --only "$dir/list.txt" "${live[@]}" \
     --out "$dir" --report "$dir/survey.json") > "$dir/survey.txt"
 grep -E '^(hybrid|  left original)' "$dir/survey.txt" || true
 ls "$dir"/part-*.ll "$dir"/table.ll | xargs -P "$(nproc)" -I{} sh -c \

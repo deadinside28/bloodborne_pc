@@ -87,9 +87,27 @@ output, which must equal the x86-64 run's.
   checks every hash (any difference: no start) and patches the entries before guest code runs.
   `BB_AOT_BISECT=lo:hi` swaps in only part of them. A fatal fault prints the thread's hybrid
   state and its last 24 calls and jumps into the original code.
-- **Status in the game (2026-11-04):** the 198 hottest functions (perf, 60 s of gameplay;
-  `0x20858a0`, `0x2ab7350` stay original: bbport's write tracking knows them by address) run in
-  gameplay: in 90 s, 722M entries from the original code, 1.75G calls back, 28M jumps back.
+- **setjmp / longjmp:** functions that call them (by NID: setjmp, longjmp, the context calls)
+  stay original: setjmp would keep the thunk's label as its return point. A longjmp in original
+  code can still jump past recompiled frames and past calls into the original code that never
+  return; the call thunk's records (the thread's `native_frame` chain) hold the slot each call
+  borrowed and the entry depth at the call, and a return is matched to its record by the slot it
+  came through: records and entries it skipped are dropped. (Entries skipped with no outer call
+  coming back stay counted until the thread ends; in the game the depth stays at 4-8.)
+- **Configurations:** settings install hooks of their own (`BB_FRAME_STATS`: one at 0x26aa860), so
+  a library is built against one dump per configuration it must run in
+  (`build_aot.sh EBOOT LIST dump1.bin,dump2.bin NAME`); bbport refuses it in any other.
+- **Status in the game (2026-11-04):** gameplay, entering it from the title screen with
+  `harness/desktop` keys: the 198 hottest functions (perf, 60 s of gameplay); the top 1,000 (959
+  swapped in); all 4,273 functions the profile saw (4,034 swapped in: 105 too short or of unknown
+  extent, 86 call setjmp/longjmp, 27 changed by bbport, 14 with a jump into their first 5 bytes, 5
+  with CFG errors; `0x20858a0`, `0x2ab7350` stay original: bbport's write tracking knows them by
+  address). 4 minutes: 799M entries, 2.08G calls back, 57M jumps back, no fault.
+- **Cost:** gameplay at 37 FPS against ~80 without (Ryzen 7 5800X, RTX 3070): ~14M crossings a
+  second, each storing and loading the whole register file (16 GPRs, 32 vector halves); the
+  recompiled code itself (default mode: the whole register file at calls) about 1.5x the time of
+  the original. Dispatch is a hash lookup, MXCSR is loaded only when it changed, counts are per
+  thread (a shared atomic counter was a cache-line fight between cores).
 - **Known limits:** C++ exceptions cannot unwind through the thunks (a native callee's return
   address is the thunk's label; recompiled frames have no unwind info), so functions with handlers
   and their callers stay original; patching a running function's entry is not atomic yet (install

@@ -63,6 +63,11 @@ def _work(job):
             bad[a] = "CFG error"
         elif any(a < blk < a + 5 for blk in c.blocks):
             bad[a] = "a jump target inside the first 5 bytes (the entry patch)"
+        elif any(mod.import_stub(t) in getattr(img, "nonlocal_got", ()) for t in c.call_targets | c.tail_targets):
+            # setjmp would keep the thunk's return label as its return point, and longjmp would
+            # leave the thunks' bookkeeping behind (the game hung in a loop whose counter pointer
+            # came back from a stale state: 0xa30af0)
+            bad[a] = "calls setjmp/longjmp"
         for b in c.blocks.values():
             st["blocks"] += 1
             st["instructions"] += len(b.insns)
@@ -159,6 +164,20 @@ def code_hash(data):
     return h
 
 
+NONLOCAL = ("setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "longjmp", "_longjmp", "siglongjmp",
+            "getcontext", "setcontext", "swapcontext", "makecontext")
+
+
+def _nonlocal_slots(img):
+    """GOT slots of imports that return twice or jump across frames (setjmp, longjmp, contexts)."""
+    imports = getattr(img, "imports", None)
+    if not imports:
+        return frozenset()
+    import prepare  # scripts/prepare.py, on sys.path once the executable is loaded (ps4.py)
+    nids = {prepare.nid(n) for n in NONLOCAL}
+    return frozenset(slot for slot, name in imports.items() if name.split("#")[0] in nids)
+
+
 def _pool_run(img, starts, opts, addrs, workers, shard_size):
     jobs = [(i, addrs[k:k + shard_size]) for i, k in enumerate(range(0, len(addrs), shard_size))]
     ctx = mp.get_context("fork")
@@ -168,8 +187,9 @@ def _pool_run(img, starts, opts, addrs, workers, shard_size):
 
 def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
     """The functions of `only` that hybrid execution can swap: known extent of 5+ bytes, the
-    same code live in bbport as in the executable (`live`: bbport's image after its patches and
-    hooks, BB_AOT_DUMP), and a clean lift. Returns (selected, {function: why not})."""
+    same code live in bbport as in the executable (`live`: bbport's images after its patches and
+    hooks, BB_AOT_DUMP, one per configuration: settings install hooks of their own), and a clean
+    lift. Returns (selected, {function: why not})."""
     excluded = {}
     for a in sorted(only):
         if a not in starts:
@@ -179,12 +199,14 @@ def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
         if not f.end or f.end - a < 5:
             excluded[a] = "extent unknown or under 5 bytes"
             continue
-        if live is not None:
+        for lv in live or ():  # every configuration's code (BB_AOT_DUMP with different settings)
             orig = img.read(a, f.end - a)
-            if orig is None or f.end > len(live):
+            if orig is None or f.end > len(lv):
                 excluded[a] = "not in the live image"
-            elif code_hash(orig) != code_hash(live[a:f.end]):
+                break
+            if code_hash(orig) != code_hash(lv[a:f.end]):
                 excluded[a] = "changed in bbport (patch or hook)"
+                break
     cand = sorted(a for a in only if a not in excluded)
     # A trial lift (no output): functions with unsupported instructions or CFG problems stay out.
     results, _ = _pool_run(img, starts, dict(opts, out=None, lifted=frozenset(cand)), cand, workers, shard_size)
@@ -225,6 +247,7 @@ def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limi
     opts = dict(out=out, tso=tso, abi=abi, volatile=volatile)
     excluded = None
     if only is not None:
+        img.nonlocal_got = _nonlocal_slots(img)
         if only:  # small subsets: shards of 200 spread the work over the workers
             shard_size = max(1, min(shard_size, (len(only) + workers - 1) // workers))
         selected, excluded = _hybrid_select(img, starts, frozenset(only), live, workers, shard_size, opts)

@@ -21,8 +21,15 @@
         .endr
         .endm
 
+        // MXCSR only when it differs: ldmxcsr is slow, and the guest's value rarely changes.
+        // The state's pad word (156) takes the current value; rcx is free (loaded after this).
         .macro LOAD_VEC base
+        stmxcsr dword ptr [\base + 156]
+        mov ecx, [\base + 156]
+        cmp ecx, [\base + 152]
+        je 77f
         ldmxcsr dword ptr [\base + 152]
+77:
         .irp i, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
         vmovdqu xmm\i, xmmword ptr [\base + 160 + 16 * \i]
         vinsertf128 ymm\i, ymm\i, xmmword ptr [\base + 416 + 16 * \i], 1
@@ -161,8 +168,13 @@ recomp_hybrid_enter:
 // Recompiled code -> original code: void recomp_hybrid_call_native(RecompState *st, uint64_t target).
 // The guest has pushed its return address at [st.rsp] (call) or holds its caller's there (tail
 // call); the target's `ret` comes back here instead, and the slot is restored afterwards.
-// Host frame (rsp after the pushes): [0] state, [8] previous native_frame, [16] the guest's
-// return slot value, [24] previous host_sp.
+// Host frame, a record in the thread's native_frame chain (rsp after the pushes): [0] state,
+// [8] previous native_frame, [16] the guest's return slot value, [24] previous host_sp, [32] the
+// slot's address, [40] the thread's entry depth at the call.
+// longjmp: original code may jump past recompiled frames and past calls made here that never
+// return (a setjmp in original code, a longjmp below recompiled code). The return that comes
+// here is then an outer call's: the record is found by the slot the return came through, the
+// inner ones are dropped with the host stack below it, and the depth goes back to the call's.
         .globl recomp_hybrid_call_native
         .p2align 4
         .type recomp_hybrid_call_native, @function
@@ -173,18 +185,21 @@ recomp_hybrid_call_native:
         push r13
         push r14
         push r15
-        sub rsp, 40
+        sub rsp, 56
         mov [rsp], rdi
         SELF rax
         mov rcx, [rax + 32]
         mov [rsp + 8], rcx
         mov rcx, [rax]
         mov [rsp + 24], rcx
+        mov rcx, [rax + 8]
+        mov [rsp + 40], rcx
         mov [rax + 32], rsp
         lea rcx, [rsp - 256]            // entries nested in the target continue below this frame
         and rcx, -16
         mov [rax], rcx
         mov rdx, [rdi + 32]             // guest rsp
+        mov [rsp + 32], rdx
         mov rcx, [rdx]
         mov [rsp + 16], rcx
         lea rcx, [rip + 1f]
@@ -193,9 +208,19 @@ recomp_hybrid_call_native:
         mov rax, rdi
         jmp recomp_hybrid_resume
 1:      mov [rsp - 8], rax              // guest registers live, rsp = guest rsp after the ret
+        mov [rsp - 16], rcx
         SELF rax
-        mov rax, [rax + 32]
+        mov rax, [rax + 32]             // the innermost record
+        lea rcx, [rsp - 8]              // the slot this return came through
+2:      test rax, rax
+        jz 9f
+        cmp rcx, [rax + 32]
+        je 3f
+        mov rax, [rax + 8]              // not this one: left behind by a longjmp
+        jmp 2b
+3:      mov [rsp - 24], rax
         mov rax, [rax]                  // state
+        mov rcx, [rsp - 16]
         mov [rax + 8], rcx
         mov [rax + 16], rdx
         mov [rax + 24], rbx
@@ -214,18 +239,20 @@ recomp_hybrid_call_native:
         mov rcx, [rsp - 8]
         mov [rax], rcx
         SAVE_VEC rax
-        SELF rbx
-        mov rsp, [rbx + 32]             // back on the host frame
+        mov rbx, [rsp - 24]             // the record
+        SELF rdx
+        mov rsp, rbx                    // back on its host frame (anything below is dropped)
         mov rcx, [rsp + 8]
-        mov [rbx + 32], rcx
+        mov [rdx + 32], rcx             // native_frame
         mov rcx, [rsp + 24]
-        mov [rbx], rcx
-        mov rdx, [rsp]
-        mov rdx, [rdx + 32]
+        mov [rdx], rcx                  // host_sp
+        mov rcx, [rsp + 40]
+        mov [rdx + 8], rcx              // depth
+        mov rdx, [rsp + 32]
         mov rcx, [rsp + 16]
-        mov [rdx - 8], rcx              // the guest's return slot as it was
+        mov [rdx], rcx                  // the guest's return slot as it was
         cld
-        add rsp, 40
+        add rsp, 56
         pop r15
         pop r14
         pop r13
@@ -233,6 +260,7 @@ recomp_hybrid_call_native:
         pop rbx
         pop rbp
         ret
+9:      ud2                             // a return through a slot no call here borrowed
         .size recomp_hybrid_call_native, . - recomp_hybrid_call_native
 
 // Recompiled code -> original code for good: void recomp_hybrid_jump_native(RecompState *st,

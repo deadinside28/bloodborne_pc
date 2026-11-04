@@ -20,10 +20,8 @@ __thread HybridThread *recomp_hybrid_self __attribute__((tls_model("initial-exec
 // recomp_hybrid_jump_native's target: addressed fs-relative by the thunk (local-exec: the
 // runtime is linked into the executable).
 __thread uint64_t recomp_hybrid_jump_target __attribute__((tls_model("local-exec"), used));
-_Atomic uint64_t recomp_hybrid_native_jumps;
 extern void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
 int recomp_hybrid_fs_from_gs;
-_Atomic uint64_t recomp_hybrid_native_calls;
 
 void recomp_hybrid_enter(void);  // recomp_hybrid_x86.S
 extern void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);
@@ -36,13 +34,20 @@ _Static_assert(__builtin_offsetof(HybridThread, entries) == 40, "HybridThread la
 #define MAX_DEPTH 16384                // nested original -> recompiled entries per thread
 
 static pthread_mutex_t threads_lock = PTHREAD_MUTEX_INITIALIZER;
-static HybridThread *threads;      // live threads' states
-static uint64_t finished_entries;  // entries of threads that ended
+static HybridThread *threads;    // live threads' states
+static HybridTotals finished;    // counts of threads that ended
 
-uint64_t recomp_hybrid_total_entries(void) {
+HybridTotals recomp_hybrid_totals(void) {
     pthread_mutex_lock(&threads_lock);
-    uint64_t n = finished_entries;
-    for (HybridThread *t = threads; t; t = t->next) n += __atomic_load_n(&t->entries, __ATOMIC_RELAXED);
+    HybridTotals n = finished;
+    n.max_depth = 0;
+    for (HybridThread *t = threads; t; t = t->next) {
+        n.entries += __atomic_load_n(&t->entries, __ATOMIC_RELAXED);
+        n.native_calls += __atomic_load_n(&t->native_calls, __ATOMIC_RELAXED);
+        n.native_jumps += __atomic_load_n(&t->native_jumps, __ATOMIC_RELAXED);
+        const uint64_t d = __atomic_load_n(&t->depth, __ATOMIC_RELAXED);
+        if (d > n.max_depth) n.max_depth = d;
+    }
     pthread_mutex_unlock(&threads_lock);
     return n;
 }
@@ -78,7 +83,9 @@ void recomp_hybrid_thread_fini(void) {
     pthread_mutex_lock(&threads_lock);
     for (HybridThread **p = &threads; *p; p = &(*p)->next)
         if (*p == t) { *p = t->next; break; }
-    finished_entries += t->entries;
+    finished.entries += t->entries;
+    finished.native_calls += t->native_calls;
+    finished.native_jumps += t->native_jumps;
     pthread_mutex_unlock(&threads_lock);
     recomp_hybrid_self = NULL;
     munmap(t->stack, t->stack_size);
@@ -86,13 +93,14 @@ void recomp_hybrid_thread_fini(void) {
     free(t);
 }
 
+// Recompiled code runs only inside an entry, so the thread's state exists here.
 static void call_native(RecompState *st, uint64_t target) {
-    recomp_hybrid_native_calls++;
+    recomp_hybrid_self->native_calls++;
     recomp_hybrid_call_native(st, target);
 }
 
 static void jump_native(RecompState *st, uint64_t target) {
-    recomp_hybrid_native_jumps++;
+    recomp_hybrid_self->native_jumps++;
     recomp_hybrid_jump_native(st, target);
 }
 

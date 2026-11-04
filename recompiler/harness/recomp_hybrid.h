@@ -31,6 +31,8 @@ typedef struct HybridThread {
     uint64_t max_depth;     // 24
     uint64_t native_frame;  // 32: host frame of the innermost recompiled -> original call
     uint64_t entries;       // 40: original -> recompiled entries on this thread
+    uint64_t native_calls;  // recompiled -> original calls and jumps on this thread (counted per
+    uint64_t native_jumps;  //   thread: one shared atomic counter cost every core a cache line)
     uint8_t *stack;         // host stack mapping (for thread_fini)
     uint64_t stack_size, states_size;
     struct HybridThread *next;  // all threads' states (recomp_hybrid_total_entries)
@@ -40,12 +42,13 @@ extern __thread HybridThread *recomp_hybrid_self __attribute__((tls_model("initi
 // The guest's thread pointer is GS (bbport rewrites the game's fs: accesses to gs:), while the
 // recompiled code, lifted from the unmodified executable, addresses FS: state.fs_base := GS base.
 extern int recomp_hybrid_fs_from_gs;
-extern _Atomic uint64_t recomp_hybrid_native_calls;
 
 int recomp_hybrid_thread_init(void);  // 0, or -1 (errno)
 void recomp_hybrid_thread_fini(void);
-// Entries into recompiled code on all threads so far (live threads read without locking).
-uint64_t recomp_hybrid_total_entries(void);
+// Entries into recompiled code, and calls / jumps back to the original code, on all threads so
+// far (live threads read without locking).
+typedef struct { uint64_t entries, native_calls, native_jumps, max_depth; } HybridTotals;  // max_depth: open entries, deepest live thread
+HybridTotals recomp_hybrid_totals(void);
 // Sends the original function at host address `entry` to `fn` (a 5-byte jump at the entry).
 // 0, or -1 with `why` filled in (at most 160 bytes).
 int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why);
@@ -54,7 +57,6 @@ void recomp_hybrid_call_native(RecompState *st, uint64_t target);
 // __recomp_dispatch_jump's fallback: the original code continues at target for good (the
 // thread's innermost entry ends); no return.
 __attribute__((noreturn)) void recomp_hybrid_jump_native(RecompState *st, uint64_t target);
-extern _Atomic uint64_t recomp_hybrid_native_jumps;
 // Installs recomp_hybrid_call_native / recomp_hybrid_jump_native as the dispatchers' fallbacks.
 void recomp_hybrid_enable(void);
 

@@ -118,8 +118,11 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    gameplay (two bugs found on the way: hoisted loads -> `--volatile`; unresolved jumps borrowed
    `[rsp]` -> `__recomp_dispatch_jump`). Recipe: `BB_AOT_DUMP=$PWD/out/aot/live.bin bash run.sh`
    (close it once written), `recompiler/harness/build_aot.sh EBOOT LIST out/aot/live.bin NAME`,
-   `BB_AOT=$PWD/recompiler/out/aot/NAME/libbbaot.so bash run.sh`. Next: the top 1,000
-   (`out/aot/top1000.txt`), then all 4,273 sampled functions, then everything allowed: on x86-64 the original and the recompiled code can run in one process. Patch
+   `BB_AOT=$PWD/recompiler/out/aot/NAME/libbbaot.so bash run.sh`. Also done: the top 1,000 and
+   all 4,273 sampled functions (4,034 swapped in) in gameplay; setjmp/longjmp found and handled
+   (callers original, longjmp past recompiled frames resynchronised). Gameplay 37 FPS vs ~80:
+   crossings and default-mode code (README "Cost"). Next: everything allowed (~160k), then
+   `--abi` lifting and cheaper crossings: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT
