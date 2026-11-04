@@ -24,8 +24,9 @@
 #include "recomp_hybrid.h"
 #endif
 
-// Exported t_* / tf_* functions (link address), from the image's symbol table.
-typedef struct { const char *name; uint64_t link; int fp; } Export;
+// Exported t_* / tf_* functions (link address), from the image's symbol table; th_* (as t_*) are
+// hybrid-only (corpus/midjump.S): recorded always, checked only with -H.
+typedef struct { const char *name; uint64_t link; int fp, hybrid_only; } Export;
 static Export exports[4096];
 static int n_exports;
 
@@ -39,11 +40,12 @@ static void find_exports(void) {
         const char *str = (const char *)(file + sh[sh[i].sh_link].sh_offset);
         for (size_t k = 0; k < sh[i].sh_size / sizeof(Elf64_Sym); k++) {
             const char *nm = str + sym[k].st_name;
-            int fp = !strncmp(nm, "tf_", 3);
-            if (ELF64_ST_TYPE(sym[k].st_info) != STT_FUNC || (strncmp(nm, "t_", 2) && !fp) || strchr(nm, '.')) continue;
+            int fp = !strncmp(nm, "tf_", 3), hybrid_only = !strncmp(nm, "th_", 3);
+            if (ELF64_ST_TYPE(sym[k].st_info) != STT_FUNC || (strncmp(nm, "t_", 2) && !fp && !hybrid_only) || strchr(nm, '.'))
+                continue;
             int dup = 0;
             for (int j = 0; j < n_exports; j++) dup |= exports[j].link == sym[k].st_value;
-            if (!dup && n_exports < 4096) exports[n_exports++] = (Export){ strdup(nm), sym[k].st_value, fp };
+            if (!dup && n_exports < 4096) exports[n_exports++] = (Export){ strdup(nm), sym[k].st_value, fp, hybrid_only };
         }
     }
 }
@@ -115,7 +117,7 @@ static int run_hybrid(uint64_t link, int fp, uint64_t a, uint64_t b, uint64_t c,
         *ret = recomp_hybrid_checked_call(f, a, b, c, p, 0, 0, &xmm0, &bad);
     }
     if (bad) { strcpy(why, "callee-saved register or rsp changed across the call"); return -1; }
-    if (recomp_hybrid_self->depth) { strcpy(why, "hybrid entry depth not back to 0"); return -1; }
+    if (recomp_hybrid_self && recomp_hybrid_self->depth) { strcpy(why, "hybrid entry depth not back to 0"); return -1; }
     return 0;
 }
 #endif
@@ -140,8 +142,7 @@ int main(int argc, char **argv) {
 #if defined(RECOMP_HYBRID)
     if (hybrid) {
         if (!chk) { fprintf(stderr, "-H needs the original code's results (-c)\n"); return 2; }
-        if (recomp_hybrid_thread_init()) die("hybrid thread");
-        recomp_hybrid_enable();
+        recomp_hybrid_enable();  // the thread's state comes with its first entry (the thunk's slow path)
         for (uint64_t k = 0; k < __recomp_table_size; k++) {
             char why[160];
             if (recomp_hybrid_patch(__recomp_slide + __recomp_table[k].guest, __recomp_table[k].fn, why)) {
@@ -190,6 +191,7 @@ int main(int argc, char **argv) {
 #endif
             }
             if (rf) { fwrite(&want, 8, 1, rf); fwrite(buf_a, 256, 1, rf); }
+            if (x->hybrid_only && !hybrid) continue;  // recorded; checked with -H only
             memcpy(buf_b, buf_init, 256);
             char why[160] = "";
 #if defined(RECOMP_HYBRID)
@@ -210,6 +212,7 @@ int main(int argc, char **argv) {
                 bad++;
             }
         }
+        if (x->hybrid_only && !hybrid) continue;
         tests++;
         if (bad) failed++;
         else if (verbose) printf("ok   %s\n", x->name);
@@ -217,8 +220,9 @@ int main(int argc, char **argv) {
 #if defined(RECOMP_HYBRID)
     if (hybrid) {
         printf("%d functions tested, %d failed; hybrid: %" PRIu64 " functions recompiled, entered "
-               "%" PRIu64 "x from original code, %" PRIu64 " calls back\n",
-               tests, failed, __recomp_table_size, recomp_hybrid_self->entries, recomp_hybrid_native_calls);
+               "%" PRIu64 "x from original code, %" PRIu64 " calls back, %" PRIu64 " jumps back\n",
+               tests, failed, __recomp_table_size, recomp_hybrid_self ? recomp_hybrid_self->entries : 0,
+               recomp_hybrid_native_calls, recomp_hybrid_native_jumps);
         return failed ? 1 : 0;
     }
 #endif

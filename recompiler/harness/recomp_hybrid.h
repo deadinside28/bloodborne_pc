@@ -12,7 +12,8 @@
 //       runs natively on the guest stack; its return comes back to the thunk, which stores the
 //       registers again.
 //
-// Each host thread that runs guest code needs recomp_hybrid_thread_init() first.
+// Each host thread gets its state on its first entry (or earlier from recomp_hybrid_thread_init);
+// recomp_hybrid_thread_fini frees it when the thread ends.
 #pragma once
 #include <stdint.h>
 
@@ -32,6 +33,7 @@ typedef struct HybridThread {
     uint64_t entries;       // 40: original -> recompiled entries on this thread
     uint8_t *stack;         // host stack mapping (for thread_fini)
     uint64_t stack_size, states_size;
+    struct HybridThread *next;  // all threads' states (recomp_hybrid_total_entries)
 } HybridThread;
 
 extern __thread HybridThread *recomp_hybrid_self __attribute__((tls_model("initial-exec")));
@@ -42,12 +44,18 @@ extern _Atomic uint64_t recomp_hybrid_native_calls;
 
 int recomp_hybrid_thread_init(void);  // 0, or -1 (errno)
 void recomp_hybrid_thread_fini(void);
+// Entries into recompiled code on all threads so far (live threads read without locking).
+uint64_t recomp_hybrid_total_entries(void);
 // Sends the original function at host address `entry` to `fn` (a 5-byte jump at the entry).
 // 0, or -1 with `why` filled in (at most 160 bytes).
 int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why);
 // The dispatcher's fallback for targets that have no recompiled function.
 void recomp_hybrid_call_native(RecompState *st, uint64_t target);
-// Installs recomp_hybrid_call_native as the dispatcher's fallback.
+// __recomp_dispatch_jump's fallback: the original code continues at target for good (the
+// thread's innermost entry ends); no return.
+__attribute__((noreturn)) void recomp_hybrid_jump_native(RecompState *st, uint64_t target);
+extern _Atomic uint64_t recomp_hybrid_native_jumps;
+// Installs recomp_hybrid_call_native / recomp_hybrid_jump_native as the dispatchers' fallbacks.
 void recomp_hybrid_enable(void);
 
 // Tests: calls fn(a, b, c, d) natively with known values in the callee-saved registers; returns

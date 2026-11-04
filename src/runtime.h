@@ -59,6 +59,13 @@ uintptr_t runtime_thread_resolve(const char *name);
 void runtime_thread_report(void);
 void runtime_set_main_tls(const void *data, uint64_t filesz, uint64_t memsz, uint64_t align);
 void runtime_thread_attach_main(void);
+/* Hybrid execution (BB_AOT, BB_AOT_DUMP; runtime_aot.c): after the image is ready, before any
+ * guest code runs. 0, or -1 when BB_AOT is set but cannot be used. */
+int runtime_aot_install(unsigned char *image, uint64_t size);
+/* A guest thread ends: its hybrid state goes (made on its first entry into recompiled code). */
+void runtime_aot_thread_detach(void);
+/* A fatal fault: the thread's hybrid state and last call into the original code (stderr). */
+void runtime_aot_describe_fault(void *ucontext);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);

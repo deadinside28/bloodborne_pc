@@ -2,6 +2,7 @@
 const wins = workspace.windowList();
 for (let i = 0; i < wins.length; i++) {
     if (wins[i].caption.indexOf("Bloodborne") === 0) {
+        wins[i].minimized = false;  // activating a minimised window does not show it
         workspace.activeWindow = wins[i];
     }
 }

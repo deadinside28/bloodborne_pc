@@ -17,6 +17,11 @@
 #endif
 
 __thread HybridThread *recomp_hybrid_self __attribute__((tls_model("initial-exec")));
+// recomp_hybrid_jump_native's target: addressed fs-relative by the thunk (local-exec: the
+// runtime is linked into the executable).
+__thread uint64_t recomp_hybrid_jump_target __attribute__((tls_model("local-exec"), used));
+_Atomic uint64_t recomp_hybrid_native_jumps;
+extern void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
 int recomp_hybrid_fs_from_gs;
 _Atomic uint64_t recomp_hybrid_native_calls;
 
@@ -29,6 +34,18 @@ _Static_assert(__builtin_offsetof(HybridThread, entries) == 40, "HybridThread la
 
 #define HOST_STACK_SIZE (64ull << 20)  // reserved, not committed: LLVM frames of nested guest calls
 #define MAX_DEPTH 16384                // nested original -> recompiled entries per thread
+
+static pthread_mutex_t threads_lock = PTHREAD_MUTEX_INITIALIZER;
+static HybridThread *threads;      // live threads' states
+static uint64_t finished_entries;  // entries of threads that ended
+
+uint64_t recomp_hybrid_total_entries(void) {
+    pthread_mutex_lock(&threads_lock);
+    uint64_t n = finished_entries;
+    for (HybridThread *t = threads; t; t = t->next) n += __atomic_load_n(&t->entries, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&threads_lock);
+    return n;
+}
 
 int recomp_hybrid_thread_init(void) {
     if (recomp_hybrid_self) return 0;
@@ -46,13 +63,23 @@ int recomp_hybrid_thread_init(void) {
     t->states = states;
     t->max_depth = MAX_DEPTH;
     t->host_sp = ((uint64_t)(uintptr_t)(t->stack + t->stack_size)) & ~15ull;
+    pthread_mutex_lock(&threads_lock);
+    t->next = threads;
+    threads = t;
+    pthread_mutex_unlock(&threads_lock);
     recomp_hybrid_self = t;
     return 0;
 }
 
 void recomp_hybrid_thread_fini(void) {
+    // When the thread ends: entries may still be open (a guest thread left through longjmp).
     HybridThread *t = recomp_hybrid_self;
-    if (!t || t->depth) return;
+    if (!t) return;
+    pthread_mutex_lock(&threads_lock);
+    for (HybridThread **p = &threads; *p; p = &(*p)->next)
+        if (*p == t) { *p = t->next; break; }
+    finished_entries += t->entries;
+    pthread_mutex_unlock(&threads_lock);
     recomp_hybrid_self = NULL;
     munmap(t->stack, t->stack_size);
     munmap(t->states, t->states_size);
@@ -64,7 +91,15 @@ static void call_native(RecompState *st, uint64_t target) {
     recomp_hybrid_call_native(st, target);
 }
 
-void recomp_hybrid_enable(void) { recomp_dispatch_fallback = call_native; }
+static void jump_native(RecompState *st, uint64_t target) {
+    recomp_hybrid_native_jumps++;
+    recomp_hybrid_jump_native(st, target);
+}
+
+void recomp_hybrid_enable(void) {
+    recomp_dispatch_fallback = call_native;
+    recomp_dispatch_jump_fallback = jump_native;
+}
 
 // ---- entry patches ---------------------------------------------------------------------------
 // Each patched function gets a 48-byte stub within rel32 reach of its entry:

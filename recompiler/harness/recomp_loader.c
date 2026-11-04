@@ -328,6 +328,16 @@ RecompFn recomp_lookup(uint64_t link) {
 }
 
 void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);
+void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
+
+void __recomp_dispatch(RecompState *st, uint64_t target);
+
+void __recomp_dispatch_jump(RecompState *st, uint64_t target) {
+    RecompFn fn = recomp_lookup(target - __recomp_slide);
+    if (fn) { fn(st); return; }
+    if (recomp_dispatch_jump_fallback) { recomp_dispatch_jump_fallback(st, target); return; }  // hybrid: no return
+    __recomp_dispatch(st, target);
+}
 
 void __recomp_dispatch(RecompState *st, uint64_t target) {
     RecompFn fn = recomp_lookup(target - __recomp_slide);

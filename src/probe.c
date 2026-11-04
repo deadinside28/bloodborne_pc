@@ -244,6 +244,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
     else
         snprintf(line, sizeof(line), "Fault (signal %d) at RIP %p, address %p\n", sig, (void *)rip, info->si_addr);
     { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+    runtime_aot_describe_fault(context);
 #ifdef _WIN32
     {
         char mem[256];
@@ -767,6 +768,9 @@ int main(int argc, char **argv) {
     if (!executable_entry) fail("entry is not executable");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     runtime_net_image_ready((uintptr_t)image, size); /* online game modules (BBSC) hook it now */
+    /* Hybrid execution: after every patch and hook (its library is checked against this code),
+     * before any guest code runs. */
+    if (runtime_aot_install(image, size)) fail("BB_AOT: the recompiled code cannot be used (see above)");
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {
             int init_executable=0;

@@ -72,7 +72,7 @@ recomp_hybrid_enter:
         mov [rsp - 0x20], rcx
         SELF rax
         test rax, rax
-        jz 9f                           // thread not initialised
+        jz 8f                           // first entry on this thread
         mov rcx, [rax + 8]
         cmp rcx, [rax + 24]
         jae 9f                          // nested too deep
@@ -118,7 +118,44 @@ recomp_hybrid_enter:
         dec qword ptr [rbx + 8]
         mov rax, r12
         jmp recomp_hybrid_resume
-9:      ud2
+        // No HybridThread yet (a thread that did not call recomp_hybrid_thread_init, e.g. a host
+        // thread calling back into the game): make one in C, on the guest stack below the slots
+        // above, with the argument registers kept; then enter again.
+8:      mov rax, [rsp - 0x10]
+        lea rsp, [rsp - 0x28]
+        push rdi
+        push rsi
+        push rdx
+        push rcx
+        push r8
+        push r9
+        push r10
+        push r11
+        push rax                        // rsp = entry rsp - 112: 8 mod 16, as at the entry
+        sub rsp, 264                    // ymm0-7 and the result; 16-byte aligned for the call
+        .irp i, 0, 1, 2, 3, 4, 5, 6, 7
+        vmovdqu ymmword ptr [rsp + 32 * \i], ymm\i
+        .endr
+        call recomp_hybrid_thread_init@PLT
+        mov [rsp + 256], eax
+        .irp i, 0, 1, 2, 3, 4, 5, 6, 7
+        vmovdqu ymm\i, ymmword ptr [rsp + 32 * \i]
+        .endr
+        cmp dword ptr [rsp + 256], 0
+        lea rsp, [rsp + 264]
+        pop rax
+        pop r11
+        pop r10
+        pop r9
+        pop r8
+        pop rcx
+        pop rdx
+        pop rsi
+        pop rdi
+        lea rsp, [rsp + 0x28]
+        jne 9f
+        jmp recomp_hybrid_enter
+9:      ud2                             // nested too deep, or no memory for the thread's state
         .size recomp_hybrid_enter, . - recomp_hybrid_enter
 
 // Recompiled code -> original code: void recomp_hybrid_call_native(RecompState *st, uint64_t target).
@@ -197,6 +234,42 @@ recomp_hybrid_call_native:
         pop rbp
         ret
         .size recomp_hybrid_call_native, . - recomp_hybrid_call_native
+
+// Recompiled code -> original code for good: void recomp_hybrid_jump_native(RecompState *st,
+// uint64_t target), no return. For jumps (not calls) to code that has no recompiled function: the
+// middle of a function, say, where [rsp] is no return address to borrow. The thread's innermost
+// entry ends here (its recompiled frames on the host stack are dropped); the original code
+// continues at target with the guest's registers and stack, and returns along the guest's return
+// addresses, which are original code's (recompiled code pushes the original return addresses).
+// The jump goes through a thread variable: no guest register, and nothing below the guest rsp
+// (the red zone of the code jumped into), is touched.
+        .globl recomp_hybrid_jump_native
+        .p2align 4
+        .type recomp_hybrid_jump_native, @function
+recomp_hybrid_jump_native:
+        SELF rax
+        dec qword ptr [rax + 8]
+        mov qword ptr fs:recomp_hybrid_jump_target@tpoff, rsi
+        mov rax, rdi
+        LOAD_VEC rax
+        mov rcx, [rax + 8]
+        mov rdx, [rax + 16]
+        mov rbx, [rax + 24]
+        mov rbp, [rax + 40]
+        mov rsi, [rax + 48]
+        mov rdi, [rax + 56]
+        mov r8,  [rax + 64]
+        mov r9,  [rax + 72]
+        mov r10, [rax + 80]
+        mov r11, [rax + 88]
+        mov r12, [rax + 96]
+        mov r13, [rax + 104]
+        mov r14, [rax + 112]
+        mov r15, [rax + 120]
+        mov rsp, [rax + 32]
+        mov rax, [rax]
+        jmp qword ptr fs:recomp_hybrid_jump_target@tpoff
+        .size recomp_hybrid_jump_native, . - recomp_hybrid_jump_native
 
 // uint64_t recomp_hybrid_checked_call(fn, a, b, c, d, fa, fb, uint64_t *xmm0, int *bad)
 // rdi fn, rsi a, rdx b, rcx c, r8 d, r9 fa; stack: fb, xmm0, bad.

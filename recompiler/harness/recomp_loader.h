@@ -26,6 +26,9 @@ void recomp_set_bridge(const char *import, RecompBridge b);
 // Targets with no recompiled function go here when set (hybrid execution: the original code),
 // before the import table and the dispatch-miss report.
 extern void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);
+// Jumps (__recomp_dispatch_jump) with no recompiled target, when set: hybrid execution hands
+// control to the original code for good (recomp_hybrid_jump_native; it does not return).
+extern void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
 // Call recompiled fn with SysV arguments: integers (more than six go on the guest stack) and up to
 // eight float/double bit patterns for xmm0-7. Checks the stack pointer and the callee-saved
 // registers afterwards. 0, or -1 with `why` filled in. Results: st->gpr[G_RAX], st->xmm[0].

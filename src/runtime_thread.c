@@ -277,6 +277,7 @@ static void *host_start(void *p) {
 #else
     run_guest(t);
 #endif
+    runtime_aot_thread_detach(); /* hybrid execution's state for this thread (runtime_aot.c) */
     runtime_thread_keys_cleanup();
     pthread_mutex_lock(&lock); t->finished=1; ++exited; pthread_mutex_unlock(&lock);
     return t->result;

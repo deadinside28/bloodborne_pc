@@ -17,7 +17,7 @@ yet, and not yet run on the game's eboot.
 | AArch64 | runs under QEMU user mode and **on a phone** (Galaxy S25 Ultra, Snapdragon 8 Elite, Android 17, over `adb`, `harness/device/run_device.sh`): the corpus passes in all 36 AArch64 configurations, replaying results recorded from the original code on x86-64; recompiled libz produces the same output digest on AArch64 as on x86-64 in every lifting mode. Multi-threaded ordering is not tested yet (QEMU on x86 runs ARM threads with x86's ordering; the tests are single-threaded) |
 | x86 ordering cost (phone, libz test) | none 1.26 s; barriers 4.45 s (3.5×); **acquire/release with an inline 16-byte check (default `--tso`) 1.37 s (1.08×)**, at +43% code; acquire/release with the SIGBUS fallback instead 2.15 s (1.7×: 1.78M alignment faults) |
 | The game | 162,959 FDE functions (+2 found from calls), 9.98M instructions, lifted in under a minute (8 cores); 3 instruction sites unsupported (junk next to the 24 decode failures, which the project's own analysis also counts: 22); 63,641 calls to imports resolved through their GOT slots; 3,915 jump tables; ~11,700 indirect jumps through pointers left to the dispatcher (tail calls). ~7.8 GiB of IR in 82 shards (`harness/build_game.sh`), **compiled for AArch64** (`--abi`, no `--tso`): 83 objects in 33 min on 4 cores (2.2 CPU-hours, 2.2 GiB peak per clang), **243 MiB of machine code, 6.1× the original 39.8 MiB**; one shard needs `-mstrict-align` to avoid an LLVM bug (below). Not yet run |
-| Hybrid (x86-64) | original and recompiled code in one process, calling each other both ways (`harness/recomp_hybrid.{h,c}`, `recomp_hybrid_x86.S`): entry patches into recompiled functions, the dispatcher's fallback into original code; every register incl. the upper YMM halves and MXCSR carried across. Corpus (`runner -H`): all 18 x86-64 builds pass with all functions, either half and a third recompiled (72 configurations, up to ~870k crossings each); `calls.c` and `nonabi.S` cover deep alternating recursion, 256-bit vector arguments, float stack arguments, struct returns, callbacks and a non-ABI call returning results in every register. Deliberately broken thunks (YMM upper halves, r15 either way, vector save after a native return) fail these tests. Not yet in bbport |
+| Hybrid (x86-64) | original and recompiled code in one process, calling each other both ways (`harness/recomp_hybrid.{h,c}`, `recomp_hybrid_x86.S`): entry patches into recompiled functions, the dispatcher's fallback into original code; every register incl. the upper YMM halves and MXCSR carried across. Corpus (`runner -H`): all 18 x86-64 builds pass with all functions, either half and a third recompiled (72 configurations, up to ~870k crossings each); `calls.c`, `nonabi.S` and `midjump.S` cover deep alternating recursion, 256-bit vector arguments, float stack arguments, struct returns, callbacks, a non-ABI call returning results in every register and jumps into the middle of code. Deliberately broken thunks (YMM upper halves, r15 either way, vector save after a native return, jumps handled as calls) fail these tests. **In bbport (`BB_AOT`): the game's 198 hottest functions recompiled, in gameplay** (below) |
 | Real code | zlib, lz4 and libpng (≈80,000 instructions) lift with no unsupported instruction and no CFG error; libzstd lifts and compiles (gaps: BMI2, which Jaguar lacks, and data inside its asm FDE ranges) |
 
 ## Use
@@ -68,11 +68,34 @@ output, which must equal the x86-64 run's.
 - **TLS:** bbport keeps the guest's thread pointer in GS (it rewrites the game's `fs:` accesses);
   `recomp_hybrid_fs_from_gs` makes the entry thunk give recompiled code (lifted from the
   unmodified executable, `fs:`) the GS base. Needs FSGSBASE (`rdfsbase`/`rdgsbase`, Linux 5.9+).
+- **Jumps are not calls:** an indirect jump the CFG cannot resolve (`__recomp_dispatch_jump`), or
+  a direct one into the middle of other code, has no return address at `[rsp]` to borrow. A
+  recompiled function start is called (a tail call); anything else gets control for good:
+  `recomp_hybrid_jump_native` ends the thread's innermost entry and jumps there with the guest's
+  registers, and the original code returns along the guest's return addresses (original code's:
+  recompiled code pushes the original return addresses). Borrowing `[rsp]` there overwrote a local
+  in the game (a saved pointer to the stack guard came back as a return address: a crash on
+  entering gameplay). `corpus/midjump.S` (`th_*`, hybrid-only) covers both kinds.
+- **`--volatile`** (x86-64 hybrid builds): guest memory accesses (stack ones aside) as LLVM volatile
+  loads and stores. The hardware keeps x86 ordering; LLVM can no longer drop or hoist them (a
+  loop waiting on a flag another thread sets must keep reading it: the game hung at its first
+  frames without it).
+- **In bbport** (`src/runtime_aot.c`): `BB_AOT_DUMP=out/aot/live.bin` writes the game's code as it
+  runs (after the port's patches and hooks); `harness/build_aot.sh EBOOT LIST LIVE NAME` lifts the
+  listed functions whose live code equals the executable's (`fs`→`gs` prefixes aside; 80 of
+  162,959 differ), with a hash of each, and builds `out/aot/NAME/libbbaot.so`; `BB_AOT=<it>`
+  checks every hash (any difference: no start) and patches the entries before guest code runs.
+  `BB_AOT_BISECT=lo:hi` swaps in only part of them. A fatal fault prints the thread's hybrid
+  state and its last 24 calls and jumps into the original code.
+- **Status in the game (2026-11-04):** the 198 hottest functions (perf, 60 s of gameplay;
+  `0x20858a0`, `0x2ab7350` stay original: bbport's write tracking knows them by address) run in
+  gameplay: in 90 s, 722M entries from the original code, 1.75G calls back, 28M jumps back.
 - **Known limits:** C++ exceptions cannot unwind through the thunks (a native callee's return
   address is the thunk's label; recompiled frames have no unwind info), so functions with handlers
   and their callers stay original; patching a running function's entry is not atomic yet (install
   before the code runs); code that jumps into the first 5 bytes of a patched function is not
-  detected.
+  detected; bbport classifies GPU-memory writes by the faulting instruction's address
+  (`gpu/layer/layer_traps.cpp` `IsGuestCode`), and recompiled code is not the game's to it.
 
 ## Execution model
 

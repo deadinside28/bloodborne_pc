@@ -113,10 +113,13 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
 ## Next steps (in order)
 
 1. ~~Baseline on the NVIDIA PC~~ (done 2026-11-04, above).
-2. **Hybrid mode** (branch `hybrid`; milestone 1 done 2026-11-04: thunks and corpus tests, see
-   recompiler/README.md "Hybrid execution"; next: `BB_AOT` in bbport with one hot function, then
-   the top 40/200 from `out/hot_functions.json`, keeping functions whose live bytes differ from
-   eboot.bin (patches, hooks; `fs`->`gs` prefixes aside) original): on x86-64 the original and the recompiled code can run in one process. Patch
+2. **Hybrid mode** (branch `hybrid`, recompiler/README.md "Hybrid execution"). Done 2026-11-04:
+   thunks and corpus tests; `BB_AOT` in bbport; the 198 hottest functions recompiled run in
+   gameplay (two bugs found on the way: hoisted loads -> `--volatile`; unresolved jumps borrowed
+   `[rsp]` -> `__recomp_dispatch_jump`). Recipe: `BB_AOT_DUMP=$PWD/out/aot/live.bin bash run.sh`
+   (close it once written), `recompiler/harness/build_aot.sh EBOOT LIST out/aot/live.bin NAME`,
+   `BB_AOT=$PWD/recompiler/out/aot/NAME/libbbaot.so bash run.sh`. Next: the top 1,000
+   (`out/aot/top1000.txt`), then all 4,273 sampled functions, then everything allowed: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT

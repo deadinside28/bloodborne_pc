@@ -87,6 +87,10 @@ fi
 # $ORIGIN/gpu: packaged copies keep the library next to the binary without patching it.
 gpu=(-Lout/gpu -lbbgpu -Wl,-rpath,'$ORIGIN/gpu' -Wl,-rpath,"$PWD/out/gpu" -rdynamic)
 runtime=(src/runtime*.c)
+# Hybrid execution (BB_AOT, src/runtime_aot.c): the recompiler's thunks, x86-64 only.
+if [[ $(uname -m) == x86_64 ]]; then
+    runtime+=(recompiler/harness/recomp_hybrid.c recompiler/harness/recomp_hybrid_x86.S)
+fi
 # Third-party decoders: compiled once, without this project's -Werror policy.
 atrac9=(third_party/LibAtrac9/C/src/*.c)
 if [[ ! -f out/libatrac9.a || -n $(find third_party/LibAtrac9/C/src -newer out/libatrac9.a -name '*.c') ]]; then

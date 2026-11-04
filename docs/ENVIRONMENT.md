@@ -336,12 +336,15 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_VULKANINFO` | path of vulkaninfo for the launcher |
 | `BB_WORK_RETIRED` | =0: the recording thread and fences do not wait for retired work |
 
-## Diagnostics (274)
+## Diagnostics (277)
 
 Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame time; none is meant for playing.
 
 | Variable | What it does |
 |---|---|
+| `BB_AOT` | =path: hybrid execution, the game's functions in this library (recompiler/harness/build_aot.sh) run recompiled instead of the original code (x86-64 Linux) |
+| `BB_AOT_BISECT` | =lo:hi: with BB_AOT, only the library's functions lo..hi-1 (by address) are swapped in, to find one that misbehaves |
+| `BB_AOT_DUMP` | =path: the game's code as it runs (after the port's patches and hooks) written there at start, for building a BB_AOT library |
 | `BB_ARENA_VRAM_ONLY` | =1 (tests): the arena in VRAM only, as NVIDIA's sparse buffers |
 | `BB_AUDIO_DUMP` | =dir: raw converted PCM per audio port |
 | `BB_AUDIO_STATS` | set: audio port statistics |

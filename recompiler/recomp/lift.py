@@ -353,6 +353,8 @@ class FunctionLifter:
 
     def load(self, addr, bits, local=False):
         p = self.op(f"inttoptr i64 {addr} to ptr")
+        if self.mod.volatile and not local:
+            return self.op(f"load volatile i{bits}, ptr {p}, align 1")
         if self.mod.tso and not local and self.mod.rcpc and bits <= 64:
             # an acquire load (ldapr/ldapur), which assumes alignment;
             # LSE2 CPUs accept misalignment within 16 bytes and fault across a 16-byte boundary
@@ -370,6 +372,9 @@ class FunctionLifter:
 
     def store(self, addr, v, bits, local=False):
         p = self.op(f"inttoptr i64 {addr} to ptr")
+        if self.mod.volatile and not local:
+            self.e(f"store volatile i{bits} {v}, ptr {p}, align 1")
+            return
         if self.mod.tso and not local and self.mod.rcpc and bits <= 64:
             fast = lambda: self.e(f"store atomic i{bits} {v}, ptr {p} release, align {bits // 8}")  # stlr / stlur
             if self.mod.rcpc == "check" and bits > 8:
@@ -509,9 +514,11 @@ class FunctionLifter:
         self.set64(RSP, self.op(f"add i64 {sp}, 8"))
         return v
 
-    def call_target(self, link_target):
+    def call_target(self, link_target, jump=False):
         """Direct call: the lifted function; an import stub's target (its GOT entry, read at run
-        time); or the dispatcher for code we do not have."""
+        time); or the dispatcher for code we do not have. jump: a jump, not a call, to code that is
+        not a known function start (the middle of other code): __recomp_dispatch_jump, as [rsp]
+        is no return address there."""
         if link_target in self.mod.lifted_names:
             self.e(f"call void {fname(link_target)}(ptr %st)")
             return
@@ -522,17 +529,22 @@ class FunctionLifter:
             self.e(f"call void @__recomp_dispatch(ptr %st, i64 {target})")
         else:
             self.mod.unresolved.add(link_target)
-            self.e(f"call void @__recomp_dispatch(ptr %st, i64 {self.code_addr(link_target)})")
+            how = "__recomp_dispatch_jump" if jump and link_target not in self.mod.image.functions else "__recomp_dispatch"
+            self.e(f"call void @{how}(ptr %st, i64 {self.code_addr(link_target)})")
 
     def exit_to(self, link_target):
-        """Leave the function towards link_target (tail call)."""
+        """Leave the function towards link_target (tail call, or a jump into other code)."""
         self.spill()
-        self.call_target(link_target)
+        self.call_target(link_target, jump=True)
         self.e("ret void")
 
     def exit_dynamic(self, runtime_target):
+        """An indirect jump the CFG could not resolve: a tail call, or a jump into the middle of
+        code. __recomp_dispatch_jump: a recompiled function start is called (a tail call); any
+        other target gets control for good (hybrid execution: the original code continues there,
+        on the guest's stack, and returns along its return addresses)."""
         self.spill()
-        self.e(f"call void @__recomp_dispatch(ptr %st, i64 {runtime_target})")
+        self.e(f"call void @__recomp_dispatch_jump(ptr %st, i64 {runtime_target})")
         self.e("ret void")
 
     def trap(self, kind):
@@ -1395,10 +1407,15 @@ def _vzu(L, ins, b):
 class ModuleLifter:
     handlers = H
 
-    def __init__(self, image, tso=False, abi=False, local_frames=True, rcpc=False):
+    def __init__(self, image, tso=False, abi=False, local_frames=True, rcpc=False, volatile=False):
         from . import simd  # noqa: F401  (registers the SSE/AVX handlers)
         self.image = image
         self.tso = tso
+        # volatile: guest memory accesses (stack ones aside) as LLVM volatile loads and stores, for
+        # x86-64 targets running next to the original code (hybrid execution): the hardware keeps
+        # x86 ordering, and LLVM may no longer drop, merge or hoist them out of loops (a wait on a
+        # flag another thread sets kept reading a stale register: the game hung).
+        self.volatile = volatile
         self.abi = abi
         self.local_frames = local_frames
         self.rcpc = rcpc
@@ -1471,6 +1488,7 @@ class ModuleLifter:
             f"@__recomp_table_size = constant i64 {len(names)}",
             "declare void @__recomp_dispatch(ptr, i64)",
             "declare void @__recomp_trap(ptr, i64, i32)",
+            "declare void @__recomp_dispatch_jump(ptr, i64)",
         ] + sorted(self.intrinsics)
         return "\n".join(head) + "\n\n" + "\n\n".join(bodies) + "\n", errors
 
