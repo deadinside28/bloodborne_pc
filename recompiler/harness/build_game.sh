@@ -43,15 +43,20 @@ PY
 compile() {
     ll=$1; o=$2/$(basename "$ll" .ll).o; shift 2
     compile_once "$ll" "$o" "$@" && return
-    # LLVM 23.1's SelectionDAG crashes on a store it merges itself
-    # (harness/llvm-bug-store-merge-bswap16.ll): retry with GlobalISel, which falls back to
-    # SelectionDAG only where it cannot select
-    if grep -q 'Cannot select' "$o.err" && compile_once "$ll" "$o" "$@" -fglobal-isel -mllvm -global-isel-abort=0; then
-        : > "$o.err"
+    # LLVM 23.1's SelectionDAG crashes on an unaligned store it merges itself
+    # (harness/llvm-bug-store-merge-bswap16.ll). Retry the shard with GlobalISel (no fallback to
+    # SelectionDAG: that would reach the same crash), else with -mstrict-align, which keeps the
+    # merge from happening at the price of byte-wise misaligned accesses in this shard only.
+    grep -q 'Cannot select' "$o.err" || { echo "FAILED $(basename "$ll")"; return; }
+    if compile_once "$ll" "$o" "$@" -fglobal-isel -mllvm -global-isel-abort=1; then
         echo "$(basename "$ll"): compiled with GlobalISel (LLVM SelectionDAG bug)"
+    elif compile_once "$ll" "$o" "$@" -mstrict-align; then
+        echo "$(basename "$ll"): compiled with -mstrict-align (LLVM SelectionDAG bug)"
     else
         echo "FAILED $(basename "$ll")"
+        return
     fi
+    : > "$o.err"
 }
 export -f compile compile_once
 ls "$dir"/part-*.ll "$dir"/table.ll | xargs -P "$jobs" -I{} bash -c 'compile "$@"' _ {} "$objdir" "${cflags[@]}"
