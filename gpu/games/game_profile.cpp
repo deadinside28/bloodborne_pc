@@ -10,6 +10,10 @@
 #include <cstdlib>
 #include <cstring>
 
+/// Hybrid execution (src/runtime_aot.c): the game function a host code address was recompiled
+/// from, or 0. Weak: absent where the runtime has no hybrid execution.
+extern "C" __attribute__((weak)) std::uint64_t runtime_aot_guest_pc(std::uint64_t host_pc);
+
 namespace Game {
 
 // One per game (games/<game>.cpp).
@@ -45,9 +49,21 @@ const Profile* Active() {
 
 bool IsDynamicWriter(std::uint64_t guest_rip) {
     const Profile* profile = Active();
-    return profile && std::ranges::any_of(profile->dynamic_writers, [&](const CodeRange& r) {
-               return guest_rip >= r.begin && guest_rip < r.end;
-           });
+    if (!profile) {
+        return false;
+    }
+    const auto in = [&](std::uint64_t rip) {
+        return std::ranges::any_of(profile->dynamic_writers, [&](const CodeRange& r) {
+            return rip >= r.begin && rip < r.end;
+        });
+    };
+    if (in(guest_rip)) {
+        return true;
+    }
+    // Hybrid execution: the writer may be the recompiled copy (its function's start is enough:
+    // the ranges are whole functions).
+    const std::uint64_t mapped = runtime_aot_guest_pc ? runtime_aot_guest_pc(guest_rip) : 0;
+    return mapped && in(mapped);
 }
 
 } // namespace Game

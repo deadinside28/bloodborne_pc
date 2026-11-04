@@ -89,6 +89,85 @@ static DispatchEvent *note(RecompState *st, uint64_t target, uint64_t caller, ui
     return e;
 }
 
+/* Host code address -> the game function it was recompiled from: the library's functions sorted
+ * by host address, each up to the next one's start (they are laid out one after another). For
+ * the port's checks that know game code by the faulting instruction's address (the GPU write
+ * tracking's dynamic writers, the layer traps' game-or-port): gpu/games/game_profile.cpp,
+ * gpu/layer/buffer_cache_layer_internal.h. */
+typedef struct { uint64_t host, guest; } HostRange;
+static HostRange *host_ranges;
+static uint64_t host_range_count, host_code_end;
+
+static int by_host(const void *a, const void *b) {
+    const uint64_t x = ((const HostRange *)a)->host, y = ((const HostRange *)b)->host;
+    return x < y ? -1 : x > y;
+}
+
+static int host_map_build(void) {
+    host_ranges = malloc(table_size * sizeof(*host_ranges));
+    if (!host_ranges) return -1;
+    for (uint64_t i = 0; i < table_size; ++i)
+        host_ranges[i] = (HostRange){ (uint64_t)(uintptr_t)table[i].fn, __recomp_slide + table[i].guest };
+    qsort(host_ranges, table_size, sizeof(*host_ranges), by_host);
+    host_range_count = table_size;
+    host_code_end = table_size ? host_ranges[table_size - 1].host + (1u << 20) : 0;  /* the last one: at most 1 MiB */
+    return 0;
+}
+
+uint64_t runtime_aot_guest_pc(uint64_t host_pc) {
+    if (!host_range_count || host_pc < host_ranges[0].host || host_pc >= host_code_end) return 0;
+    uint64_t lo = 0, hi = host_range_count;  /* the last start <= host_pc */
+    while (hi - lo > 1) {
+        const uint64_t mid = (lo + hi) / 2;
+        if (host_ranges[mid].host <= host_pc) lo = mid; else hi = mid;
+    }
+    return host_ranges[lo].guest;
+}
+
+/* BB_AOT_TARGETS=1: every 64th call or jump of recompiled code into original game code is
+ * counted by target (and its recompiled caller), and the most frequent are printed at exit: what
+ * still runs as original code, and from where. */
+static int sample_targets;
+static __thread unsigned sample_tick;
+typedef struct { uint64_t target, caller, count; int jump; } TargetCount;
+static TargetCount target_counts[4096];
+static pthread_mutex_t target_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void sample(uint64_t target, uint64_t caller, int jump) {
+    if (!sample_targets || (++sample_tick & 63)) return;
+    pthread_mutex_lock(&target_lock);
+    for (uint64_t s = (target * 0x9e3779b97f4a7c15ull) >> 52, n = 0; n < 4096; s = (s + 1) & 4095, ++n) {
+        TargetCount *t = &target_counts[s];
+        if (t->count && (t->target != target || t->jump != jump)) continue;
+        if (!t->count) *t = (TargetCount){ target, caller, 0, jump };
+        t->count++;
+        break;
+    }
+    pthread_mutex_unlock(&target_lock);
+}
+
+static int by_count(const void *a, const void *b) {
+    const uint64_t x = ((const TargetCount *)a)->count, y = ((const TargetCount *)b)->count;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+
+static void report_targets(void) {
+    if (!sample_targets) return;
+    static TargetCount sorted[4096];
+    pthread_mutex_lock(&target_lock);
+    memcpy(sorted, target_counts, sizeof(sorted));
+    pthread_mutex_unlock(&target_lock);
+    qsort(sorted, 4096, sizeof(*sorted), by_count);
+    printf("AOT: most frequent targets in the original game code (every 64th call or jump, by count):\n");
+    for (int i = 0; i < 40 && sorted[i].count; ++i) {
+        Dl_info where;
+        const char *n = dladdr((void *)(uintptr_t)sorted[i].caller, &where) && where.dli_sname ? where.dli_sname : "?";
+        printf("AOT:   %8" PRIu64 " %s guest 0x%" PRIx64 " (e.g. from %s)\n", sorted[i].count,
+               sorted[i].jump ? "jump to" : "call to", sorted[i].target - __recomp_slide, n);
+    }
+    fflush(stdout);
+}
+
 /* Calls of recompiled code (direct ones to functions it does not have, indirect ones), and its
  * tail calls to known function starts: the recompiled function when there is one (even when
  * BB_AOT_BISECT left its entry original), else the original code, which returns here. */
@@ -104,16 +183,24 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
             return;
         }
     } else if (runtime_libc_base && target >= runtime_libc_base) recomp_hybrid_self->module_calls++;  /* libc.prx... */
+    if (target - __recomp_slide < image_size) sample(target, e->caller, 0);
     recomp_dispatch_fallback(st, target);
     if (e->target == target) e->done_rsp = st->gpr[G_RSP];  /* unless the ring went round */
 }
 
-/* Jumps the CFG could not resolve: a recompiled function start is called (a tail call); anything
- * else, the middle of a function say, gets control for good: no return slot to borrow there. */
+/* Jumps the CFG could not resolve: a recompiled function start is called (a tail call); a host
+ * function too (only a tail call reaches the runtime by a jump: [rsp] is the return address);
+ * anything else, the middle of a function say, gets control for good: no return slot to borrow. */
 void __recomp_dispatch_jump(RecompState *st, uint64_t target) {
     const RecompFn fn = lookup(target - __recomp_slide);
     if (fn) { fn(st); return; }
+    if (target - __recomp_slide >= image_size && host_calls_light) {
+        recomp_hybrid_self->host_calls++;
+        recomp_hybrid_call_host(st, target);
+        return;
+    }
     note(st, target, (uint64_t)(uintptr_t)__builtin_return_address(0), EV_JUMP);
+    sample(target, (uint64_t)(uintptr_t)__builtin_return_address(0), 1);
     recomp_dispatch_jump_fallback(st, target);
 }
 
@@ -206,11 +293,14 @@ static void report(void) {
     fflush(stdout);
 }
 
+/* Every 30 s (the game ends with _exit: no atexit handlers run then); the sampled targets every
+ * 60 s. */
 static void *report_loop(void *arg) {
     (void)arg;
-    for (;;) {
+    for (unsigned n = 1;; ++n) {
         sleep(30);
         report();
+        if (!(n & 1)) report_targets();
     }
     return NULL;
 }
@@ -233,6 +323,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     if (hash_build()) { printf("AOT: no memory for the lookup table\n"); return -1; }
     __recomp_slide = (uint64_t)(uintptr_t)image;
     image_size = size;
+    if (host_map_build()) { printf("AOT: no memory for the host code map\n"); return -1; }
     uint64_t changed = 0;
     for (uint64_t i = 0; i < table_size; ++i) {
         if (check[i][0] != table[i].guest || check[i][1] > size || check[i][1] <= check[i][0]) {
@@ -259,6 +350,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     const uint64_t n_nopatch = nopatch && nopatch_count ? *nopatch_count : 0;
     const char *host_calls = bb_env("BB_AOT_HOST_CALLS");
     host_calls_light = !(host_calls && !strcmp(host_calls, "full"));
+    sample_targets = bb_env_on("BB_AOT_TARGETS");
     recomp_hybrid_fs_from_gs = 1;
     recomp_hybrid_enable();
     uint64_t patched = 0, k = 0;
@@ -273,7 +365,6 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
         ++patched;
     }
     enabled = 1;
-    atexit(report);
     pthread_t reporter;
     if (!pthread_create(&reporter, NULL, report_loop, NULL)) pthread_detach(reporter);
     printf("AOT: %" PRIu64 " of the library's %" PRIu64 " recompiled functions swapped in, %" PRIu64
@@ -294,5 +385,6 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
 }
 void runtime_aot_thread_detach(void) {}
 void runtime_aot_describe_fault(void *context) { (void)context; }
+uint64_t runtime_aot_guest_pc(uint64_t host_pc) { (void)host_pc; return 0; }
 
 #endif

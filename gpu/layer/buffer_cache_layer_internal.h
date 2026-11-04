@@ -26,9 +26,16 @@ inline BbLayer::GpuMemory& Layer() {
 /// Guest code (the game's image with its linked modules): the writer behind a trap hit. A hit
 /// from our own code (the runtime touching pages before a file read into them) must not set the
 /// trap again until that write is done.
+/// Hybrid execution (BB_AOT, src/runtime_aot.c): the game function a host code address was
+/// recompiled from, or 0. Weak: absent where the runtime has no hybrid execution.
+extern "C" __attribute__((weak)) u64 runtime_aot_guest_pc(u64 host_pc);
+
 inline bool IsGuestCode(u64 rip) {
     constexpr u64 Image = 0x800000000ull, ImageSize = 128ull << 20;
-    return rip >= Image && rip < Image + ImageSize;
+    if (rip >= Image && rip < Image + ImageSize) {
+        return true;
+    }
+    return runtime_aot_guest_pc && runtime_aot_guest_pc(rip) != 0;  // the game's code, recompiled
 }
 
 /// The valid blocks of [first, end) by the mirror holding them: f(mirror, a, b) for each piece.

@@ -27,10 +27,9 @@ lf=(); [[ ${BB_RECOMP_MODE:-default} == abi ]] && lf=(--abi)
 link=${BB_AOT_LINK:-$(cd "$root/.." && pwd)/out/link.json}
 [[ $link != none && -f $link ]] && lf+=(--link "$link")
 rm -rf "$dir"; mkdir -p "$dir"
-# Functions that stay original whatever the list says: bbport's page-write tracking recognises
-# them by the faulting instruction's address (gpu/games/bloodborne.cpp DynamicWriters).
-keep_original='^0x(2ab7350|20858a0)$'
-grep -v '^\s*#' "$list" | awk '{print $1}' | grep -v '^$' | grep -viE "$keep_original" > "$dir/list.txt" || true
+# (bbport's page-write tracking knows its dynamic writers, gpu/games/bloodborne.cpp, by the
+# faulting instruction's address: runtime_aot_guest_pc maps recompiled code back for it.)
+grep -v '^\s*#' "$list" | awk '{print $1}' | grep -v '^$' > "$dir/list.txt" || true
 (cd "$root" && "$py" -W ignore -m recomp game "$eboot" "${lf[@]}" --only "$dir/list.txt" "${live[@]}" \
     --out "$dir" --report "$dir/survey.json") > "$dir/survey.txt"
 grep -E '^(hybrid|  left original|  lifted, entry)' "$dir/survey.txt" || true

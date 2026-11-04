@@ -571,6 +571,10 @@ class FunctionLifter:
         for f in FLAGS:
             self.e(f"%{f} = alloca i1")
             self.e(f"store i1 false, ptr %{f}")
+        # DF: clear at every function boundary (the ABI); std / cld change it within a function
+        # (libc's memmove copies backwards with std + rep movs)
+        self.e("%df = alloca i1")
+        self.e("store i1 false, ptr %df")
         self.e("%slide = load i64, ptr @__recomp_slide")
         self.reload("entry")
         self.e(f"br label %b_{cfg.start:x}")
@@ -638,9 +642,20 @@ def sem(*mnemonics):
 
 
 @sem(M.NOP, M.ENDBR64, M.PAUSE, M.PREFETCHT0, M.PREFETCHT1, M.PREFETCHT2, M.PREFETCHNTA, M.PREFETCHW,
-     M.LFENCE, M.SFENCE, M.CLD)  # cld: DF is assumed clear throughout (the ABI's state); std is not supported
+     M.LFENCE, M.SFENCE)
 def _nop(L, ins, b):
     pass
+
+
+@sem(M.CLD, M.STD)
+def _df(L, ins, b):
+    L.e(f"store i1 {'true' if ins.mnemonic == M.STD else 'false'}, ptr %df")
+
+
+def str_step(L, size):
+    """The string instructions' step: +size, or -size while DF is set."""
+    d = L.op("load i1, ptr %df")
+    return L.op(f"select i1 {d}, i64 {-size}, i64 {size}")
 
 
 @sem(M.MFENCE)
@@ -1258,7 +1273,7 @@ def _ret(L, ins, b):
 
 
 def _rep_loop(L, ins, body):
-    """rep prefix: while (rcx) { body; rcx--; } (DF = 0 assumed, as the ABI requires)."""
+    """rep prefix: while (rcx) { body; rcx--; } (the body steps by str_step: DF)."""
     if not ins.has_rep_prefix:
         body()
         return
@@ -1286,14 +1301,15 @@ def _string(L, ins, b):
 
     def body():
         di = L.get64(RDI)
+        step = str_step(L, bits // 8)
         if store_only:
             v, _ = L.read_reg({8: R.AL, 16: R.AX, 32: R.EAX, 64: R.RAX}[bits])
         else:
             si = L.get64(RSI)
             v = L.load(si, bits)
-            L.set64(RSI, L.op(f"add i64 {si}, {bits // 8}"))
+            L.set64(RSI, L.op(f"add i64 {si}, {step}"))
         L.store(di, v, bits)
-        L.set64(RDI, L.op(f"add i64 {di}, {bits // 8}"))
+        L.set64(RDI, L.op(f"add i64 {di}, {step}"))
     _rep_loop(L, ins, body)
 
 
@@ -1366,9 +1382,10 @@ def _movsd(L, ins, b):
 def _string_movsd(L, ins, b):
     def body():
         di, si = L.get64(RDI), L.get64(RSI)
+        step = str_step(L, 4)
         L.store(di, L.load(si, 32), 32)
-        L.set64(RSI, L.op(f"add i64 {si}, 4"))
-        L.set64(RDI, L.op(f"add i64 {di}, 4"))
+        L.set64(RSI, L.op(f"add i64 {si}, {step}"))
+        L.set64(RDI, L.op(f"add i64 {di}, {step}"))
     _rep_loop(L, ins, body)
 
 

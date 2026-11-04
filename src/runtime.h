@@ -66,6 +66,9 @@ int runtime_aot_install(unsigned char *image, uint64_t size);
 void runtime_aot_thread_detach(void);
 /* A fatal fault: the thread's hybrid state and last call into the original code (stderr). */
 void runtime_aot_describe_fault(void *ucontext);
+/* The game function (image address) a host code address was recompiled from, or 0: for the GPU
+ * library's checks that know game code by an instruction address. */
+uint64_t runtime_aot_guest_pc(uint64_t host_pc);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
