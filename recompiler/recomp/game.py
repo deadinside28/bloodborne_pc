@@ -203,6 +203,38 @@ def _pool_run(img, starts, opts, addrs, workers, shard_size):
         return pool.map(_work, jobs, chunksize=1), len(jobs)
 
 
+def _byte_patch_only(img, live, start, end):
+    """bbport changed [start, end) the same way in every configuration (live dumps), and only its
+    bytes: no branch or call out of the image (to a hook's stub), no int3 (a hook's trap)."""
+    if not live:
+        return False
+    first = live[0][start:end]
+    if any(lv[start:end] != first for lv in live[1:]):
+        return False
+    orig = img.read(start, end - start)
+    for i in X.Decoder(64, first, ip=start):
+        if i.flow_control in (FC.CALL, FC.UNCONDITIONAL_BRANCH, FC.CONDITIONAL_BRANCH) \
+                and i.op0_kind in (X.OpKind.NEAR_BRANCH64, X.OpKind.NEAR_BRANCH32, X.OpKind.NEAR_BRANCH16) \
+                and not img.is_code(i.near_branch_target):
+            return False
+        if i.mnemonic == X.Mnemonic.INT3 and orig[i.ip - start] != 0xCC:
+            return False
+    return True
+
+
+def _overlay(img, live, ranges):
+    """bbport's patched bytes over the executable's, for the ranges given."""
+    if not ranges:
+        return
+    segs = [[v, bytearray(d), x] for v, d, x in img.segments]
+    for start, end in ranges:
+        for seg in segs:
+            if seg[0] <= start and end <= seg[0] + len(seg[1]):
+                seg[1][start - seg[0]:end - seg[0]] = live[start:end]
+                break
+    img.segments = [(v, bytes(d), x) for v, d, x in segs]
+
+
 def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
     """The functions of `only` that hybrid execution can swap: known extent of 5+ bytes, the
     same code live in bbport as in the executable (`live`: bbport's images after its patches and
@@ -212,6 +244,7 @@ def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
     for recompiled callers (direct calls, dispatch) but their entries are not patched."""
     excluded = {}
     nopatch = {}
+    overlay = []  # functions lifted from bbport's patched bytes
     for a in sorted(only):
         if a not in starts:
             excluded[a] = "not a function start"
@@ -222,14 +255,22 @@ def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
             continue
         if f.end - a < 5:
             nopatch[a] = "under 5 bytes"
+        orig = img.read(a, f.end - a)
         for lv in live or ():  # every configuration's code (BB_AOT_DUMP with different settings)
-            orig = img.read(a, f.end - a)
             if orig is None or f.end > len(lv):
                 excluded[a] = "not in the live image"
                 break
             if code_hash(orig) != code_hash(lv[a:f.end]):
                 excluded[a] = "changed in bbport (patch or hook)"
                 break
+        if excluded.get(a) == "changed in bbport (patch or hook)" and _byte_patch_only(img, live, a, f.end):
+            # bbport's patches changed bytes only (constants, conditions): the patched code is
+            # lifted instead (the library's hash then covers the patched bytes)
+            del excluded[a]
+            overlay.append((a, f.end))
+    if live:
+        _overlay(img, live[0], overlay)
+    img.patched_functions = len(overlay)
     cand = sorted(a for a in only if a not in excluded)
     # A trial lift (no output): functions with unsupported instructions or CFG problems stay out.
     results, _ = _pool_run(img, starts, dict(opts, out=None, lifted=frozenset(cand)), cand, workers, shard_size)
@@ -305,6 +346,7 @@ def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limi
         total["hybrid: selected"] = len(addrs)
         total["hybrid: excluded"] = {f"{a:#x}": why for a, why in sorted(excluded.items())}
         total["hybrid: entry not patched"] = {f"{a:#x}": why for a, why in sorted(nopatch.items())}
+        total["hybrid: lifted from bbport's patched bytes"] = getattr(img, "patched_functions", 0)
     return total
 
 
@@ -335,6 +377,9 @@ def report(total, path=None):
             lines.append(f"  left original: {k}: {v}")
         for k, v in collections.Counter(total.get("hybrid: entry not patched", {}).values()).most_common():
             lines.append(f"  lifted, entry not patched: {k}: {v}")
+        patched = total.get("hybrid: lifted from bbport's patched bytes", 0)
+        if patched:
+            lines.append(f"  lifted from bbport's patched bytes: {patched}")
     text = "\n".join(lines)
     if path:
         js = {k: (dict(v) if isinstance(v, collections.Counter) else v) for k, v in total.items()}

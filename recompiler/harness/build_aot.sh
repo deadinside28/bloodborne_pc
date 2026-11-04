@@ -32,7 +32,7 @@ rm -rf "$dir"; mkdir -p "$dir"
 grep -v '^\s*#' "$list" | awk '{print $1}' | grep -v '^$' > "$dir/list.txt" || true
 (cd "$root" && "$py" -W ignore -m recomp game "$eboot" "${lf[@]}" --only "$dir/list.txt" "${live[@]}" \
     --out "$dir" --report "$dir/survey.json") > "$dir/survey.txt"
-grep -E '^(hybrid|  left original|  lifted, entry)' "$dir/survey.txt" || true
+grep -E '^(hybrid|  left original|  lifted)' "$dir/survey.txt" || true
 # BB_RECOMP_JOBS: parallel compiles (default: the cores, at most 8; a shard of the whole game
 # takes 1-3 GiB in clang).
 jobs=${BB_RECOMP_JOBS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}
