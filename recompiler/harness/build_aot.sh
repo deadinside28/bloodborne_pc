@@ -29,8 +29,11 @@ keep_original='^0x(2ab7350|20858a0)$'
 grep -v '^\s*#' "$list" | awk '{print $1}' | grep -v '^$' | grep -viE "$keep_original" > "$dir/list.txt" || true
 (cd "$root" && "$py" -W ignore -m recomp game "$eboot" "${lf[@]}" --only "$dir/list.txt" "${live[@]}" \
     --out "$dir" --report "$dir/survey.json") > "$dir/survey.txt"
-grep -E '^(hybrid|  left original)' "$dir/survey.txt" || true
-ls "$dir"/part-*.ll "$dir"/table.ll | xargs -P "$(nproc)" -I{} sh -c \
+grep -E '^(hybrid|  left original|  lifted, entry)' "$dir/survey.txt" || true
+# BB_RECOMP_JOBS: parallel compiles (default: the cores, at most 8; a shard of the whole game
+# takes 1-3 GiB in clang).
+jobs=${BB_RECOMP_JOBS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}
+ls "$dir"/part-*.ll "$dir"/table.ll | xargs -P "$jobs" -I{} sh -c \
     'clang -O2 -fPIC --target=x86_64-linux-gnu -march=x86-64-v2 -c -Wno-override-module "$1" -o "${1%.ll}.o"' _ {}
 clang -shared -o "$dir/libbbaot.so" "$dir"/*.o
 echo "$dir/libbbaot.so: $(( $(stat -c %s "$dir/libbbaot.so") / 1024 )) KiB"

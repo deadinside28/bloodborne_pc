@@ -39,6 +39,7 @@ void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
 
 static const RecompEntry *table;
 static uint64_t table_size;
+static uint64_t image_size;  /* the game's image: [__recomp_slide, +image_size) is guest code and data */
 static int enabled;
 
 /* Link address -> recompiled function: open addressing, at most half full (every call of
@@ -92,6 +93,8 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
     const RecompFn fn = lookup(target - __recomp_slide);
     if (fn) { fn(st); return; }
     DispatchEvent *e = note(st, target, (uint64_t)(uintptr_t)__builtin_return_address(0), EV_CALL);
+    if (target - __recomp_slide >= image_size) recomp_hybrid_self->host_calls++;  /* bbport, not the game */
+    else if (runtime_libc_base && target >= runtime_libc_base) recomp_hybrid_self->module_calls++;  /* libc.prx... */
     recomp_dispatch_fallback(st, target);
     if (e->target == target) e->done_rsp = st->gpr[G_RSP];  /* unless the ring went round */
 }
@@ -188,9 +191,9 @@ static void dump_image(const char *path, const unsigned char *image, uint64_t si
 
 static void report(void) {
     const HybridTotals n = recomp_hybrid_totals();
-    printf("AOT: recompiled code entered %" PRIu64 "x from the original code; %" PRIu64 " calls back, %" PRIu64
-           " jumps back for good; deepest open entries %" PRIu64 "\n", n.entries, n.native_calls, n.native_jumps,
-           n.max_depth);
+    printf("AOT: recompiled code entered %" PRIu64 "x from the original code; %" PRIu64 " calls back (%" PRIu64
+           " into bbport, %" PRIu64 " into the game's system modules), %" PRIu64 " jumps back for good; deepest open "
+           "entries %" PRIu64 "\n", n.entries, n.native_calls, n.host_calls, n.module_calls, n.native_jumps, n.max_depth);
     fflush(stdout);
 }
 
@@ -220,6 +223,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     table_size = *count;
     if (hash_build()) { printf("AOT: no memory for the lookup table\n"); return -1; }
     __recomp_slide = (uint64_t)(uintptr_t)image;
+    image_size = size;
     uint64_t changed = 0;
     for (uint64_t i = 0; i < table_size; ++i) {
         if (check[i][0] != table[i].guest || check[i][1] > size || check[i][1] <= check[i][0]) {
@@ -240,21 +244,29 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
         if (hi > table_size) hi = table_size;
         if (lo > hi) lo = hi;
     }
+    /* Functions whose entry stays (too short for the jump, or jumped into): sorted addresses. */
+    const uint64_t *nopatch = dlsym(lib, "__recomp_nopatch");
+    const uint64_t *nopatch_count = dlsym(lib, "__recomp_nopatch_size");
+    const uint64_t n_nopatch = nopatch && nopatch_count ? *nopatch_count : 0;
     recomp_hybrid_fs_from_gs = 1;
     recomp_hybrid_enable();
+    uint64_t patched = 0, k = 0;
     for (uint64_t i = lo; i < hi; ++i) {
+        while (k < n_nopatch && nopatch[k] < table[i].guest) ++k;
+        if (k < n_nopatch && nopatch[k] == table[i].guest) continue;  /* recompiled callers only */
         char why[160];
         if (recomp_hybrid_patch(__recomp_slide + table[i].guest, table[i].fn, why)) {
             printf("AOT: guest 0x%" PRIx64 ": %s\n", table[i].guest, why);
             return -1;
         }
+        ++patched;
     }
     enabled = 1;
     atexit(report);
     pthread_t reporter;
     if (!pthread_create(&reporter, NULL, report_loop, NULL)) pthread_detach(reporter);
-    printf("AOT: %" PRIu64 " of the library's %" PRIu64 " recompiled functions swapped in (%s)\n", hi - lo,
-           table_size, path);
+    printf("AOT: %" PRIu64 " of the library's %" PRIu64 " recompiled functions swapped in, %" PRIu64
+           " more for recompiled callers only (%s)\n", patched, table_size, n_nopatch, path);
     return 0;
 }
 

@@ -36,6 +36,7 @@ def _work(job):
     mod = ModuleLifter(img, tso=_OPTS["tso"], abi=_OPTS["abi"], rcpc="check", volatile=_OPTS.get("volatile", False))
     mod.lifted_names = _OPTS.get("lifted") or starts
     bad = {}  # function -> why it cannot be swapped in hybrid execution
+    nopatch = {}  # function -> why its entry cannot take the jump (lifted for recompiled callers)
     st = collections.Counter()
     unsupported = collections.Counter()
     unsupported_at = {}
@@ -59,10 +60,10 @@ def _work(job):
             st["functions without code"] += 1
             bad[a] = "no code"
             continue
+        if any(a < blk < a + 5 for blk in c.blocks):
+            nopatch[a] = "a jump target inside the first 5 bytes"
         if c.errors:
             bad[a] = "CFG error"
-        elif any(a < blk < a + 5 for blk in c.blocks):
-            bad[a] = "a jump target inside the first 5 bytes (the entry patch)"
         elif any(mod.import_stub(t) in getattr(img, "nonlocal_got", ()) for t in c.call_targets | c.tail_targets):
             # setjmp would keep the thunk's return label as its return point, and longjmp would
             # leave the thunks' bookkeeping behind (the game hung in a loop whose counter pointer
@@ -113,7 +114,7 @@ def _work(job):
         _write_shard(_OPTS["out"], index, bodies, mod.intrinsics, starts)
     st["seconds"] = time.time() - t0
     return dict(stats=st, unsupported=unsupported, unsupported_at=unsupported_at, cfg_errors=cfg_errors,
-                cfg_error_at=cfg_error_at, mnemonics=mnemonics, extra_calls=extra_calls, bad=bad)
+                cfg_error_at=cfg_error_at, mnemonics=mnemonics, extra_calls=extra_calls, bad=bad, nopatch=nopatch)
 
 
 HEAD = [STATE_TYPE, "@__recomp_slide = external global i64",
@@ -137,7 +138,7 @@ def _write_shard(out, index, bodies, intrinsics, starts):
         f.write("\n")
 
 
-def _write_table(out, starts, checks=None):
+def _write_table(out, starts, checks=None, nopatch=()):
     names = sorted(starts)
     with open(os.path.join(out, "table.ll"), "w") as f:
         f.write("\n".join(f"declare void {fname(a)}(ptr)" for a in names) + "\n")
@@ -152,6 +153,12 @@ def _write_table(out, starts, checks=None):
             f.write(",\n".join(f"  [3 x i64] [i64 {sconst(a, 64)}, i64 {sconst(checks[a][0], 64)}, "
                                f"i64 {sconst(checks[a][1], 64)}]" for a in names))
             f.write("\n]\n")
+            # Functions whose entry is not patched (too short, or jumped into): recompiled callers
+            # reach them directly, original code keeps running the original. Sorted.
+            keep = sorted(nopatch)
+            f.write(f"@__recomp_nopatch = constant [{max(len(keep), 1)} x i64] [" +
+                    (", ".join(f"i64 {sconst(a, 64)}" for a in keep) if keep else "i64 -1") + "]\n")
+            f.write(f"@__recomp_nopatch_size = constant i64 {len(keep)}\n")
 
 
 def code_hash(data):
@@ -189,16 +196,21 @@ def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
     """The functions of `only` that hybrid execution can swap: known extent of 5+ bytes, the
     same code live in bbport as in the executable (`live`: bbport's images after its patches and
     hooks, BB_AOT_DUMP, one per configuration: settings install hooks of their own), and a clean
-    lift. Returns (selected, {function: why not})."""
+    lift. Returns (selected, {function: why not}, {selected function: why its entry stays}):
+    functions too short for the 5-byte entry jump, or jumped into within those 5 bytes, are lifted
+    for recompiled callers (direct calls, dispatch) but their entries are not patched."""
     excluded = {}
+    nopatch = {}
     for a in sorted(only):
         if a not in starts:
             excluded[a] = "not a function start"
             continue
         f = img.functions[a]
-        if not f.end or f.end - a < 5:
-            excluded[a] = "extent unknown or under 5 bytes"
+        if not f.end:
+            excluded[a] = "extent unknown"
             continue
+        if f.end - a < 5:
+            nopatch[a] = "under 5 bytes"
         for lv in live or ():  # every configuration's code (BB_AOT_DUMP with different settings)
             orig = img.read(a, f.end - a)
             if orig is None or f.end > len(lv):
@@ -212,7 +224,9 @@ def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
     results, _ = _pool_run(img, starts, dict(opts, out=None, lifted=frozenset(cand)), cand, workers, shard_size)
     for r in results:
         excluded.update(r["bad"])
-    return frozenset(a for a in cand if a not in excluded), excluded
+        nopatch.update(r["nopatch"])
+    selected = frozenset(a for a in cand if a not in excluded)
+    return selected, excluded, {a: why for a, why in nopatch.items() if a in selected}
 
 
 def _extra_functions(img, starts, workers, shard_size):
@@ -245,19 +259,19 @@ def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limi
     starts = starts | frozenset(extra)
     addrs = sorted(starts)
     opts = dict(out=out, tso=tso, abi=abi, volatile=volatile)
-    excluded = None
+    excluded = nopatch = None
     if only is not None:
         img.nonlocal_got = _nonlocal_slots(img)
         if only:  # small subsets: shards of 200 spread the work over the workers
             shard_size = max(1, min(shard_size, (len(only) + workers - 1) // workers))
-        selected, excluded = _hybrid_select(img, starts, frozenset(only), live, workers, shard_size, opts)
+        selected, excluded, nopatch = _hybrid_select(img, starts, frozenset(only), live, workers, shard_size, opts)
         addrs = sorted(selected)
         opts["lifted"] = selected
     if out:
         os.makedirs(out, exist_ok=True)
         if only is not None:
             _write_table(out, addrs, {a: (img.functions[a].end, code_hash(img.read(a, img.functions[a].end - a)))
-                                      for a in addrs})
+                                      for a in addrs}, nopatch)
         else:
             _write_table(out, starts)
     t0 = time.time()
@@ -279,6 +293,7 @@ def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limi
     if excluded is not None:
         total["hybrid: selected"] = len(addrs)
         total["hybrid: excluded"] = {f"{a:#x}": why for a, why in sorted(excluded.items())}
+        total["hybrid: entry not patched"] = {f"{a:#x}": why for a, why in sorted(nopatch.items())}
     return total
 
 
@@ -307,6 +322,8 @@ def report(total, path=None):
         lines.append(f"hybrid: {total['hybrid: selected']} functions lifted, {sum(why.values())} left original")
         for k, v in why.most_common():
             lines.append(f"  left original: {k}: {v}")
+        for k, v in collections.Counter(total.get("hybrid: entry not patched", {}).values()).most_common():
+            lines.append(f"  lifted, entry not patched: {k}: {v}")
     text = "\n".join(lines)
     if path:
         js = {k: (dict(v) if isinstance(v, collections.Counter) else v) for k, v in total.items()}

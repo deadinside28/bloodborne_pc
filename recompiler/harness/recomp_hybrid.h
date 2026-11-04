@@ -33,6 +33,8 @@ typedef struct HybridThread {
     uint64_t entries;       // 40: original -> recompiled entries on this thread
     uint64_t native_calls;  // recompiled -> original calls and jumps on this thread (counted per
     uint64_t native_jumps;  //   thread: one shared atomic counter cost every core a cache line)
+    uint64_t host_calls;    // of native_calls: into host functions (imports), not guest code
+    uint64_t module_calls;  // of native_calls: into the game's linked system modules (libc.prx...)
     uint8_t *stack;         // host stack mapping (for thread_fini)
     uint64_t stack_size, states_size;
     struct HybridThread *next;  // all threads' states (recomp_hybrid_total_entries)
@@ -47,7 +49,7 @@ int recomp_hybrid_thread_init(void);  // 0, or -1 (errno)
 void recomp_hybrid_thread_fini(void);
 // Entries into recompiled code, and calls / jumps back to the original code, on all threads so
 // far (live threads read without locking).
-typedef struct { uint64_t entries, native_calls, native_jumps, max_depth; } HybridTotals;  // max_depth: open entries, deepest live thread
+typedef struct { uint64_t entries, native_calls, native_jumps, max_depth, host_calls, module_calls; } HybridTotals;  // max_depth: open entries, deepest live thread
 HybridTotals recomp_hybrid_totals(void);
 // Sends the original function at host address `entry` to `fn` (a 5-byte jump at the entry).
 // 0, or -1 with `why` filled in (at most 160 bytes).

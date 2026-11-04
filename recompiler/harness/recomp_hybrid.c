@@ -45,6 +45,8 @@ HybridTotals recomp_hybrid_totals(void) {
         n.entries += __atomic_load_n(&t->entries, __ATOMIC_RELAXED);
         n.native_calls += __atomic_load_n(&t->native_calls, __ATOMIC_RELAXED);
         n.native_jumps += __atomic_load_n(&t->native_jumps, __ATOMIC_RELAXED);
+        n.host_calls += __atomic_load_n(&t->host_calls, __ATOMIC_RELAXED);
+        n.module_calls += __atomic_load_n(&t->module_calls, __ATOMIC_RELAXED);
         const uint64_t d = __atomic_load_n(&t->depth, __ATOMIC_RELAXED);
         if (d > n.max_depth) n.max_depth = d;
     }
@@ -86,6 +88,8 @@ void recomp_hybrid_thread_fini(void) {
     finished.entries += t->entries;
     finished.native_calls += t->native_calls;
     finished.native_jumps += t->native_jumps;
+    finished.host_calls += t->host_calls;
+    finished.module_calls += t->module_calls;
     pthread_mutex_unlock(&threads_lock);
     recomp_hybrid_self = NULL;
     munmap(t->stack, t->stack_size);

@@ -121,8 +121,12 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    `BB_AOT=$PWD/recompiler/out/aot/NAME/libbbaot.so bash run.sh`. Also done: the top 1,000 and
    all 4,273 sampled functions (4,034 swapped in) in gameplay; setjmp/longjmp found and handled
    (callers original, longjmp past recompiled frames resynchronised). Gameplay 37 FPS vs ~80:
-   crossings and default-mode code (README "Cost"). Next: everything allowed (~160k), then
-   `--abi` lifting and cheaper crossings: on x86-64 the original and the recompiled code can run in one process. Patch
+   crossings and default-mode code (README "Cost"). Then the whole eboot: 160,854 of 162,959
+   functions recompiled (14,953 for recompiled callers only: under 5 bytes or jumped into),
+   2,103 original (2,001 setjmp/longjmp callers, 81 changed by bbport, 21 CFG errors); a 1.1 GB
+   library built in 12.5 min; gameplay 44 FPS. Calls back per 90 s: 293M into bbport (imports),
+   208M into the linked modules (libc.prx: not lifted yet), ~55M into the eboot. Next: lift the
+   modules (their setjmp/longjmp stay original), a cheaper path for imports, `--abi` lifting: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT
