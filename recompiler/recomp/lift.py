@@ -638,7 +638,7 @@ def sem(*mnemonics):
 
 
 @sem(M.NOP, M.ENDBR64, M.PAUSE, M.PREFETCHT0, M.PREFETCHT1, M.PREFETCHT2, M.PREFETCHNTA, M.PREFETCHW,
-     M.LFENCE, M.SFENCE)
+     M.LFENCE, M.SFENCE, M.CLD)  # cld: DF is assumed clear throughout (the ABI's state); std is not supported
 def _nop(L, ins, b):
     pass
 

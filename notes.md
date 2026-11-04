@@ -129,8 +129,11 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    modules lifted too (163,510 of 165,773 functions), light calls into bbport, and `--abi`:
    **gameplay 70 FPS** (~80 unmodified). Build: `BB_RECOMP_MODE=abi recompiler/harness/build_aot.sh
    EBOOT out/aot/all_linked.txt out/aot/live.bin,out/aot/live-stats.bin linked-abi` (6.4 min,
-   511 MiB; IR and objects deleted as it goes: a kept full build is ~14 GB). Next: zero original
-   code (setjmp/longjmp support, the 156 unsupported module instructions), then AArch64: on x86-64 the original and the recompiled code can run in one process. Patch
+   511 MiB; IR and objects deleted as it goes: a kept full build is ~14 GB). Then longjmp
+   callers recompiled (only setjmp callers stay): **165,383 of 165,771 functions, gameplay 79
+   FPS** (as unmodified). Original: 154 with unsupported instructions (x87 in libc mostly), 130
+   setjmp callers, 81 changed by bbport, 21 CFG errors, setjmp/longjmp themselves. Next: zero
+   original code (those, and ~2M jumps back per run), then AArch64: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT

@@ -66,12 +66,12 @@ def _work(job):
             bad[a] = "CFG error"
         elif a in getattr(img, "nonlocal_funcs", ()):
             bad[a] = "is setjmp/longjmp (a linked module's)"
-        elif any(mod.import_stub(t) in getattr(img, "nonlocal_got", ()) or t in getattr(img, "nonlocal_funcs", ())
+        elif any(mod.import_stub(t) in getattr(img, "nonlocal_got", ()) or t in getattr(img, "returns_twice_funcs", ())
                  for t in c.call_targets | c.tail_targets):
-            # setjmp would keep the thunk's return label as its return point, and longjmp would
-            # leave the thunks' bookkeeping behind (the game hung in a loop whose counter pointer
-            # came back from a stale state: 0xa30af0)
-            bad[a] = "calls setjmp/longjmp"
+            # setjmp would keep the thunk's return label as its return point (the game hung in a
+            # loop whose counter pointer came back from a stale state: 0xa30af0). Callers of
+            # longjmp are recompiled: the call thunk's records resynchronise after the jump.
+            bad[a] = "calls setjmp (returns twice)"
         for b in c.blocks.values():
             st["blocks"] += 1
             st["instructions"] += len(b.insns)
@@ -175,13 +175,13 @@ def code_hash(data):
 
 
 def _nonlocal_slots(img):
-    """GOT slots of imports that return twice or jump across frames (setjmp, longjmp, contexts)."""
+    """GOT slots of imports that return twice (setjmp, getcontext...): their callers stay original."""
     imports = getattr(img, "imports", None)
     if not imports:
         return frozenset()
     import prepare  # scripts/prepare.py, on sys.path once the executable is loaded (ps4.py)
-    from .ps4 import NONLOCAL
-    nids = {prepare.nid(n) for n in NONLOCAL}
+    from .ps4 import RETURNS_TWICE
+    nids = {prepare.nid(n) for n in RETURNS_TWICE}
     return frozenset(slot for slot, name in imports.items() if name.split("#")[0] in nids)
 
 

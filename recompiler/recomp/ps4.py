@@ -183,10 +183,13 @@ def load_ps4(path):
     return img
 
 
-# Imports and exports that return twice or jump across frames: hybrid execution keeps them, and
-# their callers, original (recomp/game.py).
-NONLOCAL = ("setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "longjmp", "_longjmp", "siglongjmp",
-            "getcontext", "setcontext", "swapcontext", "makecontext")
+# Imports and exports that return twice or jump across frames: hybrid execution keeps them
+# original (recomp/game.py). Callers of those that return twice stay original too (setjmp would
+# keep a thunk's label as its return point); callers of those that only jump away (longjmp,
+# setcontext) are recompiled: the jump lands in original code, and the call thunk's records
+# resynchronise when control comes back through an outer call.
+RETURNS_TWICE = ("setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "getcontext", "swapcontext", "makecontext")
+NONLOCAL = RETURNS_TWICE + ("longjmp", "_longjmp", "siglongjmp", "setcontext")
 
 
 def load_ps4_linked(eboot, modules):
@@ -198,7 +201,8 @@ def load_ps4_linked(eboot, modules):
     import prepare  # noqa: E402  (on sys.path after _parse_self)
     noreturn = {prepare.nid(n) for n in NORETURN}
     nonlocal_ = {prepare.nid(n) for n in NONLOCAL}
-    img.noreturn_funcs, img.nonlocal_funcs = set(), set()
+    twice = {prepare.nid(n) for n in RETURNS_TWICE}
+    img.noreturn_funcs, img.nonlocal_funcs, img.returns_twice_funcs = set(), set(), set()
     for path, base in modules:
         r = _load_into(img, path, base)
         for name, addr in r["exports"].items():
@@ -207,6 +211,8 @@ def load_ps4_linked(eboot, modules):
                 img.noreturn_funcs.add(addr)
             if nid in nonlocal_:
                 img.nonlocal_funcs.add(addr)
+            if nid in twice:
+                img.returns_twice_funcs.add(addr)
     return img
 
 

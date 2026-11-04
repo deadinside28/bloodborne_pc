@@ -117,7 +117,9 @@ output, which must equal the x86-64 run's.
   full crossings a second); the whole eboot 44 FPS; with the modules and light calls into bbport
   45 FPS: the recompiled code itself was the cost then (66% of samples, the original code had
   31%: default mode stores and loads the whole register file at every call). **`--abi`
-  (`BB_RECOMP_MODE=abi`): 70 FPS**, a 511 MiB library (default mode 1.16 GiB) built in 6.4 min.
+  (`BB_RECOMP_MODE=abi`): 70 FPS**, a 511 MiB library (default mode 1.16 GiB) built in 6.4 min;
+  with longjmp callers recompiled too (only setjmp callers stay original): **79 FPS**, as fast as
+  unmodified, 165,383 of 165,771 functions.
   Dispatch is a hash lookup, MXCSR is loaded only when it changed, counts are per thread (a
   shared atomic counter was a cache-line fight between cores).
 - **Known limits:** C++ exceptions cannot unwind through the thunks (a native callee's return
