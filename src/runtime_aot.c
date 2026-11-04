@@ -40,6 +40,9 @@ void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
 static const RecompEntry *table;
 static uint64_t table_size;
 static uint64_t image_size;  /* the game's image: [__recomp_slide, +image_size) is guest code and data */
+/* Calls into the runtime take recomp_hybrid_call_host (argument and result registers only);
+ * BB_AOT_HOST_CALLS=full: the whole register file, as calls into the game's own code. */
+static int host_calls_light = 1;
 static int enabled;
 
 /* Link address -> recompiled function: open addressing, at most half full (every call of
@@ -93,8 +96,14 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
     const RecompFn fn = lookup(target - __recomp_slide);
     if (fn) { fn(st); return; }
     DispatchEvent *e = note(st, target, (uint64_t)(uintptr_t)__builtin_return_address(0), EV_CALL);
-    if (target - __recomp_slide >= image_size) recomp_hybrid_self->host_calls++;  /* bbport, not the game */
-    else if (runtime_libc_base && target >= runtime_libc_base) recomp_hybrid_self->module_calls++;  /* libc.prx... */
+    if (target - __recomp_slide >= image_size) {  /* bbport's runtime (an import), not the game */
+        recomp_hybrid_self->host_calls++;
+        if (host_calls_light) {
+            recomp_hybrid_call_host(st, target);
+            if (e->target == target) e->done_rsp = st->gpr[G_RSP];
+            return;
+        }
+    } else if (runtime_libc_base && target >= runtime_libc_base) recomp_hybrid_self->module_calls++;  /* libc.prx... */
     recomp_dispatch_fallback(st, target);
     if (e->target == target) e->done_rsp = st->gpr[G_RSP];  /* unless the ring went round */
 }
@@ -248,6 +257,8 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     const uint64_t *nopatch = dlsym(lib, "__recomp_nopatch");
     const uint64_t *nopatch_count = dlsym(lib, "__recomp_nopatch_size");
     const uint64_t n_nopatch = nopatch && nopatch_count ? *nopatch_count : 0;
+    const char *host_calls = bb_env("BB_AOT_HOST_CALLS");
+    host_calls_light = !(host_calls && !strcmp(host_calls, "full"));
     recomp_hybrid_fs_from_gs = 1;
     recomp_hybrid_enable();
     uint64_t patched = 0, k = 0;

@@ -56,6 +56,8 @@ HybridTotals recomp_hybrid_totals(void);
 int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why);
 // The dispatcher's fallback for targets that have no recompiled function.
 void recomp_hybrid_call_native(RecompState *st, uint64_t target);
+// A call to a host function (SysV ABI, not guest code): argument and result registers only.
+void recomp_hybrid_call_host(RecompState *st, uint64_t target);
 // __recomp_dispatch_jump's fallback: the original code continues at target for good (the
 // thread's innermost entry ends); no return.
 __attribute__((noreturn)) void recomp_hybrid_jump_native(RecompState *st, uint64_t target);

@@ -175,17 +175,59 @@ def fde_functions(image, hdr_addr):
 
 def load_ps4(path):
     """The game's executable (eboot.bin) as an Image with FDE function ranges."""
+    img = Image()
+    r = _load_into(img, path, 0)
+    img.link_base = r["link_base"]
+    img.entry = r["entry"]
+    img.relocations_applied = r["applied"]
+    return img
+
+
+# Imports and exports that return twice or jump across frames: hybrid execution keeps them, and
+# their callers, original (recomp/game.py).
+NONLOCAL = ("setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "longjmp", "_longjmp", "siglongjmp",
+            "getcontext", "setcontext", "swapcontext", "makecontext")
+
+
+def load_ps4_linked(eboot, modules):
+    """The executable with the game's bundled system modules (libc.prx, ...) placed as bbport's
+    scripts/link_modules.py links them: modules = [(path, base)], base an image offset. Their
+    exports that never return or return twice are noted by address (img.noreturn_funcs,
+    img.nonlocal_funcs): calls inside a module reach them directly, not through a GOT slot."""
+    img = load_ps4(eboot)
+    import prepare  # noqa: E402  (on sys.path after _parse_self)
+    noreturn = {prepare.nid(n) for n in NORETURN}
+    nonlocal_ = {prepare.nid(n) for n in NONLOCAL}
+    img.noreturn_funcs, img.nonlocal_funcs = set(), set()
+    for path, base in modules:
+        r = _load_into(img, path, base)
+        for name, addr in r["exports"].items():
+            nid = name.split("#")[0]
+            if nid in noreturn:
+                img.noreturn_funcs.add(addr)
+            if nid in nonlocal_:
+                img.nonlocal_funcs.add(addr)
+    return img
+
+
+def _load_into(img, path, base):
+    """Places a PS4 module (SELF or ELF) in img at image offset `base`: segments, base-relative
+    relocations (value base + addend), import GOT slots (img.imports, img.noreturn_got) and FDE
+    function ranges. Returns its entry, link base, relocation count and exports {name: address}."""
     data = Path(path).read_bytes()
     elf, header, ph, _segments, _missing = _parse_self(data)
-    img = Image()
+    if not hasattr(img, "imports"):
+        img.imports = {}  # GOT slot -> import name (NID#library#module)
+        img.noreturn_got = set()
     loads = [p for p in ph if p["type"] in (PT_LOAD, PT_SCE_RELRO)]
-    img.link_base = min(p["vaddr"] for p in loads)
+    first_new = len(img.segments)
     for p in loads:
         seg = bytearray(elf[p["offset"]:p["offset"] + p["filesz"]]) + bytes(p["memsz"] - p["filesz"])
-        img.segments.append([p["vaddr"], seg, bool(p["flags"] & 1)])
+        img.segments.append([base + p["vaddr"], seg, bool(p["flags"] & 1)])
         if not p["flags"] & 2 and p["type"] == PT_LOAD:  # RELRO is written by the loader first
-            img.readonly.append((p["vaddr"], p["vaddr"] + p["memsz"]))
-    # base-relative relocations (type 8: 231,478 of the game's 235,000), at link base 0
+            img.readonly.append((base + p["vaddr"], base + p["vaddr"] + p["memsz"]))
+    new = img.segments[first_new:]
+    # base-relative relocations (type 8: 231,478 of the game's 235,000)
     dyn = next(p for p in ph if p["type"] == PT_DYNAMIC)
     tags = {}
     for pos in range(dyn["offset"], dyn["offset"] + dyn["filesz"], 16):
@@ -203,8 +245,6 @@ def load_ps4(path):
         return strings[off:strings.index(0, off)].decode("ascii")
     import prepare  # noqa: E402  (on sys.path after _parse_self)
     noreturn_nids = {prepare.nid(n): n for n in NORETURN}
-    img.imports = {}  # GOT slot -> import name (NID#library#module)
-    img.noreturn_got = set()
     applied = 0
     for off_tag, size_tag in ((0x61000029, 0x6100002D), (0x6100002F, 0x61000031)):
         if off_tag not in tags:
@@ -214,24 +254,28 @@ def load_ps4(path):
             target, info, addend = struct.unpack_from("<QQq", table, pos)
             if info & 0xFFFFFFFF == R_X86_64_JUMP_SLOT:
                 name = symbol_name(info >> 32)
-                img.imports[target] = name
+                img.imports[base + target] = name
                 if name.split("#")[0] in noreturn_nids:
-                    img.noreturn_got.add(target)
+                    img.noreturn_got.add(base + target)
             if info & 0xFFFFFFFF == R_X86_64_RELATIVE:
-                for seg in img.segments:
-                    if seg[0] <= target and target + 8 <= seg[0] + len(seg[1]):
-                        struct.pack_into("<Q", seg[1], target - seg[0], addend & 0xFFFFFFFFFFFFFFFF)
+                for seg in new:
+                    if seg[0] <= base + target and base + target + 8 <= seg[0] + len(seg[1]):
+                        struct.pack_into("<Q", seg[1], base + target - seg[0], (base + addend) & 0xFFFFFFFFFFFFFFFF)
                         applied += 1
                         break
-    img.segments = [(v, bytes(d), x) for v, d, x in img.segments]
+    img.segments[first_new:] = [(v, bytes(d), x) for v, d, x in new]
+    exports = {}  # defined symbols: name -> address
+    for i in range(len(syms) // 24):
+        name_off, _info, _other, shndx, value, _size = struct.unpack_from("<IBBHQQ", syms, i * 24)
+        if shndx and value:
+            exports[strings[name_off:strings.index(0, name_off)].decode("ascii")] = base + value
     eh = next((p for p in ph if p["type"] == PT_GNU_EH_FRAME), None)
     if eh is None:
         raise ValueError("no PT_GNU_EH_FRAME: no function ranges")
-    for fn in fde_functions(img, eh["vaddr"]):
+    for fn in fde_functions(img, base + eh["vaddr"]):
         img.functions.setdefault(fn.start, fn)
-    img.entry = header[4]
-    img.relocations_applied = applied
-    return img
+    return dict(entry=base + header[4], link_base=base + min(p["vaddr"] for p in loads), applied=applied,
+                exports=exports)
 
 
 def is_ps4(path):

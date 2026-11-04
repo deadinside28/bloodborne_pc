@@ -55,11 +55,21 @@ def main():
                     help="with --only: bbport's image as it runs (BB_AOT_DUMP); functions it changed stay original. "
                          "Repeat for each configuration the library must run in (settings install hooks)")
     gp.add_argument("--volatile", action="store_true", help=vhelp)
+    gp.add_argument("--link", metavar="LINK_JSON",
+                    help="bbport's out/link.json: the game's system modules (sce_module/*.prx next to the "
+                         "executable) are loaded at its bases and lifted with the executable")
     a = ap.parse_args()
     if a.cmd == "game":
         from . import game
-        from .ps4 import load_ps4
-        img = load_ps4(a.eboot)
+        from .ps4 import load_ps4, load_ps4_linked
+        if a.link:
+            import json
+            from pathlib import Path
+            layout = json.loads(Path(a.link).read_text())
+            module_dir = Path(a.eboot).resolve().parent / "sce_module"
+            img = load_ps4_linked(a.eboot, [(module_dir / m["file"], int(m["base"], 16)) for m in layout["modules"]])
+        else:
+            img = load_ps4(a.eboot)
         only = read_addresses(a.only) if a.only else None
         live = [open(p, "rb").read() for p in a.live] if a.live else None
         total = game.run(img, out=a.out, shard_size=a.shard, workers=a.workers, tso=a.tso, abi=a.abi, limit=a.limit,

@@ -1440,6 +1440,8 @@ class ModuleLifter:
         return self._stubs[addr]
 
     def is_noreturn(self, addr):
+        if addr in getattr(self.image, "noreturn_funcs", ()):  # a linked module's own (exit, longjmp)
+            return True
         got = self.import_stub(addr)
         return got is not None and got in getattr(self.image, "noreturn_got", ())
 

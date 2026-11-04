@@ -22,6 +22,10 @@ lf=(); [[ ${BB_RECOMP_MODE:-default} == abi ]] && lf=(--abi)
 # drop or hoist them (a loop waiting on a flag another thread sets must keep reading it; without
 # this the game hung at its first frames with the 200 hottest functions). BB_RECOMP_VOLATILE=0: off.
 [[ ${BB_RECOMP_VOLATILE:-1} == 1 ]] && lf+=(--volatile)
+# The game's system modules (libc.prx, libSceFios2.prx) as run.sh links them (out/link.json):
+# their functions can be listed too. BB_AOT_LINK=none: the executable alone.
+link=${BB_AOT_LINK:-$(cd "$root/.." && pwd)/out/link.json}
+[[ $link != none && -f $link ]] && lf+=(--link "$link")
 rm -rf "$dir"; mkdir -p "$dir"
 # Functions that stay original whatever the list says: bbport's page-write tracking recognises
 # them by the faulting instruction's address (gpu/games/bloodborne.cpp DynamicWriters).
@@ -33,7 +37,11 @@ grep -E '^(hybrid|  left original|  lifted, entry)' "$dir/survey.txt" || true
 # BB_RECOMP_JOBS: parallel compiles (default: the cores, at most 8; a shard of the whole game
 # takes 1-3 GiB in clang).
 jobs=${BB_RECOMP_JOBS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}
+# The IR goes once compiled and the objects once linked (the whole game: ~10 GB of IR, ~3 GB of
+# objects); BB_AOT_KEEP_IR=1 keeps both.
+keep=${BB_AOT_KEEP_IR:-0}
 ls "$dir"/part-*.ll "$dir"/table.ll | xargs -P "$jobs" -I{} sh -c \
-    'clang -O2 -fPIC --target=x86_64-linux-gnu -march=x86-64-v2 -c -Wno-override-module "$1" -o "${1%.ll}.o"' _ {}
+    'clang -O2 -fPIC --target=x86_64-linux-gnu -march=x86-64-v2 -c -Wno-override-module "$1" -o "${1%.ll}.o" && { [ "$2" = 1 ] || rm -f "$1"; }' _ {} "$keep"
 clang -shared -o "$dir/libbbaot.so" "$dir"/*.o
+[[ $keep == 1 ]] || rm -f "$dir"/*.o
 echo "$dir/libbbaot.so: $(( $(stat -c %s "$dir/libbbaot.so") / 1024 )) KiB"

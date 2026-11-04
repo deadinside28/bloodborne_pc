@@ -103,11 +103,23 @@ output, which must equal the x86-64 run's.
   extent, 86 call setjmp/longjmp, 27 changed by bbport, 14 with a jump into their first 5 bytes, 5
   with CFG errors; `0x20858a0`, `0x2ab7350` stay original: bbport's write tracking knows them by
   address). 4 minutes: 799M entries, 2.08G calls back, 57M jumps back, no fault.
-- **Cost:** gameplay at 37 FPS against ~80 without (Ryzen 7 5800X, RTX 3070): ~14M crossings a
-  second, each storing and loading the whole register file (16 GPRs, 32 vector halves); the
-  recompiled code itself (default mode: the whole register file at calls) about 1.5x the time of
-  the original. Dispatch is a hash lookup, MXCSR is loaded only when it changed, counts are per
-  thread (a shared atomic counter was a cache-line fight between cores).
+- **The whole game:** `recomp game --link out/link.json` loads the eboot with the game's linked
+  system modules (libc.prx, libSceFios2.prx, at run.sh's bases; their setjmp/longjmp and callers
+  stay original). Recompiled: 163,510 of 165,773 functions (14,836 of them for recompiled callers
+  only: under 5 bytes or jumped into within 5); original: 2,001 setjmp/longjmp callers, 156 module
+  functions with unsupported instructions, 81 changed by bbport, 21 CFG errors, 2 setjmp/longjmp.
+- **Calls into bbport** (imports bound to host functions) take `recomp_hybrid_call_host`: argument
+  and result registers only, on the guest stack (`BB_AOT_HOST_CALLS=full`: the whole register
+  file). Two runtime functions look up the stack for the calling game code (the debug-exception
+  handler that ignores the blur-kernel assertion, the unresolved-import report); with hybrid
+  execution they find a thunk where the game's return address was: not handled yet.
+- **Cost (gameplay, Ryzen 7 5800X, RTX 3070, ~80 FPS unmodified):** 4,034 functions 37 FPS (~14M
+  full crossings a second); the whole eboot 44 FPS; with the modules and light calls into bbport
+  45 FPS: the recompiled code itself was the cost then (66% of samples, the original code had
+  31%: default mode stores and loads the whole register file at every call). **`--abi`
+  (`BB_RECOMP_MODE=abi`): 70 FPS**, a 511 MiB library (default mode 1.16 GiB) built in 6.4 min.
+  Dispatch is a hash lookup, MXCSR is loaded only when it changed, counts are per thread (a
+  shared atomic counter was a cache-line fight between cores).
 - **Known limits:** C++ exceptions cannot unwind through the thunks (a native callee's return
   address is the thunk's label; recompiled frames have no unwind info), so functions with handlers
   and their callers stay original; patching a running function's entry is not atomic yet (install

@@ -263,6 +263,67 @@ recomp_hybrid_call_native:
 9:      ud2                             // a return through a slot no call here borrowed
         .size recomp_hybrid_call_native, . - recomp_hybrid_call_native
 
+// Recompiled code -> a host function (an import bound to the runtime, which follows the SysV
+// ABI): void recomp_hybrid_call_host(RecompState *st, uint64_t target). Much lighter than
+// recomp_hybrid_call_native: only the argument registers are loaded (rdi rsi rdx rcx r8 r9,
+// xmm0-7, and rax: al counts vector arguments of varargs calls) and only the results stored
+// (rax rdx xmm0 xmm1); the callee keeps the callee-saved registers, whose guest values stay in
+// the state. It runs on the guest stack just above the return slot the guest pushed, so stack
+// arguments are where it expects them; its own return address borrows that slot for the call.
+// Entries into recompiled code from the host function (callbacks) continue below this frame.
+        .globl recomp_hybrid_call_host
+        .p2align 4
+        .type recomp_hybrid_call_host, @function
+recomp_hybrid_call_host:
+        push rbp
+        push rbx
+        push r12
+        push r13
+        push r14
+        push r15
+        sub rsp, 8
+        mov rbx, rdi                    // state
+        mov r12, rsi                    // target
+        SELF r13
+        mov r14, [r13]                  // host_sp, restored afterwards
+        lea rax, [rsp - 256]
+        and rax, -16
+        mov [r13], rax
+        mov r15, rsp                    // this frame
+        mov rax, [rbx + 32]
+        mov rbp, [rax]                  // the guest's return address
+        mov rdi, [rbx + 56]
+        mov rsi, [rbx + 48]
+        mov rdx, [rbx + 16]
+        mov rcx, [rbx + 8]
+        mov r8,  [rbx + 64]
+        mov r9,  [rbx + 72]
+        .irp i, 0, 1, 2, 3, 4, 5, 6, 7
+        vmovdqu xmm\i, xmmword ptr [rbx + 160 + 16 * \i]
+        .endr
+        lea rsp, [rax + 8]              // stack arguments at [rsp + 8] after the call
+        mov rax, [rbx]
+        call r12
+        mov rsp, r15
+        mov [rbx], rax
+        mov [rbx + 16], rdx
+        vmovdqu xmmword ptr [rbx + 160], xmm0
+        vmovdqu xmmword ptr [rbx + 176], xmm1
+        mov rax, [rbx + 32]
+        mov [rax], rbp                  // the guest's return slot as it was
+        add qword ptr [rbx + 32], 8     // the host function's return popped it
+        mov [r13], r14
+        cld
+        add rsp, 8
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbx
+        pop rbp
+        ret
+        .size recomp_hybrid_call_host, . - recomp_hybrid_call_host
+
 // Recompiled code -> original code for good: void recomp_hybrid_jump_native(RecompState *st,
 // uint64_t target), no return. For jumps (not calls) to code that has no recompiled function: the
 // middle of a function, say, where [rsp] is no return address to borrow. The thread's innermost

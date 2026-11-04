@@ -64,7 +64,10 @@ def _work(job):
             nopatch[a] = "a jump target inside the first 5 bytes"
         if c.errors:
             bad[a] = "CFG error"
-        elif any(mod.import_stub(t) in getattr(img, "nonlocal_got", ()) for t in c.call_targets | c.tail_targets):
+        elif a in getattr(img, "nonlocal_funcs", ()):
+            bad[a] = "is setjmp/longjmp (a linked module's)"
+        elif any(mod.import_stub(t) in getattr(img, "nonlocal_got", ()) or t in getattr(img, "nonlocal_funcs", ())
+                 for t in c.call_targets | c.tail_targets):
             # setjmp would keep the thunk's return label as its return point, and longjmp would
             # leave the thunks' bookkeeping behind (the game hung in a loop whose counter pointer
             # came back from a stale state: 0xa30af0)
@@ -171,16 +174,13 @@ def code_hash(data):
     return h
 
 
-NONLOCAL = ("setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "longjmp", "_longjmp", "siglongjmp",
-            "getcontext", "setcontext", "swapcontext", "makecontext")
-
-
 def _nonlocal_slots(img):
     """GOT slots of imports that return twice or jump across frames (setjmp, longjmp, contexts)."""
     imports = getattr(img, "imports", None)
     if not imports:
         return frozenset()
     import prepare  # scripts/prepare.py, on sys.path once the executable is loaded (ps4.py)
+    from .ps4 import NONLOCAL
     nids = {prepare.nid(n) for n in NONLOCAL}
     return frozenset(slot for slot, name in imports.items() if name.split("#")[0] in nids)
 
