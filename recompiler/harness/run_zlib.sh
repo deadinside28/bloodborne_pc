@@ -30,7 +30,7 @@ for mode in ${BB_RECOMP_MODES:-default abi}; do
     if (( arm )); then
         (cd "$root" && "$py" -W ignore -m recomp lift "$lib" "${lf[@]}" --tso -o "$out/libz-$mode.tso.ll") 2>/dev/null
         for ir in libz-$mode libz-$mode.tso; do
-            clang -O2 --target=aarch64-linux-gnu -march=armv8.2-a+rcpc -c -Wno-override-module "$out/$ir.ll" -o "$out/$ir.aarch64.o"
+            clang -O2 --target=aarch64-linux-gnu -march=armv8.4-a+rcpc -c -Wno-override-module "$out/$ir.ll" -o "$out/$ir.aarch64.o"
             arm_cc -I"$here" -I"$out/zinc" -o "$out/$ir.zlib_test.a64" "$here/zlib_test.c" "$here/recomp_loader.c" "$out/$ir.aarch64.o"
             got=$("$qemu" "$out/$ir.zlib_test.a64" "$lib" -q -d 2> "$out/$ir.a64.log" | tee "$out/$ir.a64.out" | sed -n 's/^digest: \([0-9a-f]*\).*/\1/p')
             checks=$(grep -o '[0-9]* checks total, [0-9]* failed' "$out/$ir.a64.out" || echo "no result")

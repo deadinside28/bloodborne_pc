@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <zlib.h>
 
 #include "recomp_loader.h"
@@ -257,6 +258,8 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "-q")) quiet = 1;
         if (!strcmp(argv[i], "-d")) lifted_only = 1;
     }
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     recomp_load(argv[1]);
     const uint64_t none[1] = { 0 };
     printf("zlibVersion: original %s, recompiled %s\n", (char *)(uintptr_t)orig("zlibVersion", none, 0),
@@ -269,5 +272,8 @@ int main(int argc, char **argv) {
     printf("streams: %d checks total, %d failed; import calls %" PRIu64 ", dispatch misses %" PRIu64 "\n",
            checks, failures, (uint64_t)recomp_import_calls, (uint64_t)recomp_dispatch_misses);
     printf("digest: %016" PRIx64 "%s\n", digest, lifted_only ? " (recompiled code only)" : "");
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    printf("alignment faults handled: %" PRIu64 "\n", (uint64_t)recomp_alignment_faults);
+    printf("elapsed: %.0f ms\n", (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6);
     return failures ? 1 : 0;
 }

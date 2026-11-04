@@ -1076,7 +1076,7 @@ def _vmaskmov(L, ins, b):
     if ins.op_kind(0) == OK.MEMORY:
         intrinsic(L, f"declare void @llvm.masked.store.{s}.p0({vt}, ptr, i32, <{n} x i1>)")
         if L.mod.tso and not L.stack_relative(ins):
-            L.e("fence release")
+            L.store_barrier()
         L.e(f"call void @llvm.masked.store.{s}.p0({vt} {tov(L, val, bits, e)}, ptr {p}, i32 1, <{n} x i1> {m})")
     else:
         intrinsic(L, f"declare {vt} @llvm.masked.load.{s}.p0(ptr, i32, <{n} x i1>, {vt})")
@@ -1084,3 +1084,65 @@ def _vmaskmov(L, ins, b):
         if L.mod.tso and not L.stack_relative(ins):
             L.e("fence acquire")
         wdst(L, ins, fromv(L, r, bits, e), bits)
+
+
+
+@sem(*both("DPPD"))
+def _dppd(L, ins, b):
+    x, y, _ = srcs(L, ins, 128)
+    imm = ins.immediate(ins.op_count - 1)
+    p = L.op(f"fmul <2 x double> {tov(L, x, 128, 64, True)}, {tov(L, y, 128, 64, True)}")
+    e = [L.op(f"extractelement <2 x double> {p}, i32 {i}") if imm & (0x10 << i) else "0.0" for i in range(2)]
+    s_ = L.op(f"fadd double {e[0]}, {e[1]}")
+    r = L.op("bitcast i128 0 to <2 x double>")
+    for i in range(2):
+        if imm & (1 << i):
+            r = L.op(f"insertelement <2 x double> {r}, double {s_}, i32 {i}")
+    wdst(L, ins, fromv(L, r, 128, 64, True), 128)
+
+
+@sem(*both("PABSB"), *both("PABSW"), *both("PABSD"))
+def _pabs(L, ins, b):
+    bits = dst_bits(L, ins)
+    e = {M.PABSB: 8, M.VPABSB: 8, M.PABSW: 16, M.VPABSW: 16, M.PABSD: 32, M.VPABSD: 32}[ins.mnemonic]
+    vt = vty(bits, e)
+    intrinsic(L, f"declare {vt} @llvm.abs.{vsuffix(bits, e)}({vt}, i1)")
+    r = L.op(f"call {vt} @llvm.abs.{vsuffix(bits, e)}({vt} {tov(L, src(L, ins, 1, bits), bits, e)}, i1 false)")
+    wdst(L, ins, fromv(L, r, bits, e), bits)
+
+
+@sem(*both("ADDSUBPS"), *both("ADDSUBPD"))
+def _addsub(L, ins, b):
+    bits = dst_bits(L, ins)
+    x, y, _ = srcs(L, ins, bits)
+    e = 64 if ins.mnemonic in (M.ADDSUBPD, M.VADDSUBPD) else 32
+    n = bits // e
+    vt = vty(bits, e, True)
+    a, c = tov(L, x, bits, e, True), tov(L, y, bits, e, True)
+    add = L.op(f"fadd {vt} {a}, {c}")
+    sub = L.op(f"fsub {vt} {a}, {c}")
+    idx = ", ".join(f"i32 {i if i % 2 == 0 else n + i}" for i in range(n))  # even lanes subtract
+    r = L.op(f"shufflevector {vt} {sub}, {vt} {add}, <{n} x i32> <{idx}>")
+    wdst(L, ins, fromv(L, r, bits, e, True), bits)
+
+
+@sem(*both("MOVNTPS"), *both("MOVNTPD"), *both("MOVNTDQ"), *both("MOVNTDQA"), M.MOVNTI)
+def _movnt(L, ins, b):
+    """Non-temporal moves: a cache hint; architecturally a plain move."""
+    bits = L.op_bits(ins, 0)
+    L.write(ins, 0, src(L, ins, 1, bits), bits)
+
+
+@sem(*both("MASKMOVDQU"))
+def _maskmovdqu(L, ins, b):
+    """Byte-masked store to [rdi] (bytes whose mask byte has its top bit set). iced lists the
+    implicit [rdi] as operand 0, then the data and mask registers."""
+    v = src(L, ins, 1, 128)
+    m = src(L, ins, 2, 128)
+    di = L.get64(7)
+    p = L.op(f"inttoptr i64 {di} to ptr")
+    mk = L.op(f"icmp slt <16 x i8> {tov(L, m, 128, 8)}, zeroinitializer")
+    intrinsic(L, "declare void @llvm.masked.store.v16i8.p0(<16 x i8>, ptr, i32, <16 x i1>)")
+    if L.mod.tso:
+        L.store_barrier()
+    L.e(f"call void @llvm.masked.store.v16i8.p0(<16 x i8> {tov(L, v, 128, 8)}, ptr {p}, i32 1, <16 x i1> {mk})")

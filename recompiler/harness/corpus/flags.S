@@ -368,4 +368,114 @@ T pushf_popf
     adc rax, rsi
 FL pushf_popf, ARITH
 
+// ---- carry instructions, newer vector forms, MXCSR -------------------------------------------
+T carry_ops
+    cmp rdi, rsi
+    cmc
+    mov rax, rdx
+    adc rax, 0
+    stc
+    adc rax, rdi
+    clc
+    adc rax, rsi
+FL carry_ops, ARITH
+// finite positive doubles from the inputs: the mantissa, and an exponent from 9 input bits
+// (2^-256 .. 2^255), so products and sums never overflow to inf or become NaN
+.macro FINITE reg, tmp
+    mov \tmp, \reg
+    shr \tmp, 52
+    and \tmp, 0x1ff
+    add \tmp, 0x2ff
+    shl \tmp, 52
+    shl \reg, 12
+    shr \reg, 12
+    or \reg, \tmp
+.endm
+T dppd
+    FINITE rdi, r8
+    FINITE rsi, r8
+    FINITE rdx, r8
+    movq xmm0, rdi
+    movq xmm1, rsi
+    pinsrq xmm0, rdx, 1
+    pinsrq xmm1, rdi, 1
+    dppd xmm0, xmm1, 0x31
+    movq rax, xmm0
+FL dppd, 0
+T vdppd
+    FINITE rdi, r8
+    FINITE rsi, r8
+    FINITE rdx, r8
+    vmovq xmm2, rdi
+    vpinsrq xmm2, xmm2, rsi, 1
+    vmovq xmm3, rdx
+    vpinsrq xmm3, xmm3, rdi, 1
+    vdppd xmm0, xmm2, xmm3, 0x33
+    vpextrq rax, xmm0, 1
+FL vdppd, 0
+T pabs
+    movq xmm0, rdi
+    pinsrq xmm0, rsi, 1
+    pabsb xmm1, xmm0
+    pabsw xmm2, xmm0
+    vpabsd xmm3, xmm0
+    pxor xmm1, xmm2
+    pxor xmm1, xmm3
+    movq rax, xmm1
+    pextrq rdx, xmm1, 1
+    xor rax, rdx
+FL pabs, 0
+T addsubps
+    mov r8, 0xbfffffffbfffffff  // bit 30 of each 32-bit lane clear: finite floats and doubles
+    and rdi, r8
+    and rsi, r8
+    and rdx, r8
+    movq xmm0, rdi
+    pinsrq xmm0, rsi, 1
+    movq xmm1, rdx
+    pinsrq xmm1, rdi, 1
+    addsubps xmm0, xmm1
+    vaddsubpd xmm2, xmm1, xmm0
+    pxor xmm0, xmm2
+    movq rax, xmm0
+FL addsubps, 0
+T movnt
+    movq xmm0, rdi
+    pinsrq xmm0, rsi, 1
+    movntdq [rcx + 64], xmm0
+    movnti [rcx + 96], rdx
+    movntdqa xmm1, [rcx + 64]
+    movq rax, xmm1
+    add rax, [rcx + 96]
+FL movnt, 0
+T maskmovdqu
+    movq xmm0, rsi
+    pinsrq xmm0, rdx, 1
+    movq xmm1, rdi
+    pinsrq xmm1, rsi, 1
+    mov rdi, rcx
+    add rdi, 32
+    maskmovdqu xmm0, xmm1
+    mov rax, [rcx + 32]
+    xor rax, [rcx + 40]
+FL maskmovdqu, 0
+T mxcsr
+    stmxcsr dword ptr [rcx]
+    mov eax, dword ptr [rcx]
+    mov r8d, eax
+    xor r8d, 0x40
+    mov dword ptr [rcx + 4], r8d
+    ldmxcsr dword ptr [rcx + 4]
+    vstmxcsr dword ptr [rcx + 8]
+    ldmxcsr dword ptr [rcx]
+    mov r9d, dword ptr [rcx + 8]
+    shl rax, 32
+    or rax, r9
+    mov r9, 0xffffffc0ffffffc0  // control bits only: the sticky exception flags (bits 0-5) are not modelled
+    and rax, r9
+    mov dword ptr [rcx], 0  // nor written back to buf
+    mov dword ptr [rcx + 4], 0
+    mov dword ptr [rcx + 8], 0
+FL mxcsr, 0
+
     .section .note.GNU-stack, "", @progbits

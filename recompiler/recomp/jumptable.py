@@ -92,6 +92,14 @@ def _bound(preds, load, idx_full):
         if len(ps) != 1:
             break
         p = ps[0]
+        # guard taken towards the table: `cmp idx, N; jbe/jb table` (N+1 / N entries)
+        if p.mnemonic in (M.JBE, M.JB) and p.near_branch_target == cur.ip and p.next_ip != cur.ip:
+            ps2 = [q for q in preds.get(p.ip, []) if q.next_ip == p.ip]
+            if ps2 and ps2[0].mnemonic == M.CMP and ps2[0].op0_kind == OK.REGISTER \
+                    and _full(ps2[0].op0_register) in regs and ps2[0].op1_kind in IMMS:
+                n = ps2[0].immediate(1) & 0xffffffff
+                return n + 1 if p.mnemonic == M.JBE else n
+        # guard falling through to the table: `cmp idx, N; ja/jae default`
         if p.mnemonic in (M.JA, M.JAE) and p.next_ip == cur.ip:
             ps2 = [q for q in preds.get(p.ip, []) if q.next_ip == p.ip]
             if ps2 and ps2[0].mnemonic == M.CMP and ps2[0].op0_kind == OK.REGISTER \
@@ -120,6 +128,40 @@ def _bound(preds, load, idx_full):
     return None
 
 
+_bases_cache = {}
+
+
+def _table_bases(image, fn_start, fn_end):
+    """Every RIP-relative lea target in a linear sweep of the function: candidate table bases.
+    (A sweep also decodes data in the function, but real leas are found; extra ones only make the
+    scan stop earlier.)"""
+    key = (fn_start, fn_end)
+    if key not in _bases_cache:
+        if len(_bases_cache) > 4096:
+            _bases_cache.clear()
+        data = image.read(fn_start, fn_end - fn_start) or b""
+        bases = set()
+        for i in X.Decoder(64, data, ip=fn_start):
+            if i.mnemonic == M.LEA and i.is_ip_rel_memory_operand:
+                bases.add(i.ip_rel_memory_address)
+        _bases_cache[key] = bases
+    return _bases_cache[key]
+
+
+def _through_copies(preds, at, reg, depth=4):
+    """The definitions of reg reaching `at`, following `mov reg, other` copies back."""
+    out = []
+    for d in _defs(preds, at, reg) or []:
+        if depth and d.mnemonic == M.MOV and d.op1_kind == OK.REGISTER and X.RegisterInfo(d.op1_register).size == 8:
+            more = _through_copies(preds, d, _full(d.op1_register), depth - 1)
+            if not more:
+                return []
+            out += more
+        else:
+            out.append(d)
+    return out
+
+
 def match(image, insns, jmp, fn_start=0, fn_end=0):
     if jmp.op_count != 1 or jmp.op0_kind != OK.REGISTER:
         return None
@@ -139,7 +181,7 @@ def match(image, insns, jmp, fn_start=0, fn_end=0):
     if load.mnemonic != M.MOVSXD or load.op1_kind != OK.MEMORY or load.memory_index_scale != 4 \
             or _full(load.memory_base) != base or load.memory_displacement:
         return None
-    leas = _defs(preds, load, base)
+    leas = _through_copies(preds, load, base)
     if not leas or {(l.mnemonic, l.is_ip_rel_memory_operand and l.ip_rel_memory_address) for l in leas} != \
             {(M.LEA, leas[0].ip_rel_memory_address)} or not leas[0].is_ip_rel_memory_operand:
         return None
@@ -150,14 +192,23 @@ def match(image, insns, jmp, fn_start=0, fn_end=0):
         if raw is None:
             return None
         targets = [table + v for v in struct.unpack(f"<{count}i", raw)]
-        if not all(image.is_code(t) for t in targets):
-            return None
-        return Table(table, count, targets)
-    # no bound: entries while they land inside the function
+        if all(image.is_code(t) and (not fn_end or fn_start <= t < fn_end) for t in targets):
+            return Table(table, count, targets)
+        # The bound found is an upper bound (a mask, `movzx` of a byte) looser than the switch's
+        # own guard, which tested a separately computed copy of the index: read at most that many
+        # entries, as the scan below does.
+        limit = count
+    else:
+        limit = MAX_ENTRIES
+    # entries while they land inside the function, stopping at the next table
     if not fn_end:
         return None
+    others = sorted(b for b in _table_bases(image, fn_start, fn_end) if b > table)
+    stop = others[0] if others else None
     targets = []
-    while len(targets) < MAX_ENTRIES:
+    while len(targets) < limit:
+        if stop is not None and table + 4 * len(targets) >= stop:
+            break
         raw = image.read(table + 4 * len(targets), 4)
         if raw is None:
             break

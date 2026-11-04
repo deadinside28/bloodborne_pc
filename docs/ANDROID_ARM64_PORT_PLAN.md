@@ -109,6 +109,14 @@ Many Android arm64 kernels use 39-bit virtual addresses (512 GiB user space, top
 
 Verifying the target devices' `VA_BITS` is a Phase 0 task.
 
+**Measured (2026-11-04, Galaxy S25 Ultra, Snapdragon 8 Elite, Android 17, kernel 6.6 GKI,
+`recompiler/harness/device/va_probe.c`):** 39-bit user address space, 4 KiB pages. `0x0800000000`
+and `0x1000000000` map at their own addresses, `0x8000000000` and above do not; the largest
+contiguous reservation from `0x1000000000` is 402 GiB of the 944 GiB the port reserves today.
+Option 1 therefore depends on the game's real peak guest address staying below roughly
+`0x7000000000`, which the Phase 0 profile on PC has to measure. CPU features: LSE, LRCPC,
+LRCPC2 (`ilrcpc`) and LSE2 (`uscat`: misaligned atomics within 16 bytes do not fault).
+
 ## 2. The recompiler: design decisions
 
 | Decision | Choice | Why |
@@ -157,6 +165,9 @@ They are wide on purpose: Phases 1–3 carry most of the uncertainty.
 
 Exit: written device matrix + profile; go/no-go on the address-space option.
 
+**Status (2026-11-04):** one device measured (§1d: Galaxy S25 Ultra, 39-bit address space, LSE,
+LRCPC, LRCPC2, LSE2). Not done: the PC profile of the game's peak guest address and hot functions.
+
 ### Phase 1: recompiler core on x86-64 (3–5 months)
 
 - CFG recovery over all 163k ranges: switch tables, tail calls, landing pads; resolve the
@@ -170,6 +181,17 @@ Exit: written device matrix + profile; go/no-go on the address-space option.
 
 Exit: AOT x86-64 build plays like the original on PC. This proves the translation without any
 ARM, Android or driver variable.
+
+**Status (2026-11-04):** the recompiler exists (`recompiler/`, branch `recompiler`). Python front
+end (iced-x86 decoder, own CFG and jump-table recovery, ~600 instruction semantics) emitting LLVM
+IR. Differentially tested against original code (144 corpus functions in 54 x86-64 and AArch64
+configurations; the system's libz, 1,581 checks). On the game, from FDEs alone: 162,961 functions,
+9.98M instructions, 3 unsupported sites (junk decodes), 24 decode failures (the analysis above found
+22), every direct call resolved (63,641 through import GOT slots), 3,915 jump tables. The lifter is
+not the schedule risk it was estimated to be (Remill was not needed); what remains of Phase 1 is
+the integration into bbport: PRX modules, NID imports, hooks as input, `BB_AOT=1`. x86 memory
+ordering measured on the phone: 1.08× with acquire/release (`ldapr`/`stlr`) and an inline
+alignment check, against 3.5× with barriers, so risk 2/6 in §5 is much smaller than feared.
 
 ### Phase 2: retarget to AArch64, Linux (2–3 months)
 

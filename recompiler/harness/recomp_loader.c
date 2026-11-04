@@ -10,6 +10,8 @@
 #include "recomp_loader.h"
 
 #include <dlfcn.h>
+#include <signal.h>
+#include <ucontext.h>
 #include <elf.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -232,6 +234,87 @@ void recomp_load(const char *path) {
     recomp_image.eh = eh;
 }
 
+// The guest's time stamp counter (rdtsc). bbport will return the PS4 TSC here; the harness uses
+// the host's counter (rdtsc on x86-64, the virtual counter on AArch64).
+uint64_t __recomp_rdtsc(void) {
+#if defined(__x86_64__)
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return (uint64_t)hi << 32 | lo;
+#elif defined(__aarch64__)
+    uint64_t v;
+    __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+#else
+#error "no counter for this host"
+#endif
+}
+
+// cpuid for recompiled code: the host's answer (bbport will report the PS4's Jaguar).
+void __recomp_cpuid(uint32_t leaf, uint32_t sub, uint32_t out[4]) {
+#if defined(__x86_64__)
+    __asm__ volatile("cpuid" : "=a"(out[0]), "=b"(out[1]), "=c"(out[2]), "=d"(out[3]) : "a"(leaf), "c"(sub));
+#else
+    (void)sub;
+    memset(out, 0, 16);
+    if (leaf == 0) { out[0] = 1; memcpy(&out[1], "Auth", 4); memcpy(&out[3], "enti", 4); memcpy(&out[2], "cAMD", 4); }
+#endif
+}
+
+
+// ---- AArch64: misaligned acquire loads / release stores (--tso-rcpc) ------------------------------
+// ldapr/ldapur/stlr/stlur assume alignment. LSE2 CPUs accept misalignment inside a 16-byte granule
+// and raise an alignment fault (SIGBUS) across one; x86 code does such accesses legitimately. The
+// handler performs the faulting access byte-wise with the barrier it stands for, and continues at
+// the next instruction. recomp_alignment_faults counts them (each costs a signal).
+_Atomic uint64_t recomp_alignment_faults;
+#if defined(__aarch64__)
+static void alignment_fault(int sig, siginfo_t *si, void *ctx) {
+    ucontext_t *uc = ctx;
+    uint64_t *x = (uint64_t *)uc->uc_mcontext.regs;
+    uint32_t in = *(const uint32_t *)(uintptr_t)uc->uc_mcontext.pc;
+    unsigned size = 1u << (in >> 30), rt = in & 31, rn = (in >> 5) & 31;
+    uint64_t base = rn == 31 ? uc->uc_mcontext.sp : x[rn];
+    int load = -1, sign_to = 0;
+    int64_t off = 0;
+    if ((in & 0x3ffffc00) == 0x38bfc000) load = 1;                 // ldapr{b,h,}
+    else if ((in & 0x3ffffc00) == 0x089ffc00) load = 0;            // stlr{b,h,}
+    else if ((in & 0x3f200c00) == 0x19000000) {                     // stlur / ldapur / ldapurs (LRCPC2)
+        unsigned opc = (in >> 22) & 3;
+        off = ((int64_t)(in << 11)) >> 23;                          // imm9, bits 20..12
+        load = opc != 0;
+        sign_to = opc == 2 ? 64 : opc == 3 ? 32 : 0;
+    }
+    if (load < 0) { signal(sig, SIG_DFL); return; }                  // not ours: default action
+    uint8_t *p = (uint8_t *)(uintptr_t)(base + (uint64_t)off);
+    if (load) {
+        uint64_t v = 0;
+        memcpy(&v, p, size);
+        __asm__ volatile("dmb ishld" ::: "memory");
+        if (sign_to) {
+            int64_t sv = (int64_t)(v << (64 - 8 * size)) >> (64 - 8 * size);
+            v = sign_to == 32 ? (uint32_t)sv : (uint64_t)sv;
+        }
+        if (rt != 31) x[rt] = v;
+    } else {
+        uint64_t v = rt == 31 ? 0 : x[rt];
+        __asm__ volatile("dmb ish" ::: "memory");
+        memcpy(p, &v, size);
+    }
+    (void)si;
+    recomp_alignment_faults++;
+    uc->uc_mcontext.pc += 4;
+}
+
+__attribute__((constructor)) static void install_alignment_handler(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = alignment_fault;
+    sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+    sigaction(SIGBUS, &sa, NULL);
+}
+#endif
+
 // ---- dispatch, traps, guest calls ----------------------------------------------------------------
 
 RecompFn recomp_lookup(uint64_t link) {
@@ -265,8 +348,10 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
 
 void __recomp_trap(RecompState *st, uint64_t addr, int32_t kind) {
     (void)st;
-    static const char *kinds[] = { "?", "unsupported instruction", "int3/ud2", "divide error" };
-    fprintf(stderr, "trap: %s at link %#" PRIx64 "\n", kind >= 0 && kind < 4 ? kinds[kind] : "?", addr - __recomp_slide);
+    static const char *kinds[] = { "?", "unsupported instruction", "int3/ud2", "divide error", "?", "?", "no-return function returned" };
+    if (kind >= 0x100) fprintf(stderr, "trap: int %#x at link %#" PRIx64 "\n", kind - 0x100, addr - __recomp_slide);
+    else if (kind == 8) fprintf(stderr, "trap: privileged instruction or syscall at link %#" PRIx64 "\n", addr - __recomp_slide);
+    else fprintf(stderr, "trap: %s at link %#" PRIx64 "\n", kind >= 0 && kind < 7 ? kinds[kind] : "?", addr - __recomp_slide);
     if (recomp_trap_armed) siglongjmp(recomp_trap_jmp, 2);
     abort();
 }
@@ -280,6 +365,7 @@ static _Thread_local uint8_t *guest_stack;
 int recomp_call(RecompFn fn, const uint64_t *args, int nargs, const uint64_t *fargs, int nfargs,
                 RecompState *st, char *why) {
     memset(st, 0, sizeof *st);
+    st->mxcsr = 0x1f80;  // power-on default: all exceptions masked, round to nearest
     for (int i = 0; i < nfargs && i < 8; i++) st->xmm[i] = fargs[i];
     *(uint64_t *)(guest_tcb + 0x28) = 0x2f8a63c1d94e7b05ull;
     *(uint64_t *)guest_tcb = (uint64_t)(uintptr_t)guest_tcb;  // TCB self pointer, as on x86-64 Linux

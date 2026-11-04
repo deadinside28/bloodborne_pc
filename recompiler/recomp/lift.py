@@ -11,8 +11,16 @@ Execution model (see recompiler/README.md):
   addresses + @__recomp_slide (the image's load offset; 0 for an image at its link address).
 - Calls push the guest return address, as the game's stack layout requires; `ret` pops it and
   returns to the LLVM caller. Indirect transfers go through @__recomp_dispatch.
-- tso=True: every non-stack load is followed by `fence acquire` and every non-stack store is
-  preceded by `fence release`, which gives x86's ordering on AArch64 (dmb ishld / dmb ish).
+- tso=True (AArch64 only): x86's memory ordering, for each load and store that may see another
+  thread's data. rcpc="check" (the default): scalar accesses are acquire loads / release stores
+  (ldapr/stlr: an acquire orders the load before everything after it, a release orders everything
+  before the store ahead of it, and store->load stays free, exactly x86-TSO); those that cross a
+  16-byte granule (which ldapr/stlr cannot do even with LSE2) take a plain access with a barrier.
+  rcpc="fault": no check, the runtime's SIGBUS handler performs the crossing ones. rcpc=None:
+  barriers only: dmb ishld after loads, dmb ishst before stores (earlier loads are ordered by their
+  own barrier). Vector accesses always use the barriers. No barrier for stack accesses (rsp-based, and rbp-based
+  in functions that set up a frame pointer: locals are assumed not to be shared with other
+  threads) or for loads from read-only image segments (constants, jump tables).
 """
 import iced_x86 as X
 
@@ -66,6 +74,7 @@ class FunctionLifter:
         self.n = 0
         self.exits = []  # (label, kind, value)
         self.cur_ins = None
+        self.frame_pointer = False
 
     # ---- emission helpers -------------------------------------------------
     def t(self):
@@ -332,10 +341,28 @@ class FunctionLifter:
         return self.op(f"add i64 %slide, {sconst(link_addr, 64)}")
 
     def stack_relative(self, ins):
-        return ins.memory_base in (R.RSP, R.ESP) and ins.memory_segment not in (R.FS, R.GS)
+        """No ordering barrier needed: a stack access (rsp, or rbp in a frame-pointer function),
+        or a RIP-relative access to a read-only image segment."""
+        if ins.memory_segment in (R.FS, R.GS):
+            return False
+        if ins.memory_base in (R.RSP, R.ESP):
+            return True
+        if ins.memory_base == R.RBP and self.frame_pointer and self.mod.local_frames:
+            return True
+        return ins.is_ip_rel_memory_operand and self.mod.image.is_readonly(ins.ip_rel_memory_address)
 
     def load(self, addr, bits, local=False):
         p = self.op(f"inttoptr i64 {addr} to ptr")
+        if self.mod.tso and not local and self.mod.rcpc and bits <= 64:
+            # an acquire load (ldapr/ldapur), which assumes alignment;
+            # LSE2 CPUs accept misalignment within 16 bytes and fault across a 16-byte boundary
+            # ("fault": the runtime's SIGBUS handler does those; "check": test inline and use a
+            # plain load + barrier for the crossing ones)
+            if self.mod.rcpc == "check" and bits > 8:
+                return self._split_access(addr, bits // 8,
+                                          lambda: self.op(f"load atomic i{bits}, ptr {p} acquire, align {bits // 8}"),
+                                          lambda: self._plain_load_acquire(p, bits), bits)
+            return self.op(f"load atomic i{bits}, ptr {p} acquire, align {bits // 8}")
         v = self.op(f"load i{bits}, ptr {p}, align 1")
         if self.mod.tso and not local:
             self.e("fence acquire")
@@ -343,9 +370,47 @@ class FunctionLifter:
 
     def store(self, addr, v, bits, local=False):
         p = self.op(f"inttoptr i64 {addr} to ptr")
+        if self.mod.tso and not local and self.mod.rcpc and bits <= 64:
+            fast = lambda: self.e(f"store atomic i{bits} {v}, ptr {p} release, align {bits // 8}")  # stlr / stlur
+            if self.mod.rcpc == "check" and bits > 8:
+                def slow():
+                    self.store_barrier()
+                    self.e(f"store i{bits} {v}, ptr {p}, align 1")
+                self._split_access(addr, bits // 8, fast, slow, None)
+            else:
+                fast()
+            return
         if self.mod.tso and not local:
-            self.e("fence release")
+            self.store_barrier()
         self.e(f"store i{bits} {v}, ptr {p}, align 1")
+
+    def _plain_load_acquire(self, p, bits):
+        v = self.op(f"load i{bits}, ptr {p}, align 1")
+        self.e("fence acquire")
+        return v
+
+    def _split_access(self, addr, size, fast, slow, bits):
+        """if (addr & 15) + size <= 16: fast() else slow(); a phi of their values when bits."""
+        lo = self.op(f"and i64 {addr}, 15")
+        end = self.op(f"add i64 {lo}, {size}")
+        inside = self.op(f"icmp ule i64 {end}, 16")
+        f, s_, j = self.uniq("rc_fast"), self.uniq("rc_slow"), self.uniq("rc_join")
+        self.e(f"br i1 {inside}, label %{f}, label %{s_}")
+        self.label(f)
+        vf = fast()
+        self.e(f"br label %{j}")
+        self.label(s_)
+        vs = slow()
+        self.e(f"br label %{j}")
+        self.label(j)
+        if bits:
+            return self.op(f"phi i{bits} [ {vf}, %{f} ], [ {vs}, %{s_} ]")
+        return None
+
+    def store_barrier(self):
+        """Store-store ordering before a shared store: dmb ishst (AArch64 barrier option 10)."""
+        self.mod.intrinsics.add("declare void @llvm.aarch64.dmb(i32)")
+        self.e("call void @llvm.aarch64.dmb(i32 10)")
 
     def mem_bits(self, ins):
         return X.MemorySizeInfo(ins.memory_size).size * 8
@@ -445,9 +510,16 @@ class FunctionLifter:
         return v
 
     def call_target(self, link_target):
-        """Direct call: the lifted function, or the dispatcher for code we do not have."""
+        """Direct call: the lifted function; an import stub's target (its GOT entry, read at run
+        time); or the dispatcher for code we do not have."""
         if link_target in self.mod.lifted_names:
             self.e(f"call void {fname(link_target)}(ptr %st)")
+            return
+        got = self.mod.import_stub(link_target)
+        if got is not None:  # `jmp [rip+got]`: go where the stub would go, without lifting it
+            p = self.op(f"inttoptr i64 {self.code_addr(got)} to ptr")
+            target = self.op(f"load i64, ptr {p}")
+            self.e(f"call void @__recomp_dispatch(ptr %st, i64 {target})")
         else:
             self.mod.unresolved.add(link_target)
             self.e(f"call void @__recomp_dispatch(ptr %st, i64 {self.code_addr(link_target)})")
@@ -471,6 +543,12 @@ class FunctionLifter:
     # ---- function -----------------------------------------------------------------------
     def lift(self):
         cfg = self.cfg
+        entry = cfg.blocks.get(cfg.start)
+        ins0 = entry.insns[:2] if entry else []
+        # `push rbp; mov rbp, rsp`: rbp addresses this function's frame until its epilogue
+        self.frame_pointer = len(ins0) == 2 and ins0[0].mnemonic == M.PUSH and ins0[0].op0_register == R.RBP \
+            and ins0[1].mnemonic == M.MOV and ins0[1].op0_kind == OK.REGISTER and ins0[1].op0_register == R.RBP \
+            and ins0[1].op1_kind == OK.REGISTER and ins0[1].op1_register == R.RSP
         self.out.append(f"define void {fname(cfg.start)}(ptr noalias %st) {{")
         self.label("entry")
         for i in range(16):
@@ -1147,6 +1225,9 @@ def _call(L, ins, b):
         L.call_target(ins.near_branch_target)
     else:
         L.e(f"call void @__recomp_dispatch(ptr %st, i64 {target})")
+    if direct and L.mod.is_noreturn(ins.near_branch_target):
+        L.trap(6)  # a function that never returns did
+        return True
     L.reload()
     if ins.next_ip not in L.cfg.blocks and not any(i.ip == ins.next_ip for i in b.insns):
         # call at the end of the recovered code (noreturn callee, or falls into another function)
@@ -1314,16 +1395,36 @@ def _vzu(L, ins, b):
 class ModuleLifter:
     handlers = H
 
-    def __init__(self, image, tso=False, abi=False):
+    def __init__(self, image, tso=False, abi=False, local_frames=True, rcpc=False):
         from . import simd  # noqa: F401  (registers the SSE/AVX handlers)
         self.image = image
         self.tso = tso
         self.abi = abi
+        self.local_frames = local_frames
+        self.rcpc = rcpc
         self.unsupported = {}
         self.unresolved = set()
         self.intrinsics = {"declare i8 @llvm.ctpop.i8(i8)"}
         self.lifted_names = set()
         self.cfgs = {}
+        self._stubs = {}
+
+    def import_stub(self, addr):
+        """The GOT slot (link address) if addr starts with `jmp qword [rip+slot]`, else None."""
+        if addr not in self._stubs:
+            data = self.image.code_window(addr, 16)
+            got = None
+            if data:
+                i = X.Decoder(64, data, ip=addr).decode()
+                if i.mnemonic == M.JMP and i.op_count == 1 and i.op0_kind == OK.MEMORY \
+                        and i.is_ip_rel_memory_operand and X.MemorySizeInfo(i.memory_size).size == 8:
+                    got = i.ip_rel_memory_address
+            self._stubs[addr] = got
+        return self._stubs[addr]
+
+    def is_noreturn(self, addr):
+        got = self.import_stub(addr)
+        return got is not None and got in getattr(self.image, "noreturn_got", ())
 
     def discover(self, roots=None):
         from . import cfg as cfgmod
@@ -1339,7 +1440,7 @@ class ModuleLifter:
                 fn = Function(a, 0, f"sub_{a:x}")
                 self.image.functions[a] = fn
                 starts.add(a)
-            c = cfgmod.recover(self.image, fn, starts)
+            c = cfgmod.recover(self.image, fn, starts, self.is_noreturn)
             self.cfgs[a] = c
             for t in c.call_targets | c.tail_targets:
                 if self.image.is_code(t) and (t in starts or t in c.call_targets):
@@ -1453,3 +1554,64 @@ def _popfq(L, ins, b):
     for f, bit in RFLAGS_BITS:
         t = L.op(f"lshr i64 {v}, {bit}")
         L.setf(f, L.op(f"trunc i64 {t} to i1"))
+
+
+# ---- time stamp counter: the runtime supplies it (bbport: the PS4 TSC at sceKernelGetTscFrequency) ----
+
+@sem(M.RDTSC, M.RDTSCP)
+def _rdtsc(L, ins, b):
+    L.mod.intrinsics.add("declare i64 @__recomp_rdtsc()")
+    t = L.op("call i64 @__recomp_rdtsc()")
+    L.write_reg(R.EAX, L.resize(t, 64, 32), 32)
+    L.write_reg(R.EDX, L.resize(L.op(f"lshr i64 {t}, 32"), 64, 32), 32)
+    if ins.mnemonic == M.RDTSCP:
+        L.write_reg(R.ECX, "0", 32)  # IA32_TSC_AUX: processor id 0
+
+
+
+# ---- MXCSR, cpuid, interrupts ---------------------------------------------------------------------
+
+@sem(M.STMXCSR, M.VSTMXCSR)
+def _stmxcsr(L, ins, b):
+    p = L.op(f"getelementptr inbounds %State, ptr %st, i32 0, i32 {ST_MXCSR}")
+    L.write(ins, 0, L.op(f"load i32, ptr {p}"), 32)
+
+
+@sem(M.LDMXCSR, M.VLDMXCSR)
+def _ldmxcsr(L, ins, b):
+    """Kept in the state (and read back by stmxcsr). Rounding-mode and DAZ/FTZ changes are not
+    applied to the recompiled float code yet (recompiler/README.md, known deviations)."""
+    p = L.op(f"getelementptr inbounds %State, ptr %st, i32 0, i32 {ST_MXCSR}")
+    L.e(f"store i32 {L.read(ins, 0, 32)}, ptr {p}")
+
+
+@sem(M.CPUID)
+def _cpuid(L, ins, b):
+    """The runtime answers (bbport: the PS4's Jaguar)."""
+    L.mod.intrinsics.add("declare void @__recomp_cpuid(i32, i32, ptr)")
+    leaf, _ = L.read_reg(R.EAX)
+    sub, _ = L.read_reg(R.ECX)
+    buf = L.op("alloca [4 x i32]")
+    L.e(f"call void @__recomp_cpuid(i32 {leaf}, i32 {sub}, ptr {buf})")
+    for k, reg in enumerate((R.EAX, R.EBX, R.ECX, R.EDX)):
+        p = L.op(f"getelementptr inbounds [4 x i32], ptr {buf}, i32 0, i32 {k}")
+        L.write_reg(reg, L.op(f"load i32, ptr {p}"), 32)
+
+
+@sem(M.INT, M.INT1, M.INTO, M.SYSCALL, M.HLT, M.CLI, M.STI, M.IN, M.OUT)
+def _privileged(L, ins, b):
+    """Faults when a PS4 game runs it natively too (int 41h: the SDK's debug hook on assert
+    paths): a trap the runtime reports, kind 0x100 + vector for int n, 8 otherwise."""
+    kind = 0x100 + (ins.immediate(0) & 0xff) if ins.mnemonic == M.INT else 8
+    L.trap(kind)
+    return True
+
+
+@sem(M.STC, M.CLC, M.CMC)
+def _carry(L, ins, b):
+    if ins.mnemonic == M.STC:
+        L.setf("cf", "true")
+    elif ins.mnemonic == M.CLC:
+        L.setf("cf", "false")
+    else:
+        L.setf("cf", L.op(f"xor i1 {L.getf('cf')}, true"))

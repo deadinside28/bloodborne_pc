@@ -42,8 +42,10 @@ def decode_at(image, addr):
     return ins
 
 
-def recover(image, fn, function_starts):
+def recover(image, fn, function_starts, noreturn=None):
+    """noreturn(target) -> True for a direct call target that never returns (the path ends)."""
     cfg = FunctionCFG(fn.start, fn.end)
+    noreturn = noreturn or (lambda t: False)
 
     def inside(a):
         if a != fn.start and a in function_starts:
@@ -79,6 +81,8 @@ def recover(image, fn, function_starts):
             if fc in (FC.CALL, FC.INDIRECT_CALL):
                 if fc == FC.CALL:
                     cfg.call_targets.add(ins.near_branch_target)
+                    if noreturn(ins.near_branch_target):
+                        break
                 a = nxt
                 if not inside(a):
                     cfg.tail_targets.add(a)
@@ -138,6 +142,8 @@ def recover(image, fn, function_starts):
                     b.succs = sorted(set(b.table.targets))
                 break
             if fc in (FC.RETURN, FC.EXCEPTION) or fc == FC.INTERRUPT and ins.mnemonic == X.Mnemonic.INT3:
+                break
+            if fc == FC.CALL and noreturn(ins.near_branch_target):
                 break
             if nxt in leaders:
                 if inside(nxt):

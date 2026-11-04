@@ -22,6 +22,10 @@ class Image:
     segments: list = field(default_factory=list)  # (vaddr, bytes, executable)
     functions: dict = field(default_factory=dict)  # start -> Function
     link_base: int = 0
+    readonly: list = field(default_factory=list)  # (start, end) of segments mapped without write
+
+    def is_readonly(self, addr):
+        return any(a <= addr < b for a, b in self.readonly)
 
     def read(self, addr, size):
         for vaddr, data, _ in self.segments:
@@ -51,6 +55,8 @@ def load_elf(path, use_symbols=True):
         for s in loads:
             data = s.data() + b"\0" * (s["p_memsz"] - s["p_filesz"])
             img.segments.append((s["p_vaddr"], data, bool(s["p_flags"] & 1)))
+            if not s["p_flags"] & 2:
+                img.readonly.append((s["p_vaddr"], s["p_vaddr"] + s["p_memsz"]))
         if use_symbols:
             for name in (".symtab", ".dynsym"):
                 tab = elf.get_section_by_name(name)

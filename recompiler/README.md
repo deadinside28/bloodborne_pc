@@ -8,13 +8,15 @@ yet, and not yet run on the game's eboot.
 
 | | |
 |---|---|
-| Inputs | ELF64 x86-64 images; functions from symbols or from `.eh_frame` FDEs (the game's only source) |
-| Control flow | recursive descent per function; tail calls; jump tables (GCC/Clang PIC tables, hoisted bases, `cmp/ja`, `and`-mask and range-scan bounds); overlapping instruction streams |
-| Semantics | ~580 mnemonics: integer, flags, partial registers, mul/div with #DE, string ops (`rep movs/stos`), `lock` atomics incl. bit strings, BMI1, MOVBE, pushfq/popfq, SSE–SSE4.1, AVX1 (VEX), masked moves |
+| Inputs | ELF64 x86-64 images; the PS4 executable (`eboot.bin`, plaintext SELF, through bbport's `scripts/prepare.py` parser, `recomp/ps4.py`); functions from symbols or from `.eh_frame` FDEs (the game's only source, found through `PT_GNU_EH_FRAME`) |
+| Control flow | recursive descent per function; tail calls; calls that never return (13 of the game's imports, e.g. `__stack_chk_fail`); import stubs (`jmp [rip+got]`) resolved at the call site; jump tables (GCC/Clang PIC tables, hoisted and copied bases, `cmp/ja` and `cmp/jbe` guards, `and`-mask and bounded scans that stop at the next table); overlapping instruction streams |
+| Semantics | ~600 mnemonics: integer, flags, partial registers, mul/div with #DE, string ops (`rep movs/stos`), `lock` atomics incl. bit strings, BMI1, MOVBE, pushfq/popfq, MXCSR, SSE–SSE4.1, AVX1 (VEX), masked moves; `rdtsc` and `cpuid` through runtime functions; `int n`, `syscall` and privileged instructions trap (as they fault natively) |
 | Imports | ELF `GLOB_DAT`/`JUMP_SLOT`/`R_X86_64_64`/`RELATIVE`/`DT_RELR` relocations; imports bound by name to host functions (an explicit table first, `dlsym` second), called from recompiled code through a C bridge (`harness/recomp_loader.c`); per-thread guest stack and FS thread block (stack protector canary) |
-| Tests | corpus: 136 functions (C integer, C FP/SIMD, and `flags.S`: flag-exact assembly tests) × 9 compiler/flag builds × 2 lifting modes = 18 configurations, all passing against the original code on x86-64 |
+| Tests | corpus: 144 functions (C integer, C FP/SIMD, and `flags.S`: flag-exact assembly tests) × 9 compiler/flag builds × 2 lifting modes = 18 x86-64 configurations, plus 36 AArch64 ones (each with and without x86 memory ordering): all 54 pass against the original code |
 | Whole library | the system's **libz.so 1.3.2** (unmodified distribution build, FDE discovery only): 1,581 checks of checksums, compress2/uncompress at all levels, streaming deflate (window sizes, memLevel, strategies, raw/zlib/gzip, flush modes) and inflate (small output windows, corrupted streams): all identical to the original, both lifting modes, ~1M import calls into host libc |
-| AArch64 | **runs under QEMU user mode** (static binaries built with Zig's musl toolchain): the corpus passes in all 36 AArch64 configurations (18 builds × with/without x86 memory ordering), replaying results recorded from the original code on x86-64; recompiled libz produces the same output digest on AArch64 as on x86-64 in all four lifting modes. Not yet run on real ARM hardware: QEMU on an x86 host runs ARM threads with x86's ordering, so it cannot expose memory-ordering bugs or measure speed |
+| AArch64 | runs under QEMU user mode and **on a phone** (Galaxy S25 Ultra, Snapdragon 8 Elite, Android 17, over `adb`, `harness/device/run_device.sh`): the corpus passes in all 36 AArch64 configurations, replaying results recorded from the original code on x86-64; recompiled libz produces the same output digest on AArch64 as on x86-64 in every lifting mode. Multi-threaded ordering is not tested yet (QEMU on x86 runs ARM threads with x86's ordering; the tests are single-threaded) |
+| x86 ordering cost (phone, libz test) | none 1.26 s; barriers 4.45 s (3.5×); **acquire/release with an inline 16-byte check (default `--tso`) 1.37 s (1.08×)**, at +43% code; acquire/release with the SIGBUS fallback instead 2.15 s (1.7×: 1.78M alignment faults) |
+| The game | 162,959 FDE functions (+2 found from calls), 9.98M instructions, lifted in under a minute (8 cores); 3 instruction sites unsupported (junk next to the 24 decode failures, which the project's own analysis also counts: 22); 63,641 calls to imports resolved through their GOT slots; 3,915 jump tables; ~11,700 indirect jumps through pointers left to the dispatcher (tail calls). ~7.8 GiB of IR in 82 shards (`harness/build_game.sh`). Not yet run |
 | Real code | zlib, lz4 and libpng (≈80,000 instructions) lift with no unsupported instruction and no CFG error; libzstd lifts and compiles (gaps: BMI2, which Jaguar lacks, and data inside its asm FDE ranges) |
 
 ## Use
@@ -37,8 +39,13 @@ output, which must equal the x86-64 run's.
 - `--fde`: function ranges from `.eh_frame` instead of the symbol table.
 - `--abi`: assume the SysV ABI for vector registers at calls (arguments xmm0-7, results xmm0-1,
   all caller-saved). 35-60% less code; the default mode assumes nothing.
-- `--tso`: x86 memory ordering on weakly ordered targets (`fence acquire` after each non-stack
-  load, `fence release` before each non-stack store → `dmb ishld` / `dmb ish` on AArch64).
+- `--tso`: x86 memory ordering on AArch64 (`--tso-mode rcpc`, the default: `ldapr`/`stlr`, needs
+  ARMv8.3 RCpc; `rcpc-fault`: no inline check, needs the runtime's SIGBUS handler; `barriers`:
+  `dmb ishld` after loads and `dmb ishst` before stores, any ARMv8). No ordering for stack accesses
+  (rsp, and rbp in frame-pointer functions; `--tso-strict` turns the rbp rule off) or for loads
+  from read-only image segments.
+- `recomp game EBOOT [--out DIR] [--report survey.json] [--abi] [--tso]`: the PS4 executable,
+  surveyed (default) or written as shards.
 
 ## Execution model
 
@@ -63,24 +70,32 @@ output, which must equal the x86-64 run's.
 - MXCSR rounding mode and DAZ/FTZ changes are not modelled yet (default round-to-nearest).
 - Undefined flags are whatever the formula gives, not what a particular CPU leaves.
 - `DF` (direction flag) is assumed clear, as the ABI requires at calls.
+- **Locals are not shared**: with `--tso`, stack accesses (rsp-based, and rbp-based in functions with a
+  frame pointer) get no ordering; a thread that publishes the address of a local to another thread
+  and synchronises through it without atomics would see them unordered.
+- MXCSR's exception status flags (bits 0-5) are not tracked: `stmxcsr` returns the control bits
+  that were set and no sticky exception flags.
 - Locked operations assume natural alignment (`align N` on the LLVM atomics). x86 allows
   misaligned locked operations (split locks); AArch64 before LSE2 faults on them. Compilers do not
   emit them for aligned C++ atomics.
 
 ## Not done yet (in order)
 
-1. Real ARM hardware: the same static test binaries on an Android phone over `adb` (in
-   `/data/local/tmp`), for memory ordering (`--tso`) and the first speed numbers.
-2. Imports with float or stack arguments need per-function bridges (the generic bridge passes six
-   integer registers); for the game, NID imports (701) bind to bbport's runtime functions. Callbacks
-   from host code into guest code (e.g. `qsort` comparators) are not handled yet.
-3. A multi-threaded test of the `lock` paths (atomicity is invisible to the single-threaded runner;
-   `recomp_call` uses one static guest stack).
-4. The game: a loader for the linked probe image (`BBPROBE5`, `scripts/link_modules.py`), FDE
-   ranges from `.eh_frame_hdr`, guest-code hooks as a recompiler input table
-   (`gpu/games/bloodborne/hooks.cpp`), then the x86-64 AOT build inside bbport (`BB_AOT=1`).
-5. Fallback for dispatch misses; host-PC → guest-address map for fault reporting.
-6. Code size: libz is 3.4× its original `.text` on AArch64 with `--abi` (flags and general
-   register traffic are the next targets).
-7. Instruction gaps: x87 (if the game has any), 16-bit `shld/shrd`, BMI2 (not needed for
-   Jaguar), segment register moves, `lahf/sahf`.
+1. The game inside bbport, x86-64 first: link `libc.prx` and `libSceFios2.prx` (they are lifted from
+   the image `scripts/link_modules.py` builds; today only `eboot.bin` is), bind the game's NID
+   imports (661 GOT slots) to bbport's runtime, turn the guest-code hooks
+   (`gpu/games/bloodborne/hooks.cpp`, `gpu/shim/bbport_guest_code_hooks.cpp`) into a recompiler
+   input table, and run the recompiled x86-64 build in place of the original code (`BB_AOT=1`).
+2. Multi-threaded tests of `lock` atomicity and of `--tso` ordering, on the phone (the only place
+   ordering bugs can show).
+3. Imports with float or stack arguments need per-function bridges (the generic bridge passes six
+   integer registers). Callbacks from host code into guest code (e.g. `qsort` comparators) are not
+   handled yet.
+4. Fallback for dispatch misses; host-PC → guest-address map for fault reporting.
+5. Code size: libz is 3.4× its original `.text` on AArch64 with `--abi` (flags and general
+   register traffic are the next targets); `--tso` adds 43% for its inline alignment checks.
+6. Instruction gaps: x87 (the game's handful of sites are junk decodes so far), 16-bit
+   `shld/shrd`, BMI2 (not needed for Jaguar), segment register moves, `lahf/sahf`.
+7. LLVM 23.1.4's AArch64 backend crashes ("Cannot select") on an unaligned 16-bit store it builds
+   itself by merging two byte stores of a big-endian value
+   (`harness/llvm-bug-store-merge-bswap16.ll`, 31 lines); report it upstream.

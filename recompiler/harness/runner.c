@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
         int bad = 0, n_edge = x->fp ? (int)(N_FP_EDGES * N_FP_EDGES) : (int)(N_EDGES * N_EDGES);
         int total = n + n_edge;
         rng = 0x9e3779b97f4a7c15ull ^ x->link;
-        for (int v = 0; v < total && bad < 3; v++) {
+        for (int v = 0; v < total; v++) {  // all vectors: a record must not depend on failures
             uint64_t a, b, c;
             if (x->fp && v < n_edge) { a = f64_bits(fp_edges[v / N_FP_EDGES]); b = f64_bits(fp_edges[v % N_FP_EDGES]); c = edges[v % N_EDGES]; }
             else if (x->fp) {  // magnitudes from tiny to huge, both signs
@@ -158,7 +158,7 @@ int main(int argc, char **argv) {
             }
             if (why[0]) {
                 if (!bad) printf("FAIL %s\n", x->name);
-                printf("    a=%#" PRIx64 " b=%#" PRIx64 " c=%#" PRIx64 ": %s\n", a, b, c, why);
+                if (bad < 3) printf("    a=%#" PRIx64 " b=%#" PRIx64 " c=%#" PRIx64 ": %s\n", a, b, c, why);
                 bad++;
             }
         }

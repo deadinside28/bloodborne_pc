@@ -29,3 +29,5 @@ extern const uint64_t __recomp_table_size;
 extern uint64_t __recomp_slide;
 void __recomp_dispatch(RecompState *st, uint64_t target);
 void __recomp_trap(RecompState *st, uint64_t addr, int32_t kind);
+uint64_t __recomp_rdtsc(void);
+void __recomp_cpuid(uint32_t leaf, uint32_t sub, uint32_t out[4]);

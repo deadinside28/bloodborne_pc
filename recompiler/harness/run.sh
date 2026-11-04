@@ -38,7 +38,7 @@ for v in $variants; do
         grep -E '^(unsupported|cfg)' "$out/corpus-$t.lift.log" | sed "s/^/[$t] /" | head -20 || true
         clang -O2 -march=x86-64-v2 -c -Wno-override-module "$out/corpus-$t.ll" -o "$out/lifted-$t.o"
         for ir in corpus-$t corpus-$t.tso; do
-            clang -O2 --target=aarch64-linux-gnu -march=armv8.2-a+rcpc -c -Wno-override-module "$out/$ir.ll" -o "$out/$ir.aarch64.o"
+            clang -O2 --target=aarch64-linux-gnu -march=armv8.4-a+rcpc -c -Wno-override-module "$out/$ir.ll" -o "$out/$ir.aarch64.o"
         done
         cc -O1 -g -I"$here" -o "$out/runner-$t" "$here/runner.c" "$here/recomp_loader.c" "$out/lifted-$t.o"
         printf '%-18s %6s KiB aarch64  ' "$t" $(( $(stat -c %s "$out/corpus-$t.aarch64.o") / 1024 ))

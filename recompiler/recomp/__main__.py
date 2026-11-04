@@ -15,10 +15,34 @@ def main():
     lp.add_argument("-o", "--output", required=True)
     lp.add_argument("--tso", action="store_true", help="x86 memory ordering (for AArch64 targets)")
     lp.add_argument("--abi", action="store_true", help="assume the SysV ABI for vector registers at calls")
+    lp.add_argument("--tso-strict", action="store_true",
+                    help="with --tso: barriers for rbp-based (frame) accesses too")
+    lp.add_argument("--tso-mode", choices=("rcpc", "rcpc-fault", "barriers"), default="rcpc",
+                    help="with --tso: rcpc (default): acquire loads / release stores (ldapr/stlr, ARMv8.3 RCpc), with "
+                         "an inline check sending accesses that cross 16 bytes to a plain access + barrier; rcpc-fault: "
+                         "no check, the runtime's SIGBUS handler does those; barriers: dmb after loads / before stores "
+                         "(any ARMv8)"),
     lp.add_argument("--fde", action="store_true", help="function ranges from .eh_frame, not symbols")
+    gp = sub.add_parser("game", help="survey or build the PS4 game executable (eboot.bin) in shards")
+    gp.add_argument("eboot")
+    gp.add_argument("--out", help="write part-NNNN.ll shards and table.ll here (default: survey only)")
+    gp.add_argument("--report", help="write the survey as JSON")
+    gp.add_argument("--shard", type=int, default=2000, help="functions per shard")
+    gp.add_argument("--workers", type=int)
+    gp.add_argument("--limit", type=int, help="only the first N functions")
+    gp.add_argument("--abi", action="store_true")
+    gp.add_argument("--tso", action="store_true")
     a = ap.parse_args()
+    if a.cmd == "game":
+        from . import game
+        from .ps4 import load_ps4
+        img = load_ps4(a.eboot)
+        total = game.run(img, out=a.out, shard_size=a.shard, workers=a.workers, tso=a.tso, abi=a.abi, limit=a.limit)
+        print(game.report(total, a.report))
+        return
     img = load_elf(a.image, use_symbols=not a.fde)
-    m = ModuleLifter(img, tso=a.tso, abi=a.abi)
+    m = ModuleLifter(img, tso=a.tso, abi=a.abi, local_frames=not a.tso_strict,
+                     rcpc={"rcpc": "check", "rcpc-fault": "fault", "barriers": None}[a.tso_mode])
     m.discover()
     ir, errors = m.lift()
     with open(a.output, "w") as f:
