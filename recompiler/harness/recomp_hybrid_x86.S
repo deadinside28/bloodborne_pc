@@ -324,6 +324,48 @@ recomp_hybrid_call_host:
         ret
         .size recomp_hybrid_call_host, . - recomp_hybrid_call_host
 
+// void __recomp_setjmp(RecompState *st): the game libc's setjmp for recompiled callers, called
+// returns_twice from the lifted code (recomp_hybrid.h). recomp_hybrid_setjmp_record fills the
+// guest's jmp_buf and the thread's record; here the host side goes in: the return address into
+// the recompiled code, its rsp after the return and the callee-saved registers, which
+// recomp_hybrid_longjmp_resume restores to return here again. The first return gives 0.
+        .globl __recomp_setjmp
+        .p2align 4
+        .type __recomp_setjmp, @function
+__recomp_setjmp:
+        push rdi                        // and aligns the call below
+        call recomp_hybrid_setjmp_record@PLT
+        pop rdi
+        mov rcx, [rsp]
+        mov [rax], rcx                  // host_ret
+        lea rcx, [rsp + 8]
+        mov [rax + 8], rcx              // host_rsp
+        mov [rax + 16], rbx
+        mov [rax + 24], rbp
+        mov [rax + 32], r12
+        mov [rax + 40], r13
+        mov [rax + 48], r14
+        mov [rax + 56], r15
+        mov qword ptr [rdi], 0          // the guest's rax: setjmp returns 0
+        ret
+        .size __recomp_setjmp, . - __recomp_setjmp
+
+// void recomp_hybrid_longjmp_resume(const HybridJmp *j): __recomp_setjmp returns again.
+        .globl recomp_hybrid_longjmp_resume
+        .p2align 4
+        .type recomp_hybrid_longjmp_resume, @function
+recomp_hybrid_longjmp_resume:
+        mov rbx, [rdi + 16]
+        mov rbp, [rdi + 24]
+        mov r12, [rdi + 32]
+        mov r13, [rdi + 40]
+        mov r14, [rdi + 48]
+        mov r15, [rdi + 56]
+        mov rsp, [rdi + 8]
+        cld
+        jmp qword ptr [rdi]
+        .size recomp_hybrid_longjmp_resume, . - recomp_hybrid_longjmp_resume
+
 // Recompiled code -> original code for good: void recomp_hybrid_jump_native(RecompState *st,
 // uint64_t target), no return. For jumps (not calls) to code that has no recompiled function: the
 // middle of a function, say, where [rsp] is no return address to borrow. The thread's innermost

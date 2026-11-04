@@ -133,7 +133,12 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    callers recompiled (only setjmp callers stay): **165,383 of 165,771 functions, gameplay 79
    FPS** (as unmodified). Original: 154 with unsupported instructions (x87 in libc mostly), 130
    setjmp callers, 81 changed by bbport, 21 CFG errors, setjmp/longjmp themselves. Next: zero
-   original code (those, and ~2M jumps back per run), then AArch64: on x86-64 the original and the recompiled code can run in one process. Patch
+   original code (those, and ~2M jumps back per run), then AArch64. Then (2026-11-04 afternoon): the
+   allocator and cloth writer (runtime_aot_guest_pc for the write tracking), std/memmove, and
+   setjmp in recompiled code (__recomp_setjmp + libc's longjmp replaced): **165,518 functions,
+   255 original** (151 x87/unsupported in libc, 81 changed by bbport, 21 CFG errors, the 2
+   setjmp/longjmp); 5M calls back per 3 min; same FPS and frame pacing as unmodified measured
+   side by side (61 vs 62; the PC itself varied between 63 and 81 over the day): on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT

@@ -87,8 +87,14 @@ output, which must equal the x86-64 run's.
   checks every hash (any difference: no start) and patches the entries before guest code runs.
   `BB_AOT_BISECT=lo:hi` swaps in only part of them. A fatal fault prints the thread's hybrid
   state and its last 24 calls and jumps into the original code.
-- **setjmp / longjmp:** functions that call them (by NID: setjmp, longjmp, the context calls)
-  stay original: setjmp would keep the thunk's label as its return point. A longjmp in original
+- **setjmp / longjmp:** a recompiled call to the linked libc's setjmp becomes `__recomp_setjmp`
+  (`returns_twice`): it fills the guest's jmp_buf as libc does and records, per thread and
+  jmp_buf, how to resume the recompiled code (host return address, rsp, callee-saved registers,
+  the entry depth and call records); libc's longjmp is replaced at its entry
+  (`recomp_hybrid_longjmp`): a jmp_buf of a recompiled setjmp resumes it, any other gets libc's
+  own behaviour. The signal mask is not saved (bbport delivers no guest signals). Callers of
+  sigsetjmp, getcontext, swapcontext stay original: setjmp through the call thunk would keep
+  the thunk's label as its return point. A longjmp in original
   code can still jump past recompiled frames and past calls into the original code that never
   return; the call thunk's records (the thread's `native_frame` chain) hold the slot each call
   borrowed and the entry depth at the call, and a return is matched to its record by the slot it

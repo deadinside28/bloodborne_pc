@@ -1248,7 +1248,13 @@ def _call(L, ins, b):
     target = None if direct else L.read(ins, 0, 64)  # read before the push changes rsp
     L.push(L.code_addr(ins.next_ip))
     L.spill()
-    if direct:
+    if direct and L.mod.is_setjmp(ins.near_branch_target):
+        # setjmp: the runtime fills the guest's jmp_buf and records how to resume here; this
+        # call returns again when a longjmp comes (recomp_hybrid.c). returns_twice keeps LLVM
+        # from caching state across it.
+        L.mod.uses_setjmp = True
+        L.e("call void @__recomp_setjmp(ptr %st) #0")
+    elif direct:
         L.call_target(ins.near_branch_target)
     else:
         L.e(f"call void @__recomp_dispatch(ptr %st, i64 {target})")
@@ -1456,6 +1462,13 @@ class ModuleLifter:
             self._stubs[addr] = got
         return self._stubs[addr]
 
+    def is_setjmp(self, addr):
+        """A call target that is setjmp (the linked libc's own, or an import stub to it)."""
+        if addr in getattr(self.image, "setjmp_funcs", ()):
+            return True
+        got = self.import_stub(addr)
+        return got is not None and got in getattr(self.image, "setjmp_got", ())
+
     def is_noreturn(self, addr):
         if addr in getattr(self.image, "noreturn_funcs", ()):  # a linked module's own (exit, longjmp)
             return True
@@ -1508,6 +1521,8 @@ class ModuleLifter:
             "declare void @__recomp_dispatch(ptr, i64)",
             "declare void @__recomp_trap(ptr, i64, i32)",
             "declare void @__recomp_dispatch_jump(ptr, i64)",
+            "declare void @__recomp_setjmp(ptr) #0",
+            "attributes #0 = { returns_twice }",
         ] + sorted(self.intrinsics)
         return "\n".join(head) + "\n\n" + "\n\n".join(bodies) + "\n", errors
 

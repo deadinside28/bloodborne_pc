@@ -190,6 +190,10 @@ def load_ps4(path):
 # resynchronise when control comes back through an outer call.
 RETURNS_TWICE = ("setjmp", "_setjmp", "sigsetjmp", "__sigsetjmp", "getcontext", "swapcontext", "makecontext")
 NONLOCAL = RETURNS_TWICE + ("longjmp", "_longjmp", "siglongjmp", "setcontext")
+# The pair hybrid execution implements for recompiled callers (recomp_hybrid.c): a call to setjmp
+# becomes __recomp_setjmp (returns_twice), and the module's longjmp is replaced at its entry.
+SETJMP = ("setjmp", "_setjmp")
+LONGJMP = ("longjmp", "_longjmp")
 
 
 def load_ps4_linked(eboot, modules):
@@ -202,7 +206,9 @@ def load_ps4_linked(eboot, modules):
     noreturn = {prepare.nid(n) for n in NORETURN}
     nonlocal_ = {prepare.nid(n) for n in NONLOCAL}
     twice = {prepare.nid(n) for n in RETURNS_TWICE}
+    sj, lj = {prepare.nid(n) for n in SETJMP}, {prepare.nid(n) for n in LONGJMP}
     img.noreturn_funcs, img.nonlocal_funcs, img.returns_twice_funcs = set(), set(), set()
+    img.setjmp_funcs, img.longjmp_funcs = set(), set()
     for path, base in modules:
         r = _load_into(img, path, base)
         for name, addr in r["exports"].items():
@@ -213,6 +219,11 @@ def load_ps4_linked(eboot, modules):
                 img.nonlocal_funcs.add(addr)
             if nid in twice:
                 img.returns_twice_funcs.add(addr)
+            if nid in sj:
+                img.setjmp_funcs.add(addr)
+            if nid in lj:
+                img.longjmp_funcs.add(addr)
+    img.setjmp_got = {slot for slot, name in img.imports.items() if name.split("#")[0] in sj}
     return img
 
 

@@ -92,6 +92,7 @@ void recomp_hybrid_thread_fini(void) {
     finished.module_calls += t->module_calls;
     pthread_mutex_unlock(&threads_lock);
     recomp_hybrid_self = NULL;
+    free(t->jmps);
     munmap(t->stack, t->stack_size);
     munmap(t->states, t->states_size);
     free(t);
@@ -106,6 +107,77 @@ static void call_native(RecompState *st, uint64_t target) {
 static void jump_native(RecompState *st, uint64_t target) {
     recomp_hybrid_self->native_jumps++;
     recomp_hybrid_jump_native(st, target);
+}
+
+// ---- setjmp / longjmp ------------------------------------------------------------------------
+
+#define JMP_RECORDS 64
+
+HybridJmp *recomp_hybrid_setjmp_record(RecompState *st) {
+    HybridThread *t = recomp_hybrid_self;
+    uint64_t *env = (uint64_t *)(uintptr_t)st->gpr[G_RDI];
+    const uint64_t rsp = st->gpr[G_RSP];  // at the return address the guest's call pushed
+    env[0] = *(const uint64_t *)(uintptr_t)rsp;
+    env[1] = st->gpr[G_RBX];
+    env[2] = rsp;
+    env[3] = st->gpr[G_RBP];
+    env[4] = st->gpr[G_R12];
+    env[5] = st->gpr[G_R13];
+    env[6] = st->gpr[G_R14];
+    env[7] = st->gpr[G_R15];
+    ((uint32_t *)env)[16] = 0x037f;  // x87 control word: the default (only libc uses x87)
+    ((uint32_t *)env)[17] = __builtin_ia32_stmxcsr();
+    st->gpr[G_RSP] = rsp + 8;  // setjmp's ret
+    if (!t->jmps) t->jmps = calloc(JMP_RECORDS, sizeof(HybridJmp));
+    HybridJmp *j = NULL;
+    for (int i = 0; t->jmps && i < JMP_RECORDS && !j; ++i)
+        if (t->jmps[i].env == (uint64_t)(uintptr_t)env) j = &t->jmps[i];
+    if (!j && t->jmps) j = &t->jmps[t->jmp_next++ % JMP_RECORDS];  // the oldest goes
+    static HybridJmp no_room;  // no memory: this setjmp is not resumable (a longjmp takes libc's path)
+    if (!j) j = &no_room;
+    *j = (HybridJmp){ .env = (uint64_t)(uintptr_t)env, .guest_rsp = rsp, .guest_ret = env[0], .st = st,
+                      .depth = t->depth, .native_frame = t->native_frame, .host_sp = t->host_sp };
+    return j;
+}
+
+void recomp_hybrid_longjmp(RecompState *st) {
+    HybridThread *t = recomp_hybrid_self;
+    const uint64_t *env = (const uint64_t *)(uintptr_t)st->gpr[G_RDI];
+    const uint64_t val = st->gpr[G_RSI] ? st->gpr[G_RSI] : 1;
+    const uint32_t mxcsr = (((const uint32_t *)env)[17] & ~0x3fu) | (__builtin_ia32_stmxcsr() & 0x3fu);
+    for (int i = 0; t->jmps && i < JMP_RECORDS; ++i) {
+        const HybridJmp *j = &t->jmps[i];
+        if (j->env != (uint64_t)(uintptr_t)env || j->guest_rsp != env[2] || j->guest_ret != env[0]) continue;
+        // A recompiled setjmp: its state gets the jmp_buf's registers, the thread's bookkeeping
+        // goes back to then (entries and calls since are dropped), and its code resumes.
+        RecompState *s = j->st;
+        s->gpr[G_RBX] = env[1];
+        s->gpr[G_RBP] = env[3];
+        s->gpr[G_R12] = env[4];
+        s->gpr[G_R13] = env[5];
+        s->gpr[G_R14] = env[6];
+        s->gpr[G_R15] = env[7];
+        s->gpr[G_RSP] = env[2] + 8;
+        s->gpr[G_RAX] = val;
+        s->mxcsr = mxcsr;
+        __builtin_ia32_ldmxcsr(mxcsr);
+        t->depth = j->depth;
+        t->native_frame = j->native_frame;
+        t->host_sp = j->host_sp;
+        recomp_hybrid_longjmp_resume(j);
+    }
+    // A setjmp of the original code: what libc's longjmp does, on this entry's state (the entry
+    // thunk returns through [rsp - 8] = the jmp_buf's return address).
+    st->gpr[G_RBX] = env[1];
+    st->gpr[G_RBP] = env[3];
+    st->gpr[G_R12] = env[4];
+    st->gpr[G_R13] = env[5];
+    st->gpr[G_R14] = env[6];
+    st->gpr[G_R15] = env[7];
+    st->gpr[G_RAX] = val;
+    st->mxcsr = mxcsr;
+    *(uint64_t *)(uintptr_t)env[2] = env[0];
+    st->gpr[G_RSP] = env[2] + 8;
 }
 
 void recomp_hybrid_enable(void) {

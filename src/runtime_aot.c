@@ -364,6 +364,17 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
         }
         ++patched;
     }
+    /* The linked libc's longjmp, replaced: a longjmp to a recompiled setjmp (__recomp_setjmp)
+     * resumes that recompiled code (recomp_hybrid.c). */
+    const uint64_t *longjmps = dlsym(lib, "__recomp_longjmp");
+    const uint64_t *longjmp_count = dlsym(lib, "__recomp_longjmp_size");
+    for (uint64_t i = 0; longjmps && longjmp_count && i < *longjmp_count; ++i) {
+        char why[160];
+        if (recomp_hybrid_patch(__recomp_slide + longjmps[i], recomp_hybrid_longjmp, why)) {
+            printf("AOT: longjmp at guest 0x%" PRIx64 ": %s\n", longjmps[i], why);
+            return -1;
+        }
+    }
     enabled = 1;
     pthread_t reporter;
     if (!pthread_create(&reporter, NULL, report_loop, NULL)) pthread_detach(reporter);

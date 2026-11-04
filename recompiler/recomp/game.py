@@ -35,6 +35,9 @@ def _work(job):
     img, starts = _IMG, _STARTS
     mod = ModuleLifter(img, tso=_OPTS["tso"], abi=_OPTS["abi"], rcpc="check", volatile=_OPTS.get("volatile", False))
     mod.lifted_names = _OPTS.get("lifted") or starts
+
+    def twice(t):  # a call target that returns twice (setjmp, getcontext...)
+        return mod.import_stub(t) in getattr(img, "nonlocal_got", ()) or t in getattr(img, "returns_twice_funcs", ())
     bad = {}  # function -> why it cannot be swapped in hybrid execution
     nopatch = {}  # function -> why its entry cannot take the jump (lifted for recompiled callers)
     st = collections.Counter()
@@ -66,12 +69,13 @@ def _work(job):
             bad[a] = "CFG error"
         elif a in getattr(img, "nonlocal_funcs", ()):
             bad[a] = "is setjmp/longjmp (a linked module's)"
-        elif any(mod.import_stub(t) in getattr(img, "nonlocal_got", ()) or t in getattr(img, "returns_twice_funcs", ())
-                 for t in c.call_targets | c.tail_targets):
-            # setjmp would keep the thunk's return label as its return point (the game hung in a
-            # loop whose counter pointer came back from a stale state: 0xa30af0). Callers of
-            # longjmp are recompiled: the call thunk's records resynchronise after the jump.
-            bad[a] = "calls setjmp (returns twice)"
+        elif any(twice(t) and not mod.is_setjmp(t) for t in c.call_targets) or any(twice(t) for t in c.tail_targets):
+            # What returns twice through the call thunk would keep its label as the return point
+            # (the game hung in a loop whose counter pointer came back from a stale state:
+            # 0xa30af0). Calls to setjmp are lifted as __recomp_setjmp (recomp_hybrid.c); the
+            # rest (sigsetjmp, getcontext, a jump to setjmp) keep their callers original. Callers
+            # of longjmp are recompiled: the call thunk's records resynchronise after the jump.
+            bad[a] = "calls what returns twice (not setjmp)"
         for b in c.blocks.values():
             st["blocks"] += 1
             st["instructions"] += len(b.insns)
@@ -122,7 +126,8 @@ def _work(job):
 
 HEAD = [STATE_TYPE, "@__recomp_slide = external global i64",
         "declare void @__recomp_dispatch(ptr, i64)", "declare void @__recomp_trap(ptr, i64, i32)",
-        "declare void @__recomp_dispatch_jump(ptr, i64)"]
+        "declare void @__recomp_dispatch_jump(ptr, i64)", "declare void @__recomp_setjmp(ptr) #0",
+        "attributes #0 = { returns_twice }"]
 _FREF = re.compile(r"@F_([0-9a-f]+)\b")
 
 
@@ -141,7 +146,7 @@ def _write_shard(out, index, bodies, intrinsics, starts):
         f.write("\n")
 
 
-def _write_table(out, starts, checks=None, nopatch=()):
+def _write_table(out, starts, checks=None, nopatch=(), longjmps=()):
     names = sorted(starts)
     with open(os.path.join(out, "table.ll"), "w") as f:
         f.write("\n".join(f"declare void {fname(a)}(ptr)" for a in names) + "\n")
@@ -162,6 +167,12 @@ def _write_table(out, starts, checks=None, nopatch=()):
             f.write(f"@__recomp_nopatch = constant [{max(len(keep), 1)} x i64] [" +
                     (", ".join(f"i64 {sconst(a, 64)}" for a in keep) if keep else "i64 -1") + "]\n")
             f.write(f"@__recomp_nopatch_size = constant i64 {len(keep)}\n")
+            # The linked libc's longjmp entries: the runtime replaces them (recomp_hybrid.c), so a
+            # longjmp to a recompiled setjmp resumes recompiled code.
+            lj = sorted(longjmps)
+            f.write(f"@__recomp_longjmp = constant [{max(len(lj), 1)} x i64] [" +
+                    (", ".join(f"i64 {sconst(a, 64)}" for a in lj) if lj else "i64 -1") + "]\n")
+            f.write(f"@__recomp_longjmp_size = constant i64 {len(lj)}\n")
 
 
 def code_hash(data):
@@ -271,7 +282,7 @@ def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limi
         os.makedirs(out, exist_ok=True)
         if only is not None:
             _write_table(out, addrs, {a: (img.functions[a].end, code_hash(img.read(a, img.functions[a].end - a)))
-                                      for a in addrs}, nopatch)
+                                      for a in addrs}, nopatch, getattr(img, "longjmp_funcs", ()))
         else:
             _write_table(out, starts)
     t0 = time.time()

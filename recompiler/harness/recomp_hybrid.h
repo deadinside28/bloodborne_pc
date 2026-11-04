@@ -38,7 +38,32 @@ typedef struct HybridThread {
     uint8_t *stack;         // host stack mapping (for thread_fini)
     uint64_t stack_size, states_size;
     struct HybridThread *next;  // all threads' states (recomp_hybrid_total_entries)
+    struct HybridJmp *jmps;     // recompiled setjmps on this thread (recomp_hybrid_setjmp_record)
+    uint64_t jmp_next;
 } HybridThread;
+
+// A setjmp made by recompiled code (__recomp_setjmp): how to resume it when a longjmp to its
+// jmp_buf comes. Offsets used by recomp_hybrid_x86.S.
+typedef struct HybridJmp {
+    uint64_t host_ret;      // 0: the return address into the recompiled code
+    uint64_t host_rsp;      // 8: the host rsp after that return
+    uint64_t rbx, rbp, r12, r13, r14, r15;  // 16..56: the host's callee-saved registers
+    uint64_t env;           // the guest jmp_buf
+    uint64_t guest_rsp, guest_ret;  // what the jmp_buf held then (a later setjmp may reuse it)
+    RecompState *st;        // the state the recompiled code runs on
+    uint64_t depth, native_frame, host_sp;  // the thread's hybrid bookkeeping then
+} HybridJmp;
+
+// The game libc's setjmp, for recompiled callers: void __recomp_setjmp(RecompState *st), returns
+// twice (recomp_hybrid_x86.S). jmp_buf layout (libc.prx): [0] return address, [1] rbx, [2] rsp
+// (at the return address), [3] rbp, [4..7] r12-r15, +0x40 x87 control word, +0x44 MXCSR,
+// +0x48 the signal mask (not saved: bbport delivers no guest signals).
+void __recomp_setjmp(RecompState *st);
+HybridJmp *recomp_hybrid_setjmp_record(RecompState *st);  // its C half
+// Replaces the libc's longjmp at its entry (a RecompFn for recomp_hybrid_patch): a jmp_buf of a
+// recompiled setjmp resumes that recompiled code; any other does what libc's longjmp does.
+void recomp_hybrid_longjmp(RecompState *st);
+__attribute__((noreturn)) void recomp_hybrid_longjmp_resume(const HybridJmp *j);
 
 extern __thread HybridThread *recomp_hybrid_self __attribute__((tls_model("initial-exec")));
 // The guest's thread pointer is GS (bbport rewrites the game's fs: accesses to gs:), while the
