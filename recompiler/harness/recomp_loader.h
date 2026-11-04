@@ -23,6 +23,9 @@ void recomp_load(const char *path);                       // map, relocate, bind
 uint64_t recomp_symbol(const char *name);                  // exported symbol -> link address (0: none)
 RecompFn recomp_lookup(uint64_t link);                     // link address -> recompiled function
 void recomp_set_bridge(const char *import, RecompBridge b);
+// Targets with no recompiled function go here when set (hybrid execution: the original code),
+// before the import table and the dispatch-miss report.
+extern void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);
 // Call recompiled fn with SysV arguments: integers (more than six go on the guest stack) and up to
 // eight float/double bit patterns for xmm0-7. Checks the stack pointer and the callee-saved
 // registers afterwards. 0, or -1 with `why` filled in. Results: st->gpr[G_RAX], st->xmm[0].

@@ -327,9 +327,12 @@ RecompFn recomp_lookup(uint64_t link) {
     return NULL;
 }
 
+void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);
+
 void __recomp_dispatch(RecompState *st, uint64_t target) {
     RecompFn fn = recomp_lookup(target - __recomp_slide);
     if (fn) { fn(st); return; }
+    if (recomp_dispatch_fallback) { recomp_dispatch_fallback(st, target); return; }  // hybrid: native
     Import *im = find_import(target);
     if (im) {
         recomp_import_calls++;

@@ -7,6 +7,16 @@ from .image import load_elf
 from .lift import ModuleLifter
 
 
+def read_addresses(path):
+    """Link addresses, one per line (hex with 0x, or decimal); '#' starts a comment."""
+    out = set()
+    for line in open(path):
+        line = line.split("#", 1)[0].strip()
+        if line:
+            out.add(int(line.split()[0], 0))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(prog="recomp")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -23,6 +33,10 @@ def main():
                          "no check, the runtime's SIGBUS handler does those; barriers: dmb after loads / before stores "
                          "(any ARMv8)"),
     lp.add_argument("--fde", action="store_true", help="function ranges from .eh_frame, not symbols")
+    lp.add_argument("--select", metavar="MOD:REM",
+                    help="hybrid tests: lift only the functions whose index (by address) is REM modulo MOD; "
+                         "calls to the others go through __recomp_dispatch")
+    lp.add_argument("--only", metavar="FILE", help="lift only the functions at these link addresses (one per line)")
     gp = sub.add_parser("game", help="survey or build the PS4 game executable (eboot.bin) in shards")
     gp.add_argument("eboot")
     gp.add_argument("--out", help="write part-NNNN.ll shards and table.ll here (default: survey only)")
@@ -44,6 +58,15 @@ def main():
     m = ModuleLifter(img, tso=a.tso, abi=a.abi, local_frames=not a.tso_strict,
                      rcpc={"rcpc": "check", "rcpc-fault": "fault", "barriers": None}[a.tso_mode])
     m.discover()
+    if a.select or a.only:
+        keep = set(m.cfgs)
+        if a.select:
+            mod, rem = (int(x) for x in a.select.split(":"))
+            keep = {f for i, f in enumerate(sorted(m.cfgs)) if i % mod == rem}
+        if a.only:
+            keep &= read_addresses(a.only)
+        m.cfgs = {f: c for f, c in m.cfgs.items() if f in keep}
+        m.lifted_names = set(m.cfgs)
     ir, errors = m.lift()
     with open(a.output, "w") as f:
         f.write(ir)

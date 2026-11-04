@@ -20,13 +20,20 @@ arm=1
 if [[ ! -x $zig || ! -x $qemu ]]; then arm=0; echo "AArch64 replay skipped (need zig and qemu-aarch64-static; BB_ZIG / BB_QEMU)"; fi
 arm_cc() { "$zig" cc -target aarch64-linux-musl -O1 -static -Wno-deprecated-non-prototype "$@" 2>&1 \
     | grep -vE 'dlstart|GETFUNCSYM|rcrt1|conflicting prototype|__dls2|warning generated|^ *\^|^ +[0-9]+ \|' || true; }
+# Hybrid execution (original and recompiled code in one process): x86-64 hosts; BB_RECOMP_HYBRID=0 skips.
+hybrid=0
+if [[ $(uname -m) == x86_64 && ${BB_RECOMP_HYBRID:-1} != 0 ]]; then
+    hybrid=1
+    cc -c "$here/recomp_hybrid_x86.S" -o "$out/hybrid_x86.o"
+fi
 status=0
 for v in $variants; do
     march=btver2; [[ $v == *:* ]] && march=${v#*:}
     base=${v%%:*}; cc=${base%-*}; opt=-${base#*-}
     v=${v/:/-}
     extra=()
-    if [[ $cc == gcc ]]; then extra=(-fno-tree-loop-distribute-patterns); fi
+    # -Wno-psabi: calls.c passes 32-byte vectors, which the builds without AVX pass in memory.
+    if [[ $cc == gcc ]]; then extra=(-fno-tree-loop-distribute-patterns -Wno-psabi); fi
     so=$out/corpus-$v.so
     $cc $opt -march=$march $cflags "${extra[@]}" -o "$so" "$here"/corpus/*.c "$here"/corpus/*.S
     if readelf -rW "$so" | grep -q JUMP_SLOT; then echo "[$v] corpus has PLT calls (libgcc?)"; status=1; continue; fi
@@ -44,6 +51,21 @@ for v in $variants; do
         printf '%-18s %6s KiB aarch64  ' "$t" $(( $(stat -c %s "$out/corpus-$t.aarch64.o") / 1024 ))
         "$out/runner-$t" "$so" -r "$out/expected-$v.bin" ${1:+-f "$1"} 2>"$out/runner-$t.log" | tail -1 || {
             status=1; grep -E '^(FAIL|    )' <("$out/runner-$t" "$so" ${1:+-f "$1"} 2>/dev/null) | head -20; }
+        if (( hybrid )); then
+            # Hybrid execution: a subset recompiled (all, either half, a third), entered from the
+            # original code through entry patches and calling back into it.
+            for sel in 1:0 2:0 2:1 3:1; do
+                h=$t-hybrid-${sel/:/_}
+                (cd "$root" && "$py" -W ignore -m recomp lift "$so" "${lf[@]}" --select "$sel" -o "$out/corpus-$h.ll") 2>/dev/null
+                clang -O2 -march=x86-64-v2 -c -Wno-override-module "$out/corpus-$h.ll" -o "$out/lifted-$h.o"
+                cc -O1 -g -DRECOMP_HYBRID -I"$here" -o "$out/runner-$h" "$here/runner.c" "$here/recomp_loader.c" \
+                    "$here/recomp_hybrid.c" "$out/hybrid_x86.o" "$out/lifted-$h.o"
+                printf '  %-28s ' "hybrid ${sel}"
+                "$out/runner-$h" "$so" -H -c "$out/expected-$v.bin" ${1:+-f "$1"} 2>"$out/runner-$h.log" | tail -1 || {
+                    status=1; { "$out/runner-$h" "$so" -H -c "$out/expected-$v.bin" ${1:+-f "$1"} 2>&1 || true; } \
+                        | grep -E '^(FAIL|    )|patch|ud2|fault' | head -20; }
+            done
+        fi
         if (( arm )); then
             for ir in corpus-$t corpus-$t.tso; do
                 arm_cc -I"$here" -o "$out/$ir.runner.a64" "$here/runner.c" "$here/recomp_loader.c" "$out/$ir.aarch64.o"

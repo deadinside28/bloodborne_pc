@@ -17,6 +17,7 @@ yet, and not yet run on the game's eboot.
 | AArch64 | runs under QEMU user mode and **on a phone** (Galaxy S25 Ultra, Snapdragon 8 Elite, Android 17, over `adb`, `harness/device/run_device.sh`): the corpus passes in all 36 AArch64 configurations, replaying results recorded from the original code on x86-64; recompiled libz produces the same output digest on AArch64 as on x86-64 in every lifting mode. Multi-threaded ordering is not tested yet (QEMU on x86 runs ARM threads with x86's ordering; the tests are single-threaded) |
 | x86 ordering cost (phone, libz test) | none 1.26 s; barriers 4.45 s (3.5×); **acquire/release with an inline 16-byte check (default `--tso`) 1.37 s (1.08×)**, at +43% code; acquire/release with the SIGBUS fallback instead 2.15 s (1.7×: 1.78M alignment faults) |
 | The game | 162,959 FDE functions (+2 found from calls), 9.98M instructions, lifted in under a minute (8 cores); 3 instruction sites unsupported (junk next to the 24 decode failures, which the project's own analysis also counts: 22); 63,641 calls to imports resolved through their GOT slots; 3,915 jump tables; ~11,700 indirect jumps through pointers left to the dispatcher (tail calls). ~7.8 GiB of IR in 82 shards (`harness/build_game.sh`), **compiled for AArch64** (`--abi`, no `--tso`): 83 objects in 33 min on 4 cores (2.2 CPU-hours, 2.2 GiB peak per clang), **243 MiB of machine code, 6.1× the original 39.8 MiB**; one shard needs `-mstrict-align` to avoid an LLVM bug (below). Not yet run |
+| Hybrid (x86-64) | original and recompiled code in one process, calling each other both ways (`harness/recomp_hybrid.{h,c}`, `recomp_hybrid_x86.S`): entry patches into recompiled functions, the dispatcher's fallback into original code; every register incl. the upper YMM halves and MXCSR carried across. Corpus (`runner -H`): all 18 x86-64 builds pass with all functions, either half and a third recompiled (72 configurations, up to ~870k crossings each); `calls.c` and `nonabi.S` cover deep alternating recursion, 256-bit vector arguments, float stack arguments, struct returns, callbacks and a non-ABI call returning results in every register. Deliberately broken thunks (YMM upper halves, r15 either way, vector save after a native return) fail these tests. Not yet in bbport |
 | Real code | zlib, lz4 and libpng (≈80,000 instructions) lift with no unsupported instruction and no CFG error; libzstd lifts and compiles (gaps: BMI2, which Jaguar lacks, and data inside its asm FDE ranges) |
 
 ## Use
@@ -46,6 +47,32 @@ output, which must equal the x86-64 run's.
   from read-only image segments.
 - `recomp game EBOOT [--out DIR] [--report survey.json] [--abi] [--tso]`: the PS4 executable,
   surveyed (default) or written as shards.
+- `--select MOD:REM` / `--only FILE` (lift): only a subset of the functions (index modulo MOD,
+  or link addresses one per line); direct calls to the others go through `__recomp_dispatch`,
+  which in hybrid execution runs the original code.
+
+## Hybrid execution (x86-64)
+
+- **Original → recompiled:** the function's first 5 bytes become `jmp rel32` to a 48-byte stub
+  (within ±2 GiB) that leaves the recompiled function at `[rsp-0x18]` and jumps to
+  `recomp_hybrid_enter`. That stores the registers into a per-thread `RecompState` (a stack of
+  them: entries nest), switches to a host stack of its own (the lifted code addresses the guest
+  stack at its real addresses, so LLVM's frames must not live there), calls the function, then
+  loads the registers back and returns to the address the lifted `ret` popped. Scratch space is
+  the red zone below the guest `rsp`; no register is clobbered.
+- **Recompiled → original:** `__recomp_dispatch` with no recompiled target calls
+  `recomp_dispatch_fallback` = `recomp_hybrid_call_native`, which swaps the guest's return slot
+  for its own label, loads the registers, `ret`s into the target on the guest stack, stores the
+  registers when the target returns there, and restores the slot. Imports go the same way (in
+  bbport their GOT slots already hold host functions).
+- **TLS:** bbport keeps the guest's thread pointer in GS (it rewrites the game's `fs:` accesses);
+  `recomp_hybrid_fs_from_gs` makes the entry thunk give recompiled code (lifted from the
+  unmodified executable, `fs:`) the GS base. Needs FSGSBASE (`rdfsbase`/`rdgsbase`, Linux 5.9+).
+- **Known limits:** C++ exceptions cannot unwind through the thunks (a native callee's return
+  address is the thunk's label; recompiled frames have no unwind info), so functions with handlers
+  and their callers stay original; patching a running function's entry is not atomic yet (install
+  before the code runs); code that jumps into the first 5 bytes of a patched function is not
+  detected.
 
 ## Execution model
 

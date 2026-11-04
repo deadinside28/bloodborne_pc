@@ -87,13 +87,36 @@ bindings, copy the bytes from guest memory (CPU-readable) into the stream buffer
 binding is unavailable; or import the missing chunk on demand so the stitch works; and never
 create a sparse arena on GPUs that cannot back it. Not implemented.
 
+## Baseline on the NVIDIA PC (2026-11-04)
+
+Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAME_DIR`).
+
+- Builds from source with the online module (`libbbnet20.so`). Fedora needs, in `~/.local`:
+  Vulkan-Headers 1.4.357 (Fedora's 1.4.341 lacks `VK_VALVE_shader_mixed_float_dot_product`),
+  VMA 3.5.0, xbyak 7.44, Zydis 4.1.1 + Zycore (static; Fedora's zydis-devel 5.0 has no CMake
+  package), and a CMake config shim for Fedora's protobuf 3.19.6. Build/run with
+  `CPATH=$HOME/.local/include CMAKE_INCLUDE_PATH=$HOME/.local/include`.
+- Unmodified game: title, New Game, intro movie (H.264 via Fedora's ffmpeg-free -> libopenh264),
+  character creation and early gameplay, no errors or device lost. Menus ~480 FPS, cinematic and
+  gameplay ~77 FPS.
+- Guest address peak through early gameplay (`out/va_peak.json`, 350 samples over ~12 min; no new peak after the first minutes of gameplay):
+  user memory end `0x1189f40000` (~70 GiB), 6.6 GB peak, low region end `0x808718000`; within
+  39 bits. Re-check after longer play (more areas loaded).
+- Profile (`perf record -g -F 999`, 60 s of gameplay, `out/perf.data`; per-function totals in
+  `out/hot_functions.json`, mapped with the eboot's FDE ranges): game code is 31 % of all
+  samples (libbbgpu 41 %, NVIDIA driver 9 %, libc 10 %). Flat: 4,273 game functions sampled; the
+  top 40 hold 32 % of game-code time, the top 200 hold 58 %. Hottest by self time: `0x76b150`
+  (1.3 % of all samples), `0xe106d0`, `0x21b8710`, `0x2ba84a0`, `0x26adb90`, `0x26bc320`. Game-code
+  time by thread: main 8.6 %, Havok workers 5.5 %, GXRenderThread + GXWorker:1-5 ~11 %, FMOD 1.7 %.
+  Inclusive numbers from frame-pointer call chains are approximate (game code omits frame pointers).
+
 ## Next steps (in order)
 
-1. **Baseline on the NVIDIA PC:** run the unmodified game into gameplay (past the intro movie and
-   character creation), with `recompiler/harness/va_sampler.py out/va_peak.json` running alongside
-   to record the highest guest address in gameplay, and a profile (`perf record -g -p <bb-probe>`)
-   for the hottest guest functions.
-2. **Hybrid mode:** on x86-64 the original and the recompiled code can run in one process. Patch
+1. ~~Baseline on the NVIDIA PC~~ (done 2026-11-04, above).
+2. **Hybrid mode** (branch `hybrid`; milestone 1 done 2026-11-04: thunks and corpus tests, see
+   recompiler/README.md "Hybrid execution"; next: `BB_AOT` in bbport with one hot function, then
+   the top 40/200 from `out/hot_functions.json`, keeping functions whose live bytes differ from
+   eboot.bin (patches, hooks; `fs`->`gs` prefixes aside) original): on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT

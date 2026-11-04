@@ -7,6 +7,11 @@
 //
 // The original is called only on x86-64 hosts; on AArch64 the expected results come from a
 // record file written on x86-64 (-r FILE to record, -c FILE to check).
+//
+// -H (x86-64, built with -DRECOMP_HYBRID and recomp_hybrid.c / recomp_hybrid_x86.S): hybrid
+// execution. The image is lifted with a subset of its functions (recomp lift --select); their
+// entries are patched to the recompiled code, every t_* function is called natively, and the
+// results are checked against the record of the unpatched original (-c).
 #define _GNU_SOURCE
 #include <elf.h>
 #include <inttypes.h>
@@ -15,6 +20,9 @@
 #include <string.h>
 
 #include "recomp_loader.h"
+#if defined(RECOMP_HYBRID)
+#include "recomp_hybrid.h"
+#endif
 
 // Exported t_* / tf_* functions (link address), from the image's symbol table.
 typedef struct { const char *name; uint64_t link; int fp; } Export;
@@ -94,22 +102,57 @@ static int run_lifted(RecompFn fn, int fp, uint64_t a, uint64_t b, uint64_t c, u
     return 0;
 }
 
+#if defined(RECOMP_HYBRID)
+// -H: the original function is called natively; entries of recompiled functions are patched, so
+// calls cross between original and recompiled code in both directions.
+static int run_hybrid(uint64_t link, int fp, uint64_t a, uint64_t b, uint64_t c, uint8_t *buf, uint64_t *ret, char *why) {
+    uint64_t p = (uint64_t)(uintptr_t)buf, xmm0 = 0, f = __recomp_slide + link;
+    int bad = 0;
+    if (fp) {
+        recomp_hybrid_checked_call(f, c, p, 0, 0, a, b, &xmm0, &bad);
+        *ret = xmm0;
+    } else {
+        *ret = recomp_hybrid_checked_call(f, a, b, c, p, 0, 0, &xmm0, &bad);
+    }
+    if (bad) { strcpy(why, "callee-saved register or rsp changed across the call"); return -1; }
+    if (recomp_hybrid_self->depth) { strcpy(why, "hybrid entry depth not back to 0"); return -1; }
+    return 0;
+}
+#endif
+
 static void die(const char *m) { perror(m); exit(2); }
 
 int main(int argc, char **argv) {
     const char *image = NULL, *filter = NULL, *rec = NULL, *chk = NULL;
-    int n = 300, verbose = 0;
+    int n = 300, verbose = 0, hybrid = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-n") && i + 1 < argc) n = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-f") && i + 1 < argc) filter = argv[++i];
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) rec = argv[++i];
         else if (!strcmp(argv[i], "-c") && i + 1 < argc) chk = argv[++i];
         else if (!strcmp(argv[i], "-v")) verbose = 1;
+        else if (!strcmp(argv[i], "-H")) hybrid = 1;
         else image = argv[i];
     }
-    if (!image) { fprintf(stderr, "usage: runner IMAGE [-n N] [-f FILTER] [-r REC | -c REC] [-v]\n"); return 2; }
+    if (!image) { fprintf(stderr, "usage: runner IMAGE [-n N] [-f FILTER] [-r REC | -c REC] [-v] [-H]\n"); return 2; }
     recomp_load(image);
     find_exports();
+#if defined(RECOMP_HYBRID)
+    if (hybrid) {
+        if (!chk) { fprintf(stderr, "-H needs the original code's results (-c)\n"); return 2; }
+        if (recomp_hybrid_thread_init()) die("hybrid thread");
+        recomp_hybrid_enable();
+        for (uint64_t k = 0; k < __recomp_table_size; k++) {
+            char why[160];
+            if (recomp_hybrid_patch(__recomp_slide + __recomp_table[k].guest, __recomp_table[k].fn, why)) {
+                fprintf(stderr, "patch %#" PRIx64 ": %s\n", __recomp_table[k].guest, why);
+                return 2;
+            }
+        }
+    }
+#else
+    if (hybrid) { fprintf(stderr, "-H: built without RECOMP_HYBRID\n"); return 2; }
+#endif
 #if !defined(__x86_64__)
     if (!chk) { fprintf(stderr, "non-x86 host: expected results come from a record file (-c)\n"); return 2; }
 #endif
@@ -121,7 +164,7 @@ int main(int argc, char **argv) {
         Export *x = &exports[e];
         if (filter && !strstr(x->name, filter)) continue;
         RecompFn fn = recomp_lookup(x->link);
-        if (!fn) { printf("MISSING %s (not recompiled)\n", x->name); missing++; continue; }
+        if (!fn && !hybrid) { printf("MISSING %s (not recompiled)\n", x->name); missing++; continue; }
         IntFn orig = (IntFn)(uintptr_t)(__recomp_slide + x->link);
         (void)orig;
         int bad = 0, n_edge = x->fp ? (int)(N_FP_EDGES * N_FP_EDGES) : (int)(N_EDGES * N_EDGES);
@@ -149,7 +192,12 @@ int main(int argc, char **argv) {
             if (rf) { fwrite(&want, 8, 1, rf); fwrite(buf_a, 256, 1, rf); }
             memcpy(buf_b, buf_init, 256);
             char why[160] = "";
+#if defined(RECOMP_HYBRID)
+            int rc = hybrid ? run_hybrid(x->link, x->fp, a, b, c, buf_b, &got, why)
+                            : run_lifted(fn, x->fp, a, b, c, buf_b, &got, why);
+#else
             int rc = run_lifted(fn, x->fp, a, b, c, buf_b, &got, why);
+#endif
             if (rc == 0 && got != want && !(x->fp && is_nan64(got) && is_nan64(want)))
                 sprintf(why, "returned %#" PRIx64 ", expected %#" PRIx64, got, want);
             else if (rc == 0) {
@@ -166,6 +214,14 @@ int main(int argc, char **argv) {
         if (bad) failed++;
         else if (verbose) printf("ok   %s\n", x->name);
     }
+#if defined(RECOMP_HYBRID)
+    if (hybrid) {
+        printf("%d functions tested, %d failed; hybrid: %" PRIu64 " functions recompiled, entered "
+               "%" PRIu64 "x from original code, %" PRIu64 " calls back\n",
+               tests, failed, __recomp_table_size, recomp_hybrid_self->entries, recomp_hybrid_native_calls);
+        return failed ? 1 : 0;
+    }
+#endif
     printf("%d functions tested, %d failed, %d not recompiled; dispatch misses: %" PRIu64 "\n",
            tests, failed, missing, recomp_dispatch_misses);
     return failed || missing ? 1 : 0;
