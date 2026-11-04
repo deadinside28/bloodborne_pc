@@ -616,6 +616,8 @@ class FunctionLifter:
         """Emit one instruction. True when it ended the block."""
         mn = ins.mnemonic
         h = self.mod.handlers.get(mn)
+        if h is None and x87_encoding(self, ins) is not None:
+            h = _x87_native
         if h is None:
             raise Unsupported(f"mnemonic {X_MNEMONIC_NAMES.get(mn, mn)}")
         if ins.has_rep_prefix or ins.has_repne_prefix:
@@ -670,6 +672,47 @@ def _x87_env(L, ins, b):
 @sem(M.WAIT)
 def _fwait(L, ins, b):
     pass  # x87 exceptions stay masked
+
+
+# The rest of x87 (the register stack, arithmetic, loads and stores, compares): each instruction
+# runs as itself in the runtime (__recomp_x87_insn, recomp_x87.h), re-encoded with its memory
+# operand at [rdi]: the x87 state (stack, TOP, tags, words) stays the FPU's, shared with the
+# original code (long doubles pass between functions in st(0)), and every result is exactly the
+# hardware's. The guest's flags go in (fcmovcc reads them) and come back (fcomi/fucomi set them).
+X87_SETS_FLAGS = {M.FCOMI, M.FCOMIP, M.FUCOMI, M.FUCOMIP}
+
+
+def x87_encoding(L, ins):
+    """The instruction's x87 opcode and ModRM with any memory operand moved to [rdi], packed
+    little-endian (length in the top byte), or None when it is not x87 (D8-DF)."""
+    raw = L.mod.image.read(ins.ip, ins.len)
+    if raw is None:
+        return None
+    k = 0
+    while k < len(raw) - 1 and (raw[k] in (0x9B, 0x2E, 0x3E, 0x26, 0x36, 0x64, 0x65) or 0x40 <= raw[k] <= 0x4F):
+        k += 1  # fwait (exceptions stay masked), segments (the address is computed), REX (base/index)
+    if k + 1 >= len(raw) or not 0xD8 <= raw[k] <= 0xDF:
+        return None
+    op, modrm = raw[k], raw[k + 1]
+    if modrm < 0xC0:
+        modrm = (modrm & 0x38) | 0x07  # mod 00, rm 111: [rdi]
+    return op | modrm << 8 | 2 << 56
+
+
+def _x87_native(L, ins, b):
+    enc = x87_encoding(L, ins)
+    mem = any(ins.op_kind(i) == OK.MEMORY for i in range(ins.op_count))
+    addr = L.ea(ins) if mem else "0"
+    flags = "2"  # bit 1 always reads as 1
+    for name, bit in (("cf", 0), ("pf", 2), ("af", 4), ("zf", 6), ("sf", 7), ("of", 11)):
+        v = L.op(f"zext i1 {L.op(f'load i1, ptr %{name}')} to i64")
+        flags = L.op(f"or i64 {flags}, {L.op(f'shl i64 {v}, {bit}')}")
+    r = L.op(f"call i64 @__recomp_x87_insn(ptr %st, i64 {enc}, i64 {addr}, i64 {flags})")
+    if ins.mnemonic in X87_SETS_FLAGS:
+        for name, bit in (("cf", 0), ("pf", 2), ("zf", 6)):
+            L.e(f"store i1 {L.op(f'trunc i64 {L.op(f'lshr i64 {r}, {bit}')} to i1')}, ptr %{name}")
+        for name in ("af", "sf", "of"):
+            L.e(f"store i1 false, ptr %{name}")
 
 
 @sem(M.CLD, M.STD)
@@ -1322,6 +1365,52 @@ def _rep_loop(L, ins, body):
     L.label(done)
 
 
+CMPS_BITS = {M.CMPSB: 8, M.CMPSW: 16, M.CMPSQ: 64}
+
+
+@sem(*CMPS_BITS)
+def _cmps(L, ins, b):
+    """cmps: flags of [rsi] - [rdi], both pointers stepped (DF); repe / repne loop while rcx is
+    not zero and the bytes compare equal / unequal (libc's memcmp, strcmp)."""
+    bits = CMPS_BITS[ins.mnemonic]
+
+    def body():
+        si, di = L.get64(RSI), L.get64(RDI)
+        step = str_step(L, bits // 8)
+        x = L.load(si, bits)
+        y = L.load(di, bits)
+        L.flags_sub(x, y, L.op(f"sub i{bits} {x}, {y}"), bits)
+        L.set64(RSI, L.op(f"add i64 {si}, {step}"))
+        L.set64(RDI, L.op(f"add i64 {di}, {step}"))
+    if not (ins.has_repe_prefix or ins.has_repne_prefix):
+        body()
+        return
+    head, loop, done = (L.uniq(f"cmps_{k}_{ins.ip:x}") for k in "hbd")
+    L.e(f"br label %{head}")
+    L.label(head)
+    L.e(f"br i1 {L.op(f'icmp eq i64 {L.get64(RCX)}, 0')}, label %{done}, label %{loop}")
+    L.label(loop)
+    body()
+    L.set64(RCX, L.op(f"sub i64 {L.get64(RCX)}, 1"))
+    zf = L.op("load i1, ptr %zf")
+    stop = L.op(f"xor i1 {zf}, true") if ins.has_repe_prefix else zf  # repe: stop at a difference
+    L.e(f"br i1 {stop}, label %{done}, label %{head}")
+    L.label(done)
+
+
+@sem(M.CMPXCHG16B)
+def _cmpxchg16b(L, ins, b):
+    """lock cmpxchg16b m128: rdx:rax == m128 ? (ZF, m128 = rcx:rbx) : (!ZF, rdx:rax = m128)."""
+    p = L.op(f"inttoptr i64 {L.ea(ins)} to ptr")
+    wide = lambda hi, lo: L.op(f"or i128 {L.op(f'shl i128 {L.op(f'zext i64 {L.get64(hi)} to i128')}, 64')}, "
+                               f"{L.op(f'zext i64 {L.get64(lo)} to i128')}")
+    pair = L.op(f"cmpxchg ptr {p}, i128 {wide(RDX, RAX)}, i128 {wide(RCX, 3)} seq_cst seq_cst, align 16")  # 3: rbx
+    old = L.op(f"extractvalue {{ i128, i1 }} {pair}, 0")
+    L.setf("zf", L.op(f"extractvalue {{ i128, i1 }} {pair}, 1"))
+    L.set64(RAX, L.op(f"trunc i128 {old} to i64"))  # on success the same as before
+    L.set64(RDX, L.op(f"trunc i128 {L.op(f'lshr i128 {old}, 64')} to i64"))
+
+
 STR_BITS = {M.MOVSB: 8, M.MOVSW: 16, M.MOVSD: 32, M.MOVSQ: 64, M.STOSB: 8, M.STOSW: 16, M.STOSD: 32, M.STOSQ: 64}
 
 
@@ -1549,6 +1638,7 @@ class ModuleLifter:
             "declare void @__recomp_setjmp(ptr) #0",
             "attributes #0 = { returns_twice }",
             "declare i64 @__recomp_x87(ptr, i32, i64)",
+            "declare i64 @__recomp_x87_insn(ptr, i64, i64, i64)",
         ] + sorted(self.intrinsics)
         return "\n".join(head) + "\n\n" + "\n\n".join(bodies) + "\n", errors
 

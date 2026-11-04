@@ -143,7 +143,10 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    the next table) and the x87 environment (fnstenv/fldenv/fnstcw/fldcw/fnstsw/fnclex/fninit
    through __recomp_x87): **165,554 recompiled, 219 original** (135 x87 maths in libc, 81
    changed by bbport, setjmp/longjmp, 1 CFG error); in gameplay the calls into original code
-   go only to functions bbport changes. Next: bbport's hooks as recompiler input: on x86-64 the original and the recompiled code can run in one process. Patch
+   go only to functions bbport changes. Then functions bbport only byte-patches lifted from the
+   patched bytes (37), x87 run natively through __recomp_x87_insn, cmps and cmpxchg16b:
+   **165,722 recompiled, 51 original** (44 with bbport's hooks, 4 unsupported, setjmp/longjmp,
+   1 CFG error). Next: bbport's hooks as recompiler input; an x87 emulator for AArch64: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT

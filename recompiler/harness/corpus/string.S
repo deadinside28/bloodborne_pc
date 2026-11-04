@@ -60,4 +60,79 @@ t_movsq_backward:
     ret
     .size t_movsq_backward, . - t_movsq_backward
 
+// repe cmpsb / cmpsq, and a backward repe cmpsb: buf[0..n) against buf[d..d+n) (equal for a
+// stretch when the bytes repeat), returning where the pointers and rcx stopped and the flags.
+    .globl t_cmps
+    .type t_cmps, @function
+    .p2align 4
+t_cmps:
+    mov r8, rcx                     // buf
+    mov r9, rdi
+    and r9, 63                      // d
+    mov rcx, rsi
+    and rcx, 63                     // n
+    mov rsi, r8
+    lea rdi, [r8 + r9]
+    repe cmpsb
+    setz al
+    setc ah
+    movzx eax, ax
+    sub rsi, r8
+    shl rsi, 16
+    or rax, rsi
+    shl rcx, 32
+    or rax, rcx
+    lea rsi, [r8 + 64]              // quadwords: buf[64..) against buf[64 + 8 (d & 7)..)
+    mov r10, r9
+    and r10, 7
+    lea rdi, [r8 + r10 * 8 + 64]
+    mov rcx, rdx
+    and rcx, 7
+    repe cmpsq
+    mov r11d, 0                     // (setz writes the low byte only; mov keeps the flags)
+    setz r11b
+    shl r11, 48
+    xor rax, r11
+    lea rsi, [r8 + 127]             // backwards from the end of buf[64..128)
+    lea rdi, [r8 + r9 + 127]
+    mov rcx, rdx
+    shr rcx, 3
+    and rcx, 63
+    std
+    repne cmpsb
+    cld
+    sub rdi, r8
+    shl rdi, 52
+    xor rax, rdi
+    ret
+    .size t_cmps, . - t_cmps
+
+// lock cmpxchg16b on buf[16..32): the expected value is a:b, or buf's own when b is odd (the
+// swap succeeds then); returns what rdx:rax hold after it and ZF.
+    .globl t_cmpxchg16b
+    .type t_cmpxchg16b, @function
+    .p2align 4
+t_cmpxchg16b:
+    push rbx
+    mov r8, rcx                     // buf (16-byte aligned: the runner's buffers)
+    mov rax, rdi
+    mov rdx, rsi
+    test dl, 1
+    jz 1f
+    mov rax, [r8 + 16]              // c odd: expect what is there
+    mov rdx, [r8 + 24]
+1:  mov rbx, rdx
+    xor rbx, rax                    // the new value
+    mov rcx, rax
+    not rcx
+    lock cmpxchg16b [r8 + 16]
+    setz bl
+    movzx ebx, bl
+    xor rax, rdx
+    shl rbx, 63
+    xor rax, rbx
+    pop rbx
+    ret
+    .size t_cmpxchg16b, . - t_cmpxchg16b
+
     .section .note.GNU-stack, "", @progbits

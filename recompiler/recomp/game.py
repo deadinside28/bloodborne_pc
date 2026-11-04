@@ -127,7 +127,8 @@ def _work(job):
 HEAD = [STATE_TYPE, "@__recomp_slide = external global i64",
         "declare void @__recomp_dispatch(ptr, i64)", "declare void @__recomp_trap(ptr, i64, i32)",
         "declare void @__recomp_dispatch_jump(ptr, i64)", "declare void @__recomp_setjmp(ptr) #0",
-        "attributes #0 = { returns_twice }", "declare i64 @__recomp_x87(ptr, i32, i64)"]
+        "attributes #0 = { returns_twice }", "declare i64 @__recomp_x87(ptr, i32, i64)",
+        "declare i64 @__recomp_x87_insn(ptr, i64, i64, i64)"]
 _FREF = re.compile(r"@F_([0-9a-f]+)\b")
 
 

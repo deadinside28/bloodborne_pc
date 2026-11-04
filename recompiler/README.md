@@ -100,6 +100,13 @@ output, which must equal the x86-64 run's.
   borrowed and the entry depth at the call, and a return is matched to its record by the slot it
   came through: records and entries it skipped are dropped. (Entries skipped with no outer call
   coming back stay counted until the thread ends; in the game the depth stays at 4-8.)
+- **x87:** the environment instructions go through `__recomp_x87`; every other x87 instruction
+  (D8-DF) through `__recomp_x87_insn`: the lifter re-encodes it with its memory operand at
+  `[rdi]`, and on x86-64 hosts the runtime runs it as itself, in a routine made once per
+  encoding (`push rsi; popfq; insn; pushfq; pop rax; ret`): exact, and the x87 state stays the
+  FPU's, shared with code still running original (long doubles return in st(0)). The guest's
+  flags go in (fcmovcc) and come back (fcomi/fucomi). Other hosts need an x87 emulator behind
+  the same call (not written yet; `corpus/x87.c`, `txf_*`, runs on x86-64 only).
 - **Configurations:** settings install hooks of their own (`BB_FRAME_STATS`: one at 0x26aa860), so
   a library is built against one dump per configuration it must run in
   (`build_aot.sh EBOOT LIST dump1.bin,dump2.bin NAME`); bbport refuses it in any other.

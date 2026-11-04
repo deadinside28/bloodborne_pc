@@ -25,8 +25,9 @@
 #endif
 
 // Exported t_* / tf_* functions (link address), from the image's symbol table; th_* (as t_*) are
-// hybrid-only (corpus/midjump.S): recorded always, checked only with -H.
-typedef struct { const char *name; uint64_t link; int fp, hybrid_only; } Export;
+// hybrid-only (corpus/midjump.S): recorded always, checked only with -H; txf_* (as tf_*) only
+// on x86-64 hosts (corpus/x87.c: x87 runs there only).
+typedef struct { const char *name; uint64_t link; int fp, hybrid_only, x86_only; } Export;
 static Export exports[4096];
 static int n_exports;
 
@@ -40,12 +41,12 @@ static void find_exports(void) {
         const char *str = (const char *)(file + sh[sh[i].sh_link].sh_offset);
         for (size_t k = 0; k < sh[i].sh_size / sizeof(Elf64_Sym); k++) {
             const char *nm = str + sym[k].st_name;
-            int fp = !strncmp(nm, "tf_", 3), hybrid_only = !strncmp(nm, "th_", 3);
+            int x86_only = !strncmp(nm, "txf_", 4), fp = !strncmp(nm, "tf_", 3) || x86_only, hybrid_only = !strncmp(nm, "th_", 3);
             if (ELF64_ST_TYPE(sym[k].st_info) != STT_FUNC || (strncmp(nm, "t_", 2) && !fp && !hybrid_only) || strchr(nm, '.'))
                 continue;
             int dup = 0;
             for (int j = 0; j < n_exports; j++) dup |= exports[j].link == sym[k].st_value;
-            if (!dup && n_exports < 4096) exports[n_exports++] = (Export){ strdup(nm), sym[k].st_value, fp, hybrid_only };
+            if (!dup && n_exports < 4096) exports[n_exports++] = (Export){ strdup(nm), sym[k].st_value, fp, hybrid_only, x86_only };
         }
     }
 }
@@ -192,6 +193,9 @@ int main(int argc, char **argv) {
             }
             if (rf) { fwrite(&want, 8, 1, rf); fwrite(buf_a, 256, 1, rf); }
             if (x->hybrid_only && !hybrid) continue;  // recorded; checked with -H only
+#if !defined(__x86_64__)
+            if (x->x86_only) continue;  // recorded on x86-64; x87 runs there only (recomp_x87.h)
+#endif
             memcpy(buf_b, buf_init, 256);
             char why[160] = "";
 #if defined(RECOMP_HYBRID)
@@ -213,6 +217,9 @@ int main(int argc, char **argv) {
             }
         }
         if (x->hybrid_only && !hybrid) continue;
+#if !defined(__x86_64__)
+        if (x->x86_only) continue;
+#endif
         tests++;
         if (bad) failed++;
         else if (verbose) printf("ok   %s\n", x->name);
