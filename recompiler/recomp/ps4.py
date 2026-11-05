@@ -185,10 +185,12 @@ def load_ps4(path):
 
 
 def _noreturn_by_shape(img):
-    """Functions that end in a call (`call rel32` as their last bytes, into code):
-    compilers never fall through into the next function, so that call does not return, and
-    neither does the function (std::__throw_*("...") wrappers, abort paths). Their callers'
-    code after the call is not decoded (0xf94b00: a jump table followed one)."""
+    """Functions that end in a call (`call rel32` as their last bytes, into code) and have no
+    other way out (no ret, no indirect or outward jump): they never return (std::__throw_*
+    wrappers like 0x297b4d0), and their callers' bytes after the call are not decoded
+    (0xf94b00: a jump table followed). The trailing call's target is not marked: the FDE ranges
+    do not always end where a function's code does (an import called with edi = 3 returned)."""
+    import iced_x86 as X
     found = set()
     for a, f in img.functions.items():
         if not f.end or f.end - a < 5:
@@ -197,8 +199,15 @@ def _noreturn_by_shape(img):
         if not tail or tail[0] != 0xE8:
             continue
         target = (f.end + int.from_bytes(tail[1:], "little", signed=True)) & 0xFFFFFFFFFFFFFFFF
-        if target in img.functions or img.is_code(target):  # a function, or an import stub
-            found.add(a)
+        if not (target in img.functions or img.is_code(target)):
+            continue
+        ins = list(X.Decoder(64, img.read(a, f.end - a) or b"", ip=a))
+        if not ins or ins[-1].ip != f.end - 5 or ins[-1].mnemonic != X.Mnemonic.CALL:
+            continue  # the bytes are not that call's (a longer instruction ends there)
+        if not any(i.mnemonic in (X.Mnemonic.RET, X.Mnemonic.RETF) or i.flow_control == X.FlowControl.INDIRECT_BRANCH
+                   or (i.flow_control == X.FlowControl.UNCONDITIONAL_BRANCH and not a <= i.near_branch_target < f.end)
+                   for i in ins):
+            found.add(a)  # no way out but that call
     return found
 
 
@@ -256,6 +265,7 @@ def _load_into(img, path, base):
     if not hasattr(img, "imports"):
         img.imports = {}  # GOT slot -> import name (NID#library#module)
         img.noreturn_got = set()
+        img.pointers = set()  # the values relocated pointers hold
     loads = [p for p in ph if p["type"] in (PT_LOAD, PT_SCE_RELRO)]
     first_new = len(img.segments)
     for p in loads:
@@ -272,6 +282,7 @@ def _load_into(img, path, base):
         if tag == 0:
             break
         tags[tag] = value
+    img.dynamic_tags = getattr(img, "dynamic_tags", []) + [(base, dict(tags))]
     lib = next(p for p in ph if p["type"] == PT_SCE_DYNLIBDATA)
     blob = elf[lib["offset"]:lib["offset"] + lib["filesz"]]
     strings = blob[tags[0x61000035]:tags[0x61000035] + tags[0x61000037]]
@@ -298,6 +309,7 @@ def _load_into(img, path, base):
                 for seg in new:
                     if seg[0] <= base + target and base + target + 8 <= seg[0] + len(seg[1]):
                         struct.pack_into("<Q", seg[1], base + target - seg[0], (base + addend) & 0xFFFFFFFFFFFFFFFF)
+                        img.pointers.add((base + addend) & 0xFFFFFFFFFFFFFFFF)  # (code pointers among them)
                         applied += 1
                         break
     img.segments[first_new:] = [(v, bytes(d), x) for v, d, x in new]

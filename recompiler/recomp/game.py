@@ -328,6 +328,40 @@ def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
     return selected, excluded, {a: why for a, why in nopatch.items() if a in selected}
 
 
+def _startup_tables(img):
+    """The static constructors and destructors: no FDE describes them and only the startup's own
+    tables point at them. DT_INIT (0x20) and DT_FINI walk tables of code pointers whose addresses
+    they load with `lea reg, [rip + table]`; every code pointer around each such address (both
+    ways, while the words are relocated pointers into code) is taken as a function start."""
+    found = set()
+    for _base, tags in getattr(img, "dynamic_tags", []):
+        for tag in (12, 13):  # DT_INIT, DT_FINI
+            routine = tags.get(tag)
+            if routine is None or not img.is_code(routine):
+                continue
+            code = img.read(routine, 0x100) or b""
+            for i in X.Decoder(64, code, ip=routine):
+                if i.mnemonic == X.Mnemonic.RET:
+                    break
+                if not (i.mnemonic == X.Mnemonic.LEA and i.is_ip_rel_memory_operand):
+                    continue
+                for step in (8, -8):
+                    at = i.ip_rel_memory_address if step > 0 else i.ip_rel_memory_address - 8
+                    for _ in range(100000):
+                        w = img.read(at, 8)
+                        if not w:
+                            break
+                        v = int.from_bytes(w, "little")
+                        if v in (0, 0xFFFFFFFFFFFFFFFF):
+                            at += step
+                            continue  # a table's ends (the .ctors list's -1 and 0)
+                        if v not in getattr(img, "pointers", ()) or not img.is_code(v):
+                            break
+                        found.add(v)
+                        at += step
+    return {v for v in found if v not in img.functions}
+
+
 def _extra_functions(img, starts, workers, shard_size):
     """Phase 1: direct call targets that have no FDE and are not import stubs (real code the
     unwind table does not describe). They are lifted as functions of unknown extent."""
@@ -340,6 +374,7 @@ def _extra_functions(img, starts, workers, shard_size):
     extra = set()
     for r in results:
         extra.update(t for t in r["extra_calls"] if img.is_code(t))
+    extra |= _startup_tables(img)
     every = frozenset(starts) | frozenset(extra)
     for t in extra:
         # its extent from its control flow (no FDE gives one): the end of its last instruction
