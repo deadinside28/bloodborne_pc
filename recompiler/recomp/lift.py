@@ -547,6 +547,68 @@ class FunctionLifter:
         self.e(f"call void @__recomp_dispatch_jump(ptr %st, i64 {runtime_target})")
         self.e("ret void")
 
+    def flags_value(self):
+        """EFLAGS' arithmetic flags as a 64-bit value (bit 1 reads as 1)."""
+        flags = "2"
+        for name, bit in (("cf", 0), ("pf", 2), ("af", 4), ("zf", 6), ("sf", 7), ("of", 11), ("df", 10)):
+            v = self.op(f"zext i1 {self.op(f'load i1, ptr %{name}')} to i64")
+            flags = self.op(f"or i64 {flags}, {self.op(f'shl i64 {v}, {bit}')}")
+        return flags
+
+    def set_flags_value(self, flags):
+        for name, bit in (("cf", 0), ("pf", 2), ("af", 4), ("zf", 6), ("sf", 7), ("of", 11), ("df", 10)):
+            self.e(f"store i1 {self.op(f'trunc i64 {self.op(f'lshr i64 {flags}, {bit}')} to i1')}, ptr %{name}")
+
+    def guest_site(self, ins, b, after_site):
+        """A guest site of the port (gpu/shim/bbport_guest_sites.h): its handler runs before the
+        instruction with every register (__recomp_guest_site); a non-zero result is where the guest
+        goes on instead: past the site's span (a handler that does its instructions' work) stays in
+        this function; anywhere else (a return from the function, say) leaves through the dispatcher."""
+        self.spill("entry")
+        old_sp = self.get64(RSP)
+        old_ret = self.load(old_sp, 64, local=True)  # a handler that returns from the function goes there
+        r = self.op(f"call {{ i64, i64 }} @__recomp_guest_site(ptr %st, i64 {ins.ip}, i64 {self.flags_value()})")
+        self.reload("entry")
+        self.set_flags_value(self.op(f"extractvalue {{ i64, i64 }} {r}, 1"))
+        nxt = self.op(f"extractvalue {{ i64, i64 }} {r}, 0")
+        n = self.site_count = getattr(self, "site_count", 0) + 1
+        span = self.mod.sites[ins.ip]
+        past = ins.ip + span
+        if not span:
+            skip = None  # a handler after the patched instructions: 0, or anywhere (the dispatcher)
+        elif any(i.ip == past for i in b.insns):
+            skip = after_site.setdefault(past, f"site_past_{n}_{past:x}")
+        elif past == b.insns[-1].next_ip:
+            skip = self.target_label(past)[1:]
+        else:
+            skip = None  # the span ends inside an instruction or past this block: the dispatcher
+        on = f"site_on_{n}_{ins.ip:x}"
+        if skip:  # the handler returns runtime addresses: link + slide
+            rel = self.op(f"sub i64 {nxt}, %slide")
+            test = self.op(f"select i1 {self.op(f'icmp eq i64 {nxt}, 0')}, i64 0, i64 {rel}")
+            self.e(f"switch i64 {test}, label %site_away_{n}_{ins.ip:x} [ i64 0, label %{on} i64 {past}, label %{skip} ]")
+        else:
+            self.e(f"br i1 {self.op(f'icmp eq i64 {nxt}, 0')}, label %{on}, label %site_away_{n}_{ins.ip:x}")
+        self.label(f"site_away_{n}_{ins.ip:x}")
+        # A return from the function (the return address popped): returns to the recompiled
+        # caller, whose frame is its own (not the guest stack's: the original code at the return
+        # address must not get it). Anything else: the dispatcher.
+        popped = self.op(f"icmp eq i64 {self.get64(RSP)}, {self.op(f'add i64 {old_sp}, 8')}")
+        to_ret = self.op(f"and i1 {popped}, {self.op(f'icmp eq i64 {nxt}, {old_ret}')}")
+        self.e(f"br i1 {to_ret}, label %site_ret_{n}_{ins.ip:x}, label %site_jump_{n}_{ins.ip:x}")
+        self.label(f"site_ret_{n}_{ins.ip:x}")
+        self.spill("ret")
+        self.e("ret void")
+        self.label(f"site_jump_{n}_{ins.ip:x}")
+        # A block of this function (a handler that skips code, or jumps where a patch's jump went):
+        # there, as recompiled code. Anything else: the dispatcher.
+        rel = self.op(f"sub i64 {nxt}, %slide")
+        cases = " ".join(f"i64 {blk}, label %b_{blk:x}" for blk in sorted(self.cfg.blocks))
+        self.e(f"switch i64 {rel}, label %site_out_{n}_{ins.ip:x} [ {cases} ]")
+        self.label(f"site_out_{n}_{ins.ip:x}")
+        self.exit_dynamic(nxt)
+        self.label(on)
+
     def trap(self, kind):
         self.spill()
         self.e(f"call void @__recomp_trap(ptr %st, i64 {self.code_addr(self.cur_ins.ip)}, i32 {kind})")
@@ -597,8 +659,14 @@ class FunctionLifter:
     def lift_block(self, b):
         self.label(f"b_{b.start:x}")
         terminated = False
+        after_site = {}  # instruction address -> label: where a site's handler goes on past its span
         for ins in b.insns:
             self.cur_ins = ins
+            if ins.ip in after_site:
+                self.e(f"br label %{after_site[ins.ip]}")
+                self.label(after_site.pop(ins.ip))
+            if ins.ip in self.mod.sites:
+                self.guest_site(ins, b, after_site)
             try:
                 terminated = self.lift_insn(ins, b)
             except Unsupported as ex:
@@ -1559,6 +1627,7 @@ class ModuleLifter:
         self.unsupported = {}
         self.unresolved = set()
         self.intrinsics = {"declare i8 @llvm.ctpop.i8(i8)"}
+        self.sites = {}  # the port's guest sites (__recomp_guest_site): link address -> span length
         self.lifted_names = set()
         self.cfgs = {}
         self._stubs = {}
@@ -1638,7 +1707,7 @@ class ModuleLifter:
             "declare void @__recomp_setjmp(ptr) #0",
             "attributes #0 = { returns_twice }",
             "declare i64 @__recomp_x87(ptr, i32, i64)",
-            "declare i64 @__recomp_x87_insn(ptr, i64, i64, i64)",
+            "declare i64 @__recomp_x87_insn(ptr, i64, i64, i64)", "declare { i64, i64 } @__recomp_guest_site(ptr, i64, i64)",
         ] + sorted(self.intrinsics)
         return "\n".join(head) + "\n\n" + "\n\n".join(bodies) + "\n", errors
 

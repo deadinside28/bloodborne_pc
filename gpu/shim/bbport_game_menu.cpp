@@ -4,6 +4,8 @@
 #include "shim/bb_env.h"
 #include "common/types.h"
 #include "bbport_game_menu.h"
+#include "bbport_guest_code_hooks.h"
+#include "bbport_guest_sites.h"
 
 #include <new>
 #include <sys/mman.h>
@@ -19,6 +21,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include <SDL3/SDL_events.h>
 
@@ -85,9 +88,14 @@ const u8 AddPageItemPrologue[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
 const u8 RowInputPrologue[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
 
 u64 image_base = 0;
+/// The game's function (called through bbport_guest_call: bbport_guest_sites.h) or data at `va`.
 template <typename F>
-F Game(u64 va) {
-    return reinterpret_cast<F>(image_base + va);
+auto Game(u64 va) {
+    if constexpr (std::is_pointer_v<F> && std::is_function_v<std::remove_pointer_t<F>>) {
+        return BbGuestFunction<F>{image_base + va};
+    } else {
+        return reinterpret_cast<F>(image_base + va);
+    }
 }
 
 // ---- Texts: ids from IdBase up, looked up by the game like its own messages. ----
@@ -601,13 +609,22 @@ u64 PS4_SYSV_ABI RowInputHook(u8* row, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, d
     if (*reinterpret_cast<int**>(row + RowValue) == &values[OutputRes]) {
         RefreshOutputRow(row);
     }
-    return row_input_original(row, a1, a2, a3, a4, a5, frame_time);
+    const BbGuestCallArgs call{image_base + RowInput, reinterpret_cast<u64>(row_input_original),
+                               {reinterpret_cast<u64>(row), a1, a2, a3, a4, a5}, frame_time};
+    return bbport_guest_call_args(&call);
 }
 
 using LookupFn = const char16_t* (PS4_SYSV_ABI*)(void*, u32, u32, u32);
 using AddFn = void* (PS4_SYSV_ABI*)(void*, void*, void*, void*);
 LookupFn lookup_original = nullptr;
 AddFn add_original = nullptr;
+/// The game's AddPageItem itself (its entry is the port's: bbport_guest_call_args `original`).
+void* AddOriginal(void* menu, void* pair, void* function, void* out) {
+    const BbGuestCallArgs call{image_base + AddPageItem, reinterpret_cast<u64>(add_original),
+                               {reinterpret_cast<u64>(menu), reinterpret_cast<u64>(pair),
+                                reinterpret_cast<u64>(function), reinterpret_cast<u64>(out), 0, 0}, 0.0};
+    return reinterpret_cast<void*>(bbport_guest_call_args(&call));
+}
 std::atomic<const void*> screen_sound_text{nullptr};
 
 const char16_t* PS4_SYSV_ABI LookupHook(void* repository, u32 table, u32 category, u32 id) {
@@ -633,7 +650,9 @@ const char16_t* PS4_SYSV_ABI LookupHook(void* repository, u32 table, u32 categor
         if (id == pages[p].layout->title) return TextOf(pages[p].name);
         if (pages[p].layout->subtitle && id == pages[p].layout->subtitle) return TextOf(pages[p].help);
     }
-    const char16_t* text = lookup_original(repository, table, category, id);
+    const BbGuestCallArgs call{image_base + MsgLookup, reinterpret_cast<u64>(lookup_original),
+                               {reinterpret_cast<u64>(repository), table, category, id, 0, 0}, 0.0};
+    const auto* text = reinterpret_cast<const char16_t*>(bbport_guest_call_args(&call));
     // BB_MSG_TRACE=1 (diagnostics): the game's text lookups per 2 s by category, with an example
     // id and caller and its text (which menu is on screen, issue #255).
     static const bool msg_trace = bb_env_on("BB_MSG_TRACE");
@@ -697,13 +716,13 @@ void AddItem(void* menu, u32 name, u32 help, void* factory) {
     alignas(16) u8 function[FunctionSize] = {};
     *reinterpret_cast<void**>(function + 0x20) = Game<ToFunction>(FactoryToFunction)(source, function);
     alignas(16) u8 out[16] = {};
-    add_original(menu, pair, function, out);
+    AddOriginal(menu, pair, function, out);
     DestroyFunction(function);
     DestroyTexts(pair);
 }
 
 void* PS4_SYSV_ABI AddHook(void* menu, void* pair, void* function, void* out) {
-    void* result = add_original(menu, pair, function, out);
+    void* result = AddOriginal(menu, pair, function, out);
     const void* screen_sound = screen_sound_text.load();
     if (screen_sound && *reinterpret_cast<const void* const*>(pair) == screen_sound) {
         for (std::size_t i = 0; i < pages.size() && i < MaxPages; ++i) {
@@ -716,9 +735,41 @@ void* PS4_SYSV_ABI AddHook(void* menu, void* pair, void* function, void* out) {
     return result;
 }
 
+// The replaced functions as guest sites (bbport_guest_sites.h), for the recompiled game: the
+// port's function with the game's arguments, its result in rax, and a return from the game's.
+// (The hooks call the game's own through the moved prologue: x86 code, `*original`; on AArch64
+// that needs a call of the recompiled function that skips its entry's site once.)
+using Regs = Core::GuestRegisterSnapshot;
+
+u64 Return(Regs* r, u64 result) {
+    r->rax = result;
+    const u64 back = *reinterpret_cast<const u64*>(r->rsp);
+    r->rsp += 8;
+    return back;
+}
+
+__attribute__((sysv_abi)) u64 LookupSite(u64, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    return Return(r, reinterpret_cast<u64>(LookupHook(reinterpret_cast<void*>(r->rdi), u32(r->rsi), u32(r->rdx),
+                                                      u32(r->rcx))));
+}
+
+__attribute__((sysv_abi)) u64 AddPageItemSite(u64, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    return Return(r, reinterpret_cast<u64>(AddHook(reinterpret_cast<void*>(r->rdi), reinterpret_cast<void*>(r->rsi),
+                                                   reinterpret_cast<void*>(r->rdx), reinterpret_cast<void*>(r->rcx))));
+}
+
+__attribute__((sysv_abi)) u64 RowInputSite(u64, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    double frame_time;
+    std::memcpy(&frame_time, r->ymm[0].data(), 8);
+    return Return(r, RowInputHook(reinterpret_cast<u8*>(r->rdi), r->rsi, r->rdx, r->rcx, r->r8, r->r9, frame_time));
+}
+
 /// `jmp hook` at the function (via a near thunk); its moved prologue + `jmp` back is the original.
 bool Detour(unsigned char* image, u64 va, const u8* prologue, std::size_t length, void* hook,
-            void** original, u8*& cursor) {
+            void** original, u8*& cursor, BbGuestSiteHandler site_handler, const char* name) {
     u8* site = image + va;
     if (std::memcmp(site, prologue, length) != 0) {
         std::printf("Game menu: unexpected code at %#llx, not hooked\n", (unsigned long long)va);
@@ -749,6 +800,7 @@ bool Detour(unsigned char* image, u64 va, const u8* prologue, std::size_t length
     }
     *original = trampoline;
     cursor += 64;
+    bbport_guest_site_register(reinterpret_cast<u64>(site), prologue, std::uint32_t(length), site_handler, 0, name);
     return true;
 }
 
@@ -790,11 +842,14 @@ void PatchImage(unsigned char* image, std::uint64_t size) {
     // The lookup first: the menu hook only acts once it has seen the Screen/Sound text.
     const bool ok =
         Detour(image, MsgLookup, MsgLookupPrologue, sizeof(MsgLookupPrologue),
-               reinterpret_cast<void*>(&LookupHook), reinterpret_cast<void**>(&lookup_original), cursor) &&
+               reinterpret_cast<void*>(&LookupHook), reinterpret_cast<void**>(&lookup_original), cursor,
+               LookupSite, "game menu: text lookup") &&
         Detour(image, AddPageItem, AddPageItemPrologue, sizeof(AddPageItemPrologue),
-               reinterpret_cast<void*>(&AddHook), reinterpret_cast<void**>(&add_original), cursor) &&
+               reinterpret_cast<void*>(&AddHook), reinterpret_cast<void**>(&add_original), cursor,
+               AddPageItemSite, "game menu: page items") &&
         Detour(image, RowInput, RowInputPrologue, sizeof(RowInputPrologue),
-               reinterpret_cast<void*>(&RowInputHook), reinterpret_cast<void**>(&row_input_original), cursor);
+               reinterpret_cast<void*>(&RowInputHook), reinterpret_cast<void**>(&row_input_original), cursor,
+               RowInputSite, "game menu: row input");
     mprotect(stubs, page, PROT_READ | PROT_EXEC);
     std::printf("Game menu: %s (%zu pages in System)\n", ok ? "the port's pages are in" : "hooks failed, off",
                 pages.size());

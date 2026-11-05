@@ -360,6 +360,48 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
     abort();
 }
 
+// Guest sites (corpus/sites.S; in bbport: src/runtime_aot.c): the handler does the instruction at
+// the site itself and goes on past it, as the original code, which runs the instruction, does.
+typedef struct { uint64_t next, flags; } RecompSiteResult;
+_Atomic uint64_t recomp_site_calls;
+
+static uint64_t parity_flag(uint64_t v) { return __builtin_parity((unsigned)(v & 0xff)) ? 0 : 4; }
+
+RecompSiteResult __recomp_guest_site(RecompState *st, uint64_t link, uint64_t flags) {
+    static uint64_t add1, vec1, ret1, jmp1, jmp1_to;
+    if (!add1) {
+        add1 = recomp_symbol("gsite_add_1"); vec1 = recomp_symbol("gsite_vec_1");
+        ret1 = recomp_symbol("gsite_ret_1"); jmp1 = recomp_symbol("gsite_jmp_1");
+        jmp1_to = recomp_symbol("gtarget_jmp_1");
+    }
+    if (link == jmp1) return (RecompSiteResult){ __recomp_slide + jmp1_to, flags };  // the jmp's target
+    if (link == ret1) {  // xor rax, 0x55; ret
+        st->gpr[G_RAX] ^= 0x55;
+        const uint64_t back = *(const uint64_t *)(uintptr_t)st->gpr[G_RSP];
+        st->gpr[G_RSP] += 8;
+        return (RecompSiteResult){ back, flags };
+    }
+    recomp_site_calls++;
+    if (link == add1) {  // add rax, rdi
+        const uint64_t a = st->gpr[G_RAX], b = st->gpr[G_RDI], r = a + b;
+        flags &= ~(uint64_t)0x8d5;
+        flags |= (r < a) | parity_flag(r) | (((a ^ b ^ r) >> 4 & 1) << 4) | (uint64_t)(r == 0) << 6 |
+                 (r >> 63) << 7 | ((~(a ^ b) & (a ^ r)) >> 63) << 11;
+        st->gpr[G_RAX] = r;
+        return (RecompSiteResult){ __recomp_slide + link + 3, flags };
+    }
+    if (link == vec1) {  // vpaddd xmm0, xmm0, xmm1
+        uint32_t x[4], y[4];
+        memcpy(x, &st->xmm[0], 16);
+        memcpy(y, &st->xmm[1], 16);
+        for (int i = 0; i < 4; ++i) x[i] += y[i];
+        memcpy(&st->xmm[0], x, 16);
+        st->ymmh[0] = 0;
+        return (RecompSiteResult){ __recomp_slide + link + 4, flags };
+    }
+    return (RecompSiteResult){ 0, flags };  // no handler here: the instruction runs
+}
+
 void __recomp_trap(RecompState *st, uint64_t addr, int32_t kind) {
     (void)st;
     static const char *kinds[] = { "?", "unsupported instruction", "int3/ud2", "divide error", "?", "?", "no-return function returned" };

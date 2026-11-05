@@ -18,6 +18,7 @@ extern RecompImage recomp_image;
 extern _Thread_local sigjmp_buf recomp_trap_jmp;
 extern _Thread_local int recomp_trap_armed;
 extern _Atomic uint64_t recomp_dispatch_misses, recomp_import_calls, recomp_alignment_faults;
+extern _Atomic uint64_t recomp_site_calls;  // guest sites' handler calls (corpus/sites.S)
 
 void recomp_load(const char *path);                       // map, relocate, bind imports
 uint64_t recomp_symbol(const char *name);                  // exported symbol -> link address (0: none)

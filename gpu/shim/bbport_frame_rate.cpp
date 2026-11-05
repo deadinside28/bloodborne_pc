@@ -23,6 +23,8 @@
 #include "render/vk_low_latency.h"
 #include "bbport_guest_code.h"
 #include "bbport_toggles.h"
+#include "bbport_guest_code_hooks.h"
+#include "bbport_guest_sites.h"
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -267,8 +269,10 @@ std::size_t stub_used = 0;
 constexpr std::size_t StubPageSize = 4096;
 
 /// `e` into the stub page; a jump to it at `site` over `length` bytes (the rest int3) if the site
-/// holds `expected`.
-bool Detour(u64 site, const u8* expected, std::size_t length, const Emitter& e) {
+/// holds `expected`; `handler` does the same as a guest site (bbport_guest_sites.h), for the
+/// recompiled game.
+bool Detour(u64 site, const u8* expected, std::size_t length, const Emitter& e, BbGuestSiteHandler handler,
+            u64 tag, const char* name) {
     u8* code = reinterpret_cast<u8*>(image_base + site);
     if (length < 5 || std::memcmp(code, expected, length) != 0 || e.overflow ||
         stub_used + e.size > StubPageSize) {
@@ -284,7 +288,73 @@ bool Detour(u64 site, const u8* expected, std::size_t length, const Emitter& e) 
     code[0] = 0xe9;
     std::memcpy(code + 1, &rel32, 4);
     for (std::size_t i = 5; i < length; ++i) code[i] = 0xcc;
+    bbport_guest_site_register(image_base + site, expected, std::uint32_t(length), handler, tag, name);
     return true;
+}
+
+// ---- The detours as guest sites: each handler does what its stub does ----
+using Regs = Core::GuestRegisterSnapshot;
+
+__attribute__((sysv_abi)) u64 PacerModeSite(u64, void* registers) {
+    const u64 pacer = static_cast<const Regs*>(registers)->r12;
+    *reinterpret_cast<std::uint32_t*>(pacer + 0x10) = 1;
+    *reinterpret_cast<u8*>(pacer + 0x14) = 0;
+    std::memcpy(reinterpret_cast<void*>(pacer + 0x18), &live->shortest, 4);
+    *reinterpret_cast<u64*>(pacer + 0x268) = 0;
+    return 0; // the lea runs
+}
+
+/// `test dl, dl; mov eax, [r12 + 0x10]` (the je dropped), on past the site's 9 bytes.
+__attribute__((sysv_abi)) u64 PacerLateSite(u64, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    const u8 dl = u8(r->rdx);
+    r->rflags &= ~u64(0x8d5); // test: CF OF cleared, AF undefined (cleared, as the hardware)
+    r->rflags |= (dl == 0 ? 0x40 : 0) | (dl & 0x80) | (__builtin_parity(dl) ? 0 : 4);
+    r->rax = *reinterpret_cast<const std::uint32_t*>(r->r12 + 0x10);
+    return image_base + 0x2034d96 + 9;
+}
+
+/// FrameStep, then the frame's time at [rbp - 0x38] (for `mov dword [rbp - 0x38], 1/30`).
+__attribute__((sysv_abi)) u64 StepSite(u64, void* registers) {
+    const auto* r = static_cast<const Regs*>(registers);
+    FrameStep(r->rbx);
+    std::memcpy(reinterpret_cast<void*>(r->rbp - 0x38), &live->dt, 4);
+    return image_base + 0x2018e36 + 7;
+}
+
+/// A fixed step (`mov dword [rbp + offset], 1/30` at the site): the frame's time. Tag: the site
+/// << 8 | the offset's byte.
+__attribute__((sysv_abi)) u64 FixedStepSite(u64 tag, void* registers) {
+    const std::int8_t offset = std::int8_t(tag & 0xff);
+    std::memcpy(reinterpret_cast<void*>(static_cast<const Regs*>(registers)->rbp + offset), &live->dt, 4);
+    return image_base + (tag >> 8) + 7;
+}
+
+/// `vdivss xmm0, xmm0, [rbp - 0x74]` in place of the multiplication by 30 (VEX: bits 128-255 cleared).
+__attribute__((sysv_abi)) u64 RunSpeedSite(u64, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    float x, d;
+    std::memcpy(&x, r->ymm[0].data(), 4);
+    std::memcpy(&d, reinterpret_cast<const void*>(r->rbp - 0x74), 4);
+    x /= d;
+    std::memcpy(r->ymm[0].data(), &x, 4);
+    std::memset(r->ymm[0].data() + 16, 0, 16);
+    return image_base + 0x1514c24 + 8;
+}
+
+/// The function replaced: ClothStiffnessFactor with its arguments, the result in xmm0, a return.
+__attribute__((sysv_abi)) u64 ClothStiffnessSite(u64, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    float a, b;
+    std::memcpy(&a, r->ymm[0].data(), 4);
+    std::memcpy(&b, r->ymm[1].data(), 4);
+    const float f = ClothStiffnessFactor(reinterpret_cast<const u8*>(r->rdi), int(r->rsi), int(r->rdx),
+                                         int(r->rcx), a, b);
+    std::memset(r->ymm[0].data(), 0, 32);
+    std::memcpy(r->ymm[0].data(), &f, 4);
+    const u64 back = *reinterpret_cast<const u64*>(r->rsp);
+    r->rsp += 8;
+    return back;
 }
 
 /// The pacer's mode, after the game chose it (0x203493d, `lea r15, [r12 + 0x268]`; r12 the
@@ -302,7 +372,7 @@ bool HookPacerMode() {
     e.Bytes({0x49, 0xc7, 0x84, 0x24, 0x68, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}); // mov qword [r12 + 0x268], 0
     for (const u8 b : code) e.Bytes({b});
     e.JmpAbs(image_base + 0x203493d + sizeof(code));
-    return Detour(0x203493d, code, sizeof(code), e);
+    return Detour(0x203493d, code, sizeof(code), e, PacerModeSite, 0, "frame pacer mode");
 }
 
 /// The pacer keeps its one vblank when a frame came late (0x2034d96: `test dl, dl; je; mov eax,
@@ -313,7 +383,7 @@ bool HookPacerLate() {
     e.Bytes({0x84, 0xd2});                   // test dl, dl
     e.Bytes({0x41, 0x8b, 0x44, 0x24, 0x10}); // mov eax, [r12 + 0x10]
     e.JmpAbs(image_base + 0x2034d9f);
-    return Detour(0x2034d96, code, sizeof(code), e);
+    return Detour(0x2034d96, code, sizeof(code), e, PacerLateSite, 0, "frame pacer late frame");
 }
 
 /// The main loop's step (0x2018e36: `mov dword [rbp - 0x38], 1/30`, its time; rbx the pacer):
@@ -327,7 +397,7 @@ bool HookStep() {
     e.RestoreVolatile();
     e.StoreToFrame(&live->dt, -0x38);
     e.JmpAbs(image_base + 0x2018e36 + sizeof(code));
-    return Detour(0x2018e36, code, sizeof(code), e);
+    return Detour(0x2018e36, code, sizeof(code), e, StepSite, 0, "main loop step");
 }
 
 /// A subsystem stepped by a fixed 1/30 s (`mov dword [rbp + offset], 1/30` at `site`): by the
@@ -337,7 +407,7 @@ bool HookFixedStep(u64 site, std::int8_t offset) {
     Emitter e;
     e.StoreToFrame(&live->dt, offset);
     e.JmpAbs(image_base + site + sizeof(code));
-    return Detour(site, code, sizeof(code), e);
+    return Detour(site, code, sizeof(code), e, FixedStepSite, site << 8 | u8(offset), "fixed 1/30 s step");
 }
 
 /// The run's wall check (0x1514c24: the distance moved this frame x 30 = a speed at 30 FPS): the
@@ -363,7 +433,7 @@ int HookRunSpeed() {
     Emitter e;
     e.Bytes({0xc5, 0xfa, 0x5e, 0x45, 0x8c}); // vdivss xmm0, xmm0, [rbp - 0x74]
     e.JmpAbs(image_base + site + 8);
-    return Detour(site, expected, 8, e) ? 1 : 0;
+    return Detour(site, expected, 8, e, RunSpeedSite, 0, "run wall check by speed") ? 1 : 0;
 }
 
 /// Havok's stiffness factor (0x1167a80: `push rbp; mov rbp, rsp; push r15`) by
@@ -375,7 +445,7 @@ bool HookClothStiffness() {
     if (!(cloth_exponent < 0.0f && cloth_exponent > -4.0f)) return false;
     Emitter e;
     e.JmpAbs(reinterpret_cast<u64>(&ClothStiffnessFactor));
-    return Detour(site, code, sizeof(code), e);
+    return Detour(site, code, sizeof(code), e, ClothStiffnessSite, 0, "cloth stiffness factor");
 }
 
 /// A mapping within +-2 GiB of the image (below it), for rel32 jumps and RIP-relative operands.

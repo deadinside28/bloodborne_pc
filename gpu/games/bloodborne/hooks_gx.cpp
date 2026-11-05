@@ -115,8 +115,7 @@ void PS4_SYSV_ABI GxQueryCreated(u64, const Core::GuestRegisterSnapshot* r) {
     const bool simulated = status == 0 && fail_every > 0 &&
                            (creations.fetch_add(1) + 1) % u64(fail_every) == 0;
     if (simulated) {
-        using Release = void(PS4_SYSV_ABI*)(u64 query);
-        reinterpret_cast<Release>(ImageBase + GxQueryRelease)(query);
+        bbport_guest_call(ImageBase + GxQueryRelease, query, 0, 0, 0, 0, 0);
         const_cast<Core::GuestRegisterSnapshot*>(r)->rax = status = 9;
     }
     static std::atomic<int> traced{0};
@@ -169,8 +168,7 @@ void PS4_SYSV_ABI GxQueryWithoutHandle(u64 query) {
     bool failed = false;
     for (const auto& slot : gx_query_failed) failed = failed || slot.load(std::memory_order_relaxed) == query;
     if (failed) {
-        using Create = bool(PS4_SYSV_ABI*)(u64 query, std::uint32_t kind);
-        reinterpret_cast<Create>(ImageBase + GxQueryCreate)(query, 1); // GxQueryCreated keeps or forgets it
+        bbport_guest_call(ImageBase + GxQueryCreate, query, 1, 0, 0, 0, 0); // GxQueryCreated keeps or forgets it
     }
     const bool created = *reinterpret_cast<const volatile u64*>(query) != 0;
     const u64 recreated = gx_query_recreated.fetch_add(created) + created;
@@ -183,6 +181,44 @@ void PS4_SYSV_ABI GxQueryWithoutHandle(u64 query) {
                 failed ? "its creation had failed" : "no failed creation seen: released?",
                 static_cast<unsigned long long>(recreated), static_cast<unsigned long long>(skipped),
                 ThreadName().data());
+}
+
+// The guards as guest sites (bbport_guest_sites.h), for the recompiled game.
+using Regs = Core::GuestRegisterSnapshot;
+
+/// `mov [r12 + 8], r13`: a null node skips the post (the stub's int3, OnTrap).
+__attribute__((sysv_abi)) u64 GxNodeSiteHandler(u64, void* registers) {
+    if (static_cast<const Regs*>(registers)->r12 != 0) {
+        return 0;
+    }
+    static std::atomic<bool> told{false};
+    if (!told.exchange(true)) {
+        std::printf("Guest hooks: the GX per-frame command heap was full: a render command waits for "
+                    "the next frame (#162)\n");
+    }
+    return ImageBase + GxNodeSkip;
+}
+
+/// The begin: begun or ended already -> the game's return; no handle -> created again if its
+/// creation had failed, else not begun.
+__attribute__((sysv_abi)) u64 GxQueryBeginSiteHandler(u64, void* registers) {
+    const u64 query = static_cast<const Regs*>(registers)->rdi;
+    if (*reinterpret_cast<const volatile std::uint32_t*>(query + 8) != 0) {
+        return ImageBase + GxQueryReturn;
+    }
+    if (*reinterpret_cast<const volatile u64*>(query) == 0) {
+        GxQueryWithoutHandle(query);
+        if (*reinterpret_cast<const volatile u64*>(query) == 0) {
+            return ImageBase + GxQueryReturn;
+        }
+    }
+    return 0;
+}
+
+/// The end: only a query with a handle is ended.
+__attribute__((sysv_abi)) u64 GxQueryEndSiteHandler(u64, void* registers) {
+    const u64 query = static_cast<const Regs*>(registers)->rdi;
+    return *reinterpret_cast<const volatile u64*>(query) == 0 ? ImageBase + GxQueryEndReturn : 0;
 }
 
 } // namespace
@@ -210,6 +246,7 @@ bool InstallGxNodeGuard() {
     reinterpret_cast<u8*>(address)[0] = 0xcc; // OnTrap runs the instruction meanwhile
     mprotect(page, (address + 5) - reinterpret_cast<u64>(page), Core::GuestCodeProtection());
     WriteJumpOverTrap(address, 0xe9, rel);
+    bbport_guest_site_register(address, GxNodeCode, 5, GxNodeSiteHandler, 0, "GX node guard (#162)");
     return true;
 }
 
@@ -264,6 +301,10 @@ bool InstallGxQueryGuard() {
                                                    GxQueryCreateExitCode, 0, GxQueryCreated);
     WriteJumpOverTrap(begin, 0xe9, begin_rel);
     WriteJumpOverTrap(end, 0xe9, end_rel);
+    bbport_guest_site_register(begin, GxQueryBeginCode, sizeof(GxQueryBeginCode), GxQueryBeginSiteHandler, 0,
+                               "GX occlusion query begin guard");
+    bbport_guest_site_register(end, GxQueryEndCode, sizeof(GxQueryEndCode), GxQueryEndSiteHandler, 0,
+                               "GX occlusion query end guard");
     return true;
 }
 

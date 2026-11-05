@@ -155,8 +155,7 @@ void PS4_SYSV_ABI JobSlotFix(u64 runner, u64 queue, std::uint32_t result,
     if (!item) {
         return;
     }
-    using GiveBack = void(PS4_SYSV_ABI*)(u64 queue, u64 item);
-    reinterpret_cast<GiveBack>(ImageBase + 0x1056990)(queue, item);
+    bbport_guest_call(ImageBase + 0x1056990, queue, item, 0, 0, 0, 0);
     held = 0;
     const u64 n = job_slots_released.fetch_add(1) + 1;
     if (n <= 5 || (n & (n - 1)) == 0) {
@@ -187,14 +186,26 @@ void PS4_SYSV_ABI JobSlotDrop(u64 runner) {
     if (!queue) {
         return;
     }
-    using GiveBack = void(PS4_SYSV_ABI*)(u64 queue, u64 item);
-    reinterpret_cast<GiveBack>(ImageBase + 0x1056990)(queue, item);
+    bbport_guest_call(ImageBase + 0x1056990, queue, item, 0, 0, 0, 0);
     held = 0;
     const u64 n = job_slots_released.fetch_add(1) + 1;
     if (n <= 5 || (n & (n - 1)) == 0) {
         std::printf("Guest hooks: a render job destroyed with its slot gave it back (%llu so far)\n",
                     static_cast<unsigned long long>(n));
     }
+}
+
+// The same as guest sites (bbport_guest_sites.h), for the recompiled game: observers (0: the
+// original instructions run).
+__attribute__((sysv_abi)) u64 JobSlotDropSite(u64, void* registers) {
+    JobSlotDrop(static_cast<const Core::GuestRegisterSnapshot*>(registers)->rbx);
+    return 0;
+}
+
+__attribute__((sysv_abi)) u64 JobSlotFixSite(u64, void* registers) {
+    const auto* r = static_cast<const Core::GuestRegisterSnapshot*>(registers);
+    JobSlotFix(r->r14, r->r12, std::uint32_t(r->r15), std::uint32_t(r->rax));
+    return 0;
 }
 
 bool InstallJobSlotDropHook(u64 offset) {
@@ -221,6 +232,8 @@ bool InstallJobSlotDropHook(u64 offset) {
         return false;
     }
     WriteJumpOverTrap(address, 0xe9, rel);
+    bbport_guest_site_register(address, code.data(), std::uint32_t(code.size()), JobSlotDropSite, 0,
+                               "render job slot drop");
     return true;
 }
 
@@ -278,6 +291,8 @@ bool InstallJobSlotFix() {
         return false;
     }
     WriteJumpOverTrap(address, 0xe9, rel);
+    bbport_guest_site_register(address, code.data(), std::uint32_t(code.size()), JobSlotFixSite, 0,
+                               "render job slot fix");
     return InstallJobSlotDropHook(0x106798a) & InstallJobSlotDropHook(0x1067a5c) && true;
 }
 

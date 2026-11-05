@@ -7,6 +7,7 @@
 
 #include "bbport_map_near.h"
 #include "bbport_guest_code_hooks.h"
+#include "bbport_guest_sites.h"
 
 #include <algorithm>
 #include <atomic>
@@ -112,6 +113,30 @@ void WriteCode(std::uint8_t* code, const std::uint8_t* bytes, std::size_t size) 
 }
 
 std::atomic<bool> code_writable{false};
+
+/// The guest site of each hook (bbport_guest_sites.h): what its trampoline does, for the
+/// recompiled game. The site's tag is the index here.
+struct SiteHook {
+    GuestCodeHook hook;
+    std::uint64_t tag;
+    std::uint8_t* skip_flag;
+};
+constexpr std::size_t MaxSiteHooks = 512;
+SiteHook site_hooks[MaxSiteHooks];
+std::size_t site_hook_count = 0; // under hook_mutex
+
+__attribute__((sysv_abi)) std::uint64_t SiteHandler(std::uint64_t index, void* registers) {
+    const SiteHook& h = site_hooks[index];
+    auto* r = static_cast<GuestRegisterSnapshot*>(registers);
+    h.hook(h.tag, r);
+    if (h.skip_flag && __atomic_exchange_n(h.skip_flag, std::uint8_t(0), __ATOMIC_SEQ_CST)) {
+        // return from the game's function (the trampoline's `ret`)
+        const std::uint64_t back = *reinterpret_cast<const std::uint64_t*>(r->rsp);
+        r->rsp += 8;
+        return back;
+    }
+    return 0;
+}
 
 } // namespace
 
@@ -243,6 +268,13 @@ bool InstallGuestCodeHook(void* address, std::span<const std::uint8_t> expected,
         std::fprintf(stderr, "Guest code hook at %p: trampoline failed (%s)\n", address,
                      error.what());
         return false;
+    }
+    if (site_hook_count < MaxSiteHooks) {
+        site_hooks[site_hook_count] = {hook, tag, const_cast<std::uint8_t*>(skip_flag)};
+        if (bbport_guest_site_register(begin, expected.data(), std::uint32_t(expected.size()), SiteHandler,
+                                       site_hook_count, "guest code hook") == 0) {
+            ++site_hook_count;
+        }
     }
     // The site: a jump to the trampoline, the rest of the span filled with nops.
     std::vector<std::uint8_t> patch(expected.size(), 0x90);

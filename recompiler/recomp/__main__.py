@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """python -m recomp lift IMAGE -o OUT.ll [--tso] [--fde]"""
 import argparse
+import os
 import sys
 
 from .image import load_elf
@@ -40,6 +41,9 @@ def main():
     vhelp = ("x86-64 targets next to the original code (hybrid): guest memory accesses as volatile (no "
              "dropped, merged or hoisted loads and stores; the hardware keeps x86 ordering)")
     lp.add_argument("--volatile", action="store_true", help=vhelp)
+    lp.add_argument("--sites", metavar="FILE",
+                    help="guest sites (as BB_AOT_DUMP's .sites: link address, length per line): their handler "
+                         "(__recomp_guest_site) is called before the instruction there")
     gp = sub.add_parser("game", help="survey or build the PS4 game executable (eboot.bin) in shards")
     gp.add_argument("eboot")
     gp.add_argument("--out", help="write part-NNNN.ll shards and table.ll here (default: survey only)")
@@ -72,13 +76,21 @@ def main():
             img = load_ps4(a.eboot)
         only = read_addresses(a.only) if a.only else None
         live = [open(p, "rb").read() for p in a.live] if a.live else None
+        from .game import read_sites
+        sites = {}
+        for p in a.live or ():  # BB_AOT_DUMP writes the port's guest sites next to its image
+            if os.path.exists(p + ".sites"):
+                sites.update(read_sites(p + ".sites"))
         total = game.run(img, out=a.out, shard_size=a.shard, workers=a.workers, tso=a.tso, abi=a.abi, limit=a.limit,
-                         only=only, live=live, volatile=a.volatile)
+                         only=only, live=live, volatile=a.volatile, sites=sites)
         print(game.report(total, a.report))
         return
     img = load_elf(a.image, use_symbols=not a.fde)
     m = ModuleLifter(img, tso=a.tso, abi=a.abi, local_frames=not a.tso_strict,
                      rcpc={"rcpc": "check", "rcpc-fault": "fault", "barriers": None}[a.tso_mode], volatile=a.volatile)
+    if a.sites:
+        from .game import read_sites, site_handlers
+        m.sites = site_handlers(read_sites(a.sites))
     m.discover()
     if a.select or a.only:
         keep = set(m.cfgs)

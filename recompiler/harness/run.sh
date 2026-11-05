@@ -43,11 +43,15 @@ for v in $variants; do
     so=$out/corpus-$v.so
     $cc $opt -march=$march $cflags "${extra[@]}" -o "$so" "$here"/corpus/*.c "$here"/corpus/*.S
     if readelf -rW "$so" | grep -q JUMP_SLOT; then echo "[$v] corpus has PLT calls (libgcc?)"; status=1; continue; fi
+    # corpus/sites.S's guest sites: gsite_add_* (3 bytes), gsite_vec_* and gsite_ret_* (4 bytes), gsite_jmp_* (2)
+    nm -D --defined-only "$so" | awk '$3 ~ /^gsite_add_/ {print "0x"$1, 3, "000000", $3} $3 ~ /^gsite_vec_/ {print "0x"$1, 4, "00000000", $3} $3 ~ /^gsite_ret_/ {print "0x"$1, 4, "00000000", $3} $3 ~ /^gsite_jmp_/ {print "0x"$1, 2, "0000", $3}' \
+        > "$out/sites-$v.txt"
+    st=(--sites "$out/sites-$v.txt")
     for mode in ${BB_RECOMP_MODES:-default abi}; do
         lf=(); [[ $mode == abi ]] && lf=(--abi)
         t=$v-$mode
-        (cd "$root" && "$py" -W ignore -m recomp lift "$so" "${lf[@]}" -o "$out/corpus-$t.ll") 2> "$out/corpus-$t.lift.log"
-        (cd "$root" && "$py" -W ignore -m recomp lift "$so" "${lf[@]}" --tso -o "$out/corpus-$t.tso.ll") 2>/dev/null
+        (cd "$root" && "$py" -W ignore -m recomp lift "$so" "${lf[@]}" "${st[@]}" -o "$out/corpus-$t.ll") 2> "$out/corpus-$t.lift.log"
+        (cd "$root" && "$py" -W ignore -m recomp lift "$so" "${lf[@]}" "${st[@]}" --tso -o "$out/corpus-$t.tso.ll") 2>/dev/null
         grep -E '^(unsupported|cfg)' "$out/corpus-$t.lift.log" | sed "s/^/[$t] /" | head -20 || true
         clang -O2 -march=x86-64-v2 -c -Wno-override-module "$out/corpus-$t.ll" -o "$out/lifted-$t.o"
         for ir in corpus-$t corpus-$t.tso; do
@@ -68,7 +72,7 @@ for v in $variants; do
             # original code through entry patches and calling back into it.
             for sel in 1:0 2:0 2:1 3:1; do
                 h=$t-hybrid-${sel/:/_}
-                (cd "$root" && "$py" -W ignore -m recomp lift "$so" "${lf[@]}" --select "$sel" -o "$out/corpus-$h.ll") 2>/dev/null
+                (cd "$root" && "$py" -W ignore -m recomp lift "$so" "${lf[@]}" "${st[@]}" --select "$sel" -o "$out/corpus-$h.ll") 2>/dev/null
                 clang -O2 -march=x86-64-v2 -c -Wno-override-module "$out/corpus-$h.ll" -o "$out/lifted-$h.o"
                 cc -O1 -g -DRECOMP_HYBRID -I"$here" -o "$out/runner-$h" "$here/runner.c" "$here/recomp_loader.c" \
                     "$here/recomp_hybrid.c" "$out/hybrid_x86.o" "$out/lifted-$h.o"

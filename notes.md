@@ -148,8 +148,17 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    **165,722 recompiled, 51 original** (44 with bbport's hooks, 4 unsupported, setjmp/longjmp,
    1 CFG error). Then an x87 emulator for AArch64 (`recompiler/harness/recomp_x87_emu.h`): all 394
    forms the lifter passes through match the hardware bit for bit (x87_fuzz.c, 79M runs), and
-   the x87 corpus passes emulated on x86-64 and under QEMU. Next: bbport's hooks as recompiler
-   input. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
+   the x87 corpus passes emulated on x86-64 and under QEMU. Then bbport's hooks as recompiler
+   input (guest sites, `gpu/shim/bbport_guest_sites.h`): all 56 sites of the default settings
+   (57 with BB_FRAME_STATS) have C++ handlers doing what their x86 stubs do; the recompiled code
+   calls them; handlers call game functions through `bbport_guest_call`. **165,766 recompiled,
+   7 original** (4 unsupported instructions, setjmp/longjmp, 1 CFG error; none for bbport's
+   changes); gameplay OK, calls back into original game code 1.4M -> 1,421 per run, 59 FPS
+   against 62 unmodified at the same time (the previous library matched: the sites' cost,
+   to look at). Open for AArch64: game calls from bbport outside handlers (BBSC calls dozens
+   directly), the "call the replaced original" path (game menu) on the recompiled side, the frame
+   rate's ~50 redirected constants (byte patches pointing at bbport's page: lifted as patched,
+   need that page at the same place), BBSC's own sites and runtime patches. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT

@@ -123,19 +123,18 @@ constexpr std::uint32_t GfxManaged = 0x40, GfxNumber = 5, GfxDisplayObject = 10;
 /// ObjectInterface's methods in Scaleform 4's order: AddRef, Release, HasMember, GetMember
 /// (the slot the game's path lookup calls), SetMember.
 constexpr std::size_t SlotAddRef = 0x10, SlotRelease = 0x18, SlotGetMember = 0x28, SlotSetMember = 0x30;
-using GfxRefFn = void (PS4_SYSV_ABI*)(void* oi, GfxValue* value, void* data);
-using GfxGetFn = bool (PS4_SYSV_ABI*)(void* oi, void* data, const char* name, GfxValue* out, bool isdobj);
-using GfxSetFn = bool (PS4_SYSV_ABI*)(void* oi, void* data, const char* name, const GfxValue* value, bool isdobj);
-template <typename F>
-F GfxMethod(void* oi, std::size_t slot) {
-    return *reinterpret_cast<F*>(*reinterpret_cast<u8**>(oi) + slot);
+/// The method's address (the game's code: called through bbport_guest_call).
+u64 GfxMethod(void* oi, std::size_t slot) {
+    return *reinterpret_cast<const u64*>(*reinterpret_cast<u8**>(oi) + slot);
 }
+u64 P(const void* p) { return reinterpret_cast<u64>(p); }
 bool GfxIsObject(const GfxValue& v) {
     return v.object_interface && (v.type & 0x8c) == 8;
 }
 void GfxRelease(GfxValue& v) {
     if (v.object_interface && (v.type & GfxManaged)) {
-        GfxMethod<GfxRefFn>(v.object_interface, SlotRelease)(v.object_interface, &v, v.value.data);
+        bbport_guest_call(GfxMethod(v.object_interface, SlotRelease), P(v.object_interface), P(&v), P(v.value.data), 0,
+                          0, 0);
     }
     v = GfxValue{};
 }
@@ -144,8 +143,8 @@ bool GfxGet(const GfxValue& object, const char* name, GfxValue& out) {
     out = GfxValue{};
     if (!GfxIsObject(object)) return false;
     const bool isdobj = (object.type & 0x8f) == GfxDisplayObject;
-    return GfxMethod<GfxGetFn>(object.object_interface, SlotGetMember)(object.object_interface,
-                                                                       object.value.data, name, &out, isdobj);
+    return u8(bbport_guest_call(GfxMethod(object.object_interface, SlotGetMember), P(object.object_interface),
+                                P(object.value.data), P(name), P(&out), isdobj, 0)) != 0;
 }
 bool GfxGetNumber(const GfxValue& object, const char* name, double& number) {
     GfxValue v;
@@ -160,8 +159,8 @@ bool GfxSetNumber(const GfxValue& object, const char* name, double number) {
     v.type = GfxNumber;
     v.value.number = number;
     const bool isdobj = (object.type & 0x8f) == GfxDisplayObject;
-    return GfxMethod<GfxSetFn>(object.object_interface, SlotSetMember)(object.object_interface,
-                                                                       object.value.data, name, &v, isdobj);
+    return u8(bbport_guest_call(GfxMethod(object.object_interface, SlotSetMember), P(object.object_interface),
+                                P(object.value.data), P(name), P(&v), isdobj, 0)) != 0;
 }
 
 /// The game's in-game screen (vtable 0x539c988) updates once a frame (0x1bf9e10: rdi the screen,
@@ -320,6 +319,89 @@ alignas(8) std::atomic<u64> look_delta{0}; ///< (pitch, yaw) as two floats, take
 
 std::atomic<long long> look_since_ms{0}; ///< when look_delta last went from empty to not
 
+// ---- The camera's and HUD's hooks as guest sites (bbport_guest_sites.h), for the recompiled game.
+using Regs = Core::GuestRegisterSnapshot;
+
+/// Lane by lane a * b + c, rounded twice (as vmulps then vaddps: never fused).
+void MulAdd(float* out, const float* a, const float* b, const float* c) {
+    for (int i = 0; i < 4; ++i) {
+        volatile float p = a[i] * b[i];
+        out[i] = p + c[i];
+    }
+}
+
+__attribute__((sysv_abi)) u64 FreeCameraSite(u64, void* registers) {
+    free_camera_manager.store(static_cast<const Regs*>(registers)->r12, std::memory_order_relaxed);
+    return 0;
+}
+
+/// After the camera parameter store: the aspect ratio and field of view (the stub's x87 part).
+__attribute__((sysv_abi)) u64 CameraAspectSite(u64, void* registers) {
+    const u64 camera = static_cast<const Regs*>(registers)->rbx;
+    camera_state.store(camera, std::memory_order_relaxed);
+    if (const std::uint32_t bits = camera_aspect_bits.load(std::memory_order_relaxed)) {
+        std::memcpy(reinterpret_cast<void*>(camera + 0x54), &bits, 4);
+    }
+    if (const std::uint32_t bits = camera_fov_scale.bits.load(std::memory_order_relaxed)) {
+        float fov, factor;
+        std::memcpy(&fov, reinterpret_cast<const void*>(camera + 0x50), 4);
+        std::memcpy(&factor, &bits, 4);
+        const long double half = (long double)fov * camera_fov_scale.half;
+        const float wide = float(2.0L * std::atan(std::tan(half) * (long double)factor));
+        std::memcpy(reinterpret_cast<void*>(camera + 0x50), &wide, 4);
+    }
+    return 0;
+}
+
+/// `vmulps xmm0, xmm0, [scale]; vaddps xmm0, xmm0, [bias]` with the port's scale (tag: the site).
+__attribute__((sysv_abi)) u64 MarkerSiteHandler(u64 index, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    float x[4], k[4], bias[4];
+    std::memcpy(x, r->ymm[0].data(), 16);
+    for (int i = 0; i < 4; ++i) {
+        const std::uint32_t b = marker_scales[index].now[i].load(std::memory_order_relaxed);
+        std::memcpy(&k[i], &b, 4);
+    }
+    std::memcpy(bias, reinterpret_cast<const void*>(ImageBase + MarkerSites[index].bias), 16);
+    MulAdd(x, x, k, bias);
+    std::memcpy(r->ymm[0].data(), x, 16);
+    std::memset(r->ymm[0].data() + 16, 0, 16);
+    return ImageBase + MarkerSites[index].offset + 16;
+}
+
+__attribute__((sysv_abi)) u64 ViewportSite(u64, void* registers) {
+    const auto* r = static_cast<const Regs*>(registers);
+    ViewportAdjust(r->rdi, r->rsi, *reinterpret_cast<const u64*>(r->rsp));
+    return 0;
+}
+
+__attribute__((sysv_abi)) u64 HudFrameSiteHandler(u64, void* registers) {
+    HudFrame(static_cast<const Regs*>(registers)->rdi);
+    return 0;
+}
+
+/// After the stick's turn (xmm1): the menu's camera speeds, and the mouse's turn added.
+__attribute__((sysv_abi)) u64 LookSiteHandler(u64, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    float turn[4], speed[4], mouse[4] = {};
+    std::memcpy(turn, r->ymm[1].data(), 16);
+    for (int i = 0; i < 4; ++i) speed[i] = BbSettings::Get().camera_speed[i].load(std::memory_order_relaxed);
+    const u64 delta = look_delta.exchange(0);
+    if (delta) {
+        *reinterpret_cast<std::int32_t*>(r->rbp - 0x3c4) = 1;
+        *reinterpret_cast<u8*>(r->r13 + 0x15c) = 1;
+        *reinterpret_cast<std::uint32_t*>(r->r13 + 0x154) = 0;
+        std::memcpy(mouse, &delta, 8);
+    }
+    for (int i = 0; i < 4; ++i) {
+        volatile float p = turn[i] * speed[i];
+        turn[i] = p + mouse[i]; // added even when zero, as the stub's vaddps (-0 + 0 = +0)
+    }
+    std::memcpy(r->ymm[1].data(), turn, 16);
+    std::memset(r->ymm[1].data() + 16, 0, 16);
+    return 0;
+}
+
 } // namespace
 
 bool InstallFreeCameraProbe() {
@@ -346,6 +428,8 @@ bool InstallFreeCameraProbe() {
         return false;
     }
     WriteJumpOverTrap(address, 0xe9, rel);
+    bbport_guest_site_register(address, code.data(), std::uint32_t(code.size()), FreeCameraSite, 0,
+                               "free camera probe");
     return true;
 }
 
@@ -388,6 +472,8 @@ int InstallCameraAspectHooks() {
             continue;
         }
         WriteJumpOverTrap(address, 0xe9, rel);
+        bbport_guest_site_register_after(address, site.code.data(), std::uint32_t(site.code.size()),
+                                         CameraAspectSite, 0, "camera aspect and field of view");
         ++installed;
     }
     return installed;
@@ -425,10 +511,13 @@ int InstallMarkerHooks() {
         void* page = reinterpret_cast<void*>(address & ~u64(page_size - 1));
         mprotect(page, (address + 16) - reinterpret_cast<u64>(page), PROT_READ | PROT_WRITE | PROT_EXEC);
         auto* code = reinterpret_cast<u8*>(address);
+        std::uint8_t original[16]; // before the trap goes in
+        std::memcpy(original, code, 16);
         code[0] = 0xcc;
         std::memset(code + 5, 0xcc, 11);
         mprotect(page, (address + 16) - reinterpret_cast<u64>(page), Core::GuestCodeProtection());
         WriteJumpOverTrap(address, 0xe9, rel);
+        bbport_guest_site_register(address, original, 16, MarkerSiteHandler, i, "HUD marker placement");
         ++installed;
     }
     marker_sites.store(installed, std::memory_order_relaxed);
@@ -460,6 +549,7 @@ bool InstallViewportHook() {
     reinterpret_cast<u8*>(address)[5] = 0xcc;
     mprotect(page, (address + 6) - reinterpret_cast<u64>(page), Core::GuestCodeProtection());
     WriteJumpOverTrap(address, 0xe9, rel);
+    bbport_guest_site_register(address, HudFrameCode, sizeof(HudFrameCode), ViewportSite, 0, "UI movie viewport");
     return true;
 }
 
@@ -489,6 +579,8 @@ bool InstallHudHook() {
     reinterpret_cast<u8*>(address)[5] = 0xcc;
     mprotect(page, (address + 6) - reinterpret_cast<u64>(page), Core::GuestCodeProtection());
     WriteJumpOverTrap(address, 0xe9, rel);
+    bbport_guest_site_register(address, HudFrameCode, sizeof(HudFrameCode), HudFrameSiteHandler, 0,
+                               "HUD anchoring (screen update)");
     return true;
 }
 
@@ -528,6 +620,8 @@ bool InstallLookHook() {
         return false;
     }
     WriteJumpOverTrap(address, 0xe9, rel);
+    bbport_guest_site_register_after(address, LookSiteCode, sizeof(LookSiteCode), LookSiteHandler, 0,
+                                     "native mouse look");
     return true;
 }
 

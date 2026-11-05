@@ -310,8 +310,66 @@ void PS4_SYSV_ABI FxInitClear(void* context, void* state, void* texture, const f
             return;
         }
     }
-    using NativeClear = void(PS4_SYSV_ABI *)(void*, void*, void*, const float*);
-    reinterpret_cast<NativeClear>(ImageBase + 0x2168630)(context, state, texture, color);
+    bbport_guest_call(ImageBase + 0x2168630, reinterpret_cast<u64>(context), reinterpret_cast<u64>(state),
+                      reinterpret_cast<u64>(texture), reinterpret_cast<u64>(color), 0, 0);
+}
+
+// ---- The same as guest sites (bbport_guest_sites.h), for the recompiled game ----
+using Regs = Core::GuestRegisterSnapshot;
+
+/// A live code switch (tag: its hot_code index): while its patch is in, the patch's work here.
+__attribute__((sysv_abi)) u64 HotCodeSite(u64 index, void* registers) {
+    const HotCode& code = hot_code[index];
+    const bool on = effects_applied[code.effect].load(std::memory_order_relaxed) != 0;
+    if (on != code.patch_when_on) {
+        return 0; // the game's own instructions
+    }
+    auto* r = static_cast<Regs*>(registers);
+    const u64 site = ImageBase + code.offset;
+    switch (index) {
+    case 0: // mov dword [rbx + 0xac], 0; nop; nop
+        *reinterpret_cast<std::uint32_t*>(r->rbx + 0xac) = 0;
+        return site + 12;
+    case 1: // jmp +0xdf
+        return site + 5 + 0xdf;
+    case 2: // xor esi, esi; nop
+        r->rsi = 0;
+        r->rflags = (r->rflags & ~u64(0x8d5)) | 0x44; // ZF PF
+        return site + 6;
+    default: { // FXAA2_GS (InstallFxaaStub): the pass with technique 0, then where the AA step goes on
+        const u64 aa = r->r12 + 0x1bc8;
+        r->rbx = aa;
+        bbport_guest_call(ImageBase + AaPrepare, aa, r->rbp - 0xae0, 0, 0, 0, 0);
+        *reinterpret_cast<u8*>(aa + 9) = 1;
+        *reinterpret_cast<std::uint32_t*>(aa + 0xc) = 0;
+        bbport_guest_call(ImageBase + AaPass, aa, r->rbp - 0x8a0, 0x34, 9,
+                          *reinterpret_cast<const u64*>(r->rbp - 0xe88), 0);
+        r->r15 = (r->r15 & ~u64(0xff)) | 1;
+        return ImageBase + FxaaDone;
+    }
+    }
+}
+
+__attribute__((sysv_abi)) u64 EffectsConstructedSite(u64, void* registers) {
+    EffectsConstructed(static_cast<const Regs*>(registers)->rbx);
+    return 0;
+}
+
+/// The blur kernel's base sample count, at least 3 (`mov edi, 3` when below).
+__attribute__((sysv_abi)) u64 KernelClampSite(u64, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    if (std::int32_t(r->rdi) < 3) {
+        r->rdi = 3;
+    }
+    return 0;
+}
+
+/// `call` -> FxInitClear (its four arguments), on past the call.
+__attribute__((sysv_abi)) u64 FxInitClearSite(u64 site, void* registers) {
+    const auto* r = static_cast<const Regs*>(registers);
+    FxInitClear(reinterpret_cast<void*>(r->rdi), reinterpret_cast<void*>(r->rsi), reinterpret_cast<void*>(r->rdx),
+                reinterpret_cast<const float*>(r->rcx));
+    return site + 5;
 }
 
 } // namespace
@@ -356,9 +414,16 @@ bool InstallHotEffects() {
         return false;
     }
     WriteJumpOverTrap(address, 0xe9, rel);
-    for (auto& code : hot_code) {
+    bbport_guest_site_register(address, tail.data(), std::uint32_t(tail.size()), EffectsConstructedSite, 0,
+                               "renderer options built (hot effects)");
+    for (std::size_t i = 0; i < hot_code.size(); ++i) {
+        auto& code = hot_code[i];
         if (code.ready) {
             effects_applied[code.effect].store(-1);
+            if (!code.data) {
+                bbport_guest_site_register(ImageBase + code.offset, code.original.data(), std::uint32_t(code.size),
+                                           HotCodeSite, i, "live effect switch");
+            }
         }
     }
     ApplyHotEffects(true); // the code effects before the game runs
@@ -395,6 +460,8 @@ bool InstallKernelSampleClamp() {
         return false;
     }
     WriteJumpOverTrap(address, 0xe9, rel);
+    bbport_guest_site_register(address, entry.data(), std::uint32_t(entry.size()), KernelClampSite, 0,
+                               "blur kernel sample count clamp");
     return true;
 }
 
@@ -417,6 +484,8 @@ bool InstallFxInitClear() {
         std::uint32_t rel = 0;
         if (!Rel32To(ImageBase + site.offset + 5, stub, rel)) return false;
         WriteJumpOverTrap(ImageBase + site.offset, 0xe8, rel);
+        bbport_guest_site_register(ImageBase + site.offset, site.code, 5, FxInitClearSite, ImageBase + site.offset,
+                                   "FX initialization clear");
     }
     return true;
 }

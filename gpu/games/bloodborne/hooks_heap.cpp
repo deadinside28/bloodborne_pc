@@ -239,7 +239,7 @@ void HeapGrowSetup(u64 core) {
             }
         }
     } commit_if_off;
-    const auto alloc = reinterpret_cast<CoreAlloc>(ImageBase + CoreAllocate);
+    const BbGuestFunction<CoreAlloc> alloc{ImageBase + CoreAllocate};
     const auto release = reinterpret_cast<CoreFree>(ImageBase + CoreRelease);
     const u64 low = JobProbeWord(core + 0xa0), high = JobProbeWord(core + 0xa8);
     u64 dphys = 0, dend = 0, low_phys = 0;
@@ -389,7 +389,7 @@ void HeapGrowShrink(u64 core) {
         free_nodes.emplace_back(n, JobProbeWord(n));
     }
     const u64 high = JobProbeWord(core + 0xa8);
-    const auto alloc = reinterpret_cast<CoreAlloc>(ImageBase + CoreAllocate);
+    const BbGuestFunction<CoreAlloc> alloc{ImageBase + CoreAllocate};
     const auto release = reinterpret_cast<CoreFree>(ImageBase + CoreRelease);
     // Every 20 s: how full each piece is (the first one: the heap below the deferred part).
     static long long reported = 0;
@@ -510,7 +510,7 @@ void PS4_SYSV_ABI HeapGrowHook(u64, const Core::GuestRegisterSnapshot* r) {
         HeapGrowShrink(core);
         return;
     }
-    const auto alloc = reinterpret_cast<CoreAlloc>(ImageBase + CoreAllocate);
+    const BbGuestFunction<CoreAlloc> alloc{ImageBase + CoreAllocate};
     const u64 alignment = r->r15 > 16 ? r->r15 : 16;
     while (HeapGrowOne(core, r->r14)) {
         if (const u64 block = alloc(core, r->r14, alignment)) {

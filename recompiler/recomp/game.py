@@ -35,6 +35,7 @@ def _work(job):
     img, starts = _IMG, _STARTS
     mod = ModuleLifter(img, tso=_OPTS["tso"], abi=_OPTS["abi"], rcpc="check", volatile=_OPTS.get("volatile", False))
     mod.lifted_names = _OPTS.get("lifted") or starts
+    mod.sites = _OPTS.get("sites") or {}
 
     def twice(t):  # a call target that returns twice (setjmp, getcontext...)
         return mod.import_stub(t) in getattr(img, "nonlocal_got", ()) or t in getattr(img, "returns_twice_funcs", ())
@@ -128,7 +129,7 @@ HEAD = [STATE_TYPE, "@__recomp_slide = external global i64",
         "declare void @__recomp_dispatch(ptr, i64)", "declare void @__recomp_trap(ptr, i64, i32)",
         "declare void @__recomp_dispatch_jump(ptr, i64)", "declare void @__recomp_setjmp(ptr) #0",
         "attributes #0 = { returns_twice }", "declare i64 @__recomp_x87(ptr, i32, i64)",
-        "declare i64 @__recomp_x87_insn(ptr, i64, i64, i64)"]
+        "declare i64 @__recomp_x87_insn(ptr, i64, i64, i64)", "declare { i64, i64 } @__recomp_guest_site(ptr, i64, i64)"]
 _FREF = re.compile(r"@F_([0-9a-f]+)\b")
 
 
@@ -236,6 +237,36 @@ def _overlay(img, live, ranges):
     img.segments = [(v, bytes(d), x) for v, d, x in segs]
 
 
+def read_sites(path):
+    """BB_AOT_DUMP's `<dump>.sites` (src/runtime_aot.c): {patch link address: (original bytes,
+    whether the handler runs after them)} of the port's guest sites registered when the dump was
+    written."""
+    sites = {}
+    for line in open(path):
+        parts = line.split()
+        if len(parts) >= 3:
+            sites[int(parts[0], 16)] = (bytes.fromhex(parts[2])[:int(parts[1])], len(parts) > 3 and parts[3] == "after")
+    return sites
+
+
+def site_handlers(sites):
+    """{where the handler runs: the span past it the lifter may continue at (0: none)}."""
+    return {(a + len(b) if after else a): (0 if after else len(b)) for a, (b, after) in sites.items()}
+
+
+def restore_sites(live, sites):
+    """The live images with each guest site's original bytes back (its native patch is a jump to
+    the port's stub; the recompiled code calls the site's handler there instead)."""
+    out = []
+    for lv in live:
+        b = bytearray(lv)
+        for a, (orig, _) in sites.items():
+            if a + len(orig) <= len(b):
+                b[a:a + len(orig)] = orig
+        out.append(bytes(b))
+    return out
+
+
 def _hybrid_select(img, starts, only, live, workers, shard_size, opts):
     """The functions of `only` that hybrid execution can swap: known extent of 5+ bytes, the
     same code live in bbport as in the executable (`live`: bbport's images after its patches and
@@ -300,7 +331,7 @@ def _extra_functions(img, starts, workers, shard_size):
 
 
 def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limit=None, only=None, live=None,
-        volatile=False):
+        volatile=False, sites=None):
     """Lift the game. `only`: hybrid execution, lift only these functions (those that pass
     _hybrid_select); calls to the rest go through __recomp_dispatch to the original code."""
     workers = workers or os.cpu_count()
@@ -311,7 +342,9 @@ def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limi
     extra = _extra_functions(img, starts, workers, shard_size)
     starts = starts | frozenset(extra)
     addrs = sorted(starts)
-    opts = dict(out=out, tso=tso, abi=abi, volatile=volatile)
+    opts = dict(out=out, tso=tso, abi=abi, volatile=volatile, sites=site_handlers(sites or {}))
+    if sites and live:
+        live = restore_sites(live, sites)
     excluded = nopatch = None
     if only is not None:
         img.nonlocal_got = _nonlocal_slots(img)

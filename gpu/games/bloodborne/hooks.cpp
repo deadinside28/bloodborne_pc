@@ -370,6 +370,66 @@ bool Patch(u64 address, const unsigned char* expected, std::size_t size) {
     return true;
 }
 
+// ---- The same sites as guest sites (gpu/shim/bbport_guest_sites.h): what OnTrap and the
+// detours do, for the recompiled game. Observers return 0: the original instructions run.
+
+using Regs = Core::GuestRegisterSnapshot;
+
+__attribute__((sysv_abi)) u64 AllocReturnSite(u64, void* registers) {
+    AllocHook(static_cast<Regs*>(registers)->rax);
+    return 0;
+}
+
+__attribute__((sysv_abi)) u64 HeapAllocSite(u64, void* registers) {
+    const auto* r = static_cast<const Regs*>(registers);
+    HeapHook(r->rax, *reinterpret_cast<const u64*>(r->rbp - 0x50));
+    return 0;
+}
+
+__attribute__((sysv_abi)) u64 CollectorSite(u64, void* registers) {
+    const u64 allocator = static_cast<const Regs*>(registers)->rdi;
+    for (std::size_t i = 0; i < BbStats::range_allocators.size(); ++i) {
+        u64 expected = 0;
+        if (BbStats::range_allocators[i].load(std::memory_order_relaxed) == allocator ||
+            BbStats::range_allocators[i].compare_exchange_strong(expected, allocator)) {
+            BbStats::range_live[i].store(*reinterpret_cast<const u64*>(allocator + 0xc8), std::memory_order_relaxed);
+            BbStats::range_bytes[i].store(*reinterpret_cast<const u64*>(allocator + 0xd0), std::memory_order_relaxed);
+            break;
+        }
+    }
+    return 0;
+}
+
+__attribute__((sysv_abi)) u64 ReleaseCheckSite(u64, void* registers) {
+    BbHeapSites::NoteReleaseCheck(std::uint32_t(static_cast<const Regs*>(registers)->rax));
+    return 0;
+}
+
+/// `call memcpy` -> LoaderCopy: the call done here, on past it.
+__attribute__((sysv_abi)) u64 MemcpySite(u64 index, void* registers) {
+    auto* r = static_cast<Regs*>(registers);
+    hits[index].fetch_add(1, std::memory_order_relaxed);
+    r->rax = reinterpret_cast<u64>(LoaderCopy(reinterpret_cast<void*>(r->rdi),
+                                              reinterpret_cast<const void*>(r->rsi), r->rdx));
+    return ImageBase + MemcpySites[index].offset + 5;
+}
+
+/// Patch (the int3), and the site registered with the `span` bytes the native patch will cover
+/// as they were before it.
+bool PatchSite(u64 offset, const unsigned char* expected, std::size_t size, std::size_t span,
+               BbGuestSiteHandler handler, u64 tag, const char* name) {
+    std::uint8_t original[BB_GUEST_SITE_MAX_BYTES]{};
+    iovec local{original, span}, remote{reinterpret_cast<void*>(ImageBase + offset), span};
+    if (span > sizeof(original) || process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != ssize_t(span)) {
+        return false;
+    }
+    if (!Patch(ImageBase + offset, expected, size)) {
+        return false;
+    }
+    bbport_guest_site_register(ImageBase + offset, original, std::uint32_t(span), handler, tag, name);
+    return true;
+}
+
 } // namespace
 
 void Install(RangeCallback on_gpu_range_allocated, RangeCallback on_range_freed,
@@ -390,24 +450,29 @@ void Install(RangeCallback on_gpu_range_allocated, RangeCallback on_range_freed,
     const bool memory_hooks =
         on_gpu_range_allocated != nullptr && !bb_env("BB_EXP_NO_MEMORY_HOOKS");
     int patched = 0;
-    for (const auto& site : MemcpySites) {
-        patched += memory_hooks && Patch(ImageBase + site.offset, site.code, sizeof(site.code));
+    for (std::size_t i = 0; i < MemcpySites.size(); ++i) {
+        const auto& site = MemcpySites[i];
+        patched += memory_hooks && PatchSite(site.offset, site.code, sizeof(site.code), 5, MemcpySite, i,
+                                             "resource copy");
     }
     on_range_allocated = on_gpu_range_allocated;
     const bool allocator =
-        memory_hooks && Patch(ImageBase + AllocReturn, AllocReturnCode, sizeof(AllocReturnCode));
+        memory_hooks && PatchSite(AllocReturn, AllocReturnCode, sizeof(AllocReturnCode), 5, AllocReturnSite, 0,
+                                  "GPU range allocator return");
     // BB_HEAP_HOOKS=0 (bisecting): the heap's ranges are not reported.
     const char* heap_env = bb_env("BB_HEAP_HOOKS");
     const bool heap_hooks = memory_hooks && (!heap_env || heap_env[0] != '0');
     if (memory_hooks && BbStats::enabled) {
-        Patch(ImageBase + CollectorEntry, CollectorEntryCode, sizeof(CollectorEntryCode));
+        PatchSite(CollectorEntry, CollectorEntryCode, sizeof(CollectorEntryCode), 1, CollectorSite, 0,
+                  "GPU range collector (frame stats)");
     }
     int heap_sites = 0;
     for (const u64 site : HeapAllocReturns) {
         if (!heap_hooks) {
             break;
         }
-        heap_sites += Patch(ImageBase + site, HeapAllocReturnCode, sizeof(HeapAllocReturnCode));
+        heap_sites += PatchSite(site, HeapAllocReturnCode, sizeof(HeapAllocReturnCode), 6, HeapAllocSite, 0,
+                                "GPU heap allocation");
     }
     if (memory_hooks) {
         std::printf("Guest hooks: %d of %zu resource copy sites tell the GPU side of their writes\n",
@@ -509,7 +574,8 @@ void Install(RangeCallback on_gpu_range_allocated, RangeCallback on_range_freed,
     BbHeapSites::Install();
     BbEngineFixes::Install();
     if (bb_env_on("BB_HEAP_SITES")) {
-        Patch(ImageBase + ReleaseCheck, ReleaseCheckCode, sizeof(ReleaseCheckCode));
+        PatchSite(ReleaseCheck, ReleaseCheckCode, sizeof(ReleaseCheckCode), 2, ReleaseCheckSite, 0,
+                  "deferred release check (heap sites)");
     }
 }
 

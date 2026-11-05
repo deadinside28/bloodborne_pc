@@ -116,6 +116,20 @@ output, which must equal the x86-64 run's.
   reference for AMD's details (C1 after each instruction, which NaN wins, when DE is raised,
   fprem's partial step of 32 + d mod 32 bits). `run.sh` runs it, then the corpus through the
   emulator on x86-64 and under QEMU (`corpus/x87.c`, `txf_*`).
+- **Guest sites (bbport's hooks as recompiler input):** every place bbport changes the game's
+  code to run its own (`gpu/shim/bbport_guest_sites.h`) is registered with the original bytes
+  and a C++ handler that does what its x86 stub does, on the guest's registers
+  (`Core::GuestRegisterSnapshot`): observers return 0 (the original instructions run), a
+  handler that replaces instructions returns the address past them, one that replaces a
+  function returns from it. `BB_AOT_DUMP` writes the registered sites next to the image
+  (`<dump>.sites`); the build puts their original bytes back before comparing, lifts the
+  original instructions, and calls `__recomp_guest_site` before each site (`lift.py
+  guest_site`: past the span stays in the function, a return is a real return, anything else
+  goes through the dispatcher). The runtime hashes functions with the sites' original bytes, so
+  a library also runs in configurations that register other sites (no handler: nothing runs).
+  Handlers call game functions only through `bbport_guest_call` (inside a handler the runtime
+  calls them as recompiled code does, on the guest stack: a native call there would enter
+  recompiled code again over the live host frames). `corpus/sites.S` tests the three kinds.
 - **Configurations:** settings install hooks of their own (`BB_FRAME_STATS`: one at 0x26aa860), so
   a library is built against one dump per configuration it must run in
   (`build_aot.sh EBOOT LIST dump1.bin,dump2.bin NAME`); bbport refuses it in any other.

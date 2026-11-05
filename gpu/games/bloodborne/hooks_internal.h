@@ -22,6 +22,7 @@
 #include <atomic>
 #include "bbport_engine_fixes.h"
 #include "bbport_guest_code_hooks.h"
+#include "bbport_guest_sites.h"
 #include <cmath>
 #include <chrono>
 #include <string>

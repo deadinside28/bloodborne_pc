@@ -33,6 +33,12 @@
 #include <cpuid.h>
 #include "../recompiler/harness/recomp_hybrid.h"
 #include "../recompiler/harness/recomp_x87.h"  /* __recomp_x87 (defined there) */
+#include "../gpu/shim/bbport_guest_sites.h"
+
+/* The port's guest sites (gpu/shim/bbport_guest_sites.cpp): weak, a CPU-only build has none. */
+__attribute__((weak)) size_t bbport_guest_sites(const BbGuestSite **sites);
+__attribute__((weak)) const BbGuestSite *bbport_guest_site_at(uint64_t address);
+__attribute__((weak)) extern BbGuestCallHook bbport_guest_call_hook;
 
 uint64_t __recomp_slide;  /* the image's link address 0 (exported: the library reads it) */
 void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);
@@ -254,6 +260,80 @@ void __recomp_trap(RecompState *st, uint64_t addr, int32_t kind) {
     abort();
 }
 
+/* A guest site in recompiled code (recomp/lift.py): before the instruction at `link`, the port's
+ * handler for it, if one is registered in this configuration, runs with the guest's registers
+ * (it may change them); returns where to go on (0: the instruction at the site) and the flags. */
+typedef struct { uint64_t next, flags; } RecompSiteResult;
+static uint64_t site_calls;
+static __thread RecompState *site_state;  /* the recompiled code's state while a handler runs */
+static __thread uint64_t site_bypass;     /* a site whose handler is skipped once: a call of the function it replaced */
+
+RecompSiteResult __recomp_guest_site(RecompState *st, uint64_t link, uint64_t flags) {
+    if (site_bypass == __recomp_slide + link) {
+        site_bypass = 0;
+        return (RecompSiteResult){ 0, flags };
+    }
+    const BbGuestSite *s = bbport_guest_site_at ? bbport_guest_site_at(__recomp_slide + link) : NULL;
+    if (!s) return (RecompSiteResult){ 0, flags };
+    __atomic_add_fetch(&site_calls, 1, __ATOMIC_RELAXED);
+    static const unsigned order[16] = { G_RAX, G_RBX, G_RCX, G_RDX, G_RSI, G_RDI, G_RBP, G_RSP,
+                                        G_R8, G_R9, G_R10, G_R11, G_R12, G_R13, G_R14, G_R15 };
+    BbGuestRegisters r;
+    uint64_t *g = &r.rax;
+    for (int i = 0; i < 16; ++i) g[i] = st->gpr[order[i]];
+    r.rflags = flags;
+    r.mxcsr = _mm_getcsr();  /* the hardware's: recompiled x86-64 code keeps MXCSR there */
+    for (int i = 0; i < 16; ++i) {
+        memcpy(r.ymm[i], &st->xmm[i], 16);
+        memcpy(r.ymm[i] + 16, &st->ymmh[i], 16);
+    }
+    RecompState *const outer = site_state;
+    site_state = st;
+    const uint64_t next = s->handler(s->tag, &r);
+    site_state = outer;
+    for (int i = 0; i < 16; ++i) st->gpr[order[i]] = g[i];
+    for (int i = 0; i < 16; ++i) {
+        memcpy(&st->xmm[i], r.ymm[i], 16);
+        memcpy(&st->ymmh[i], r.ymm[i] + 16, 16);
+    }
+    return (RecompSiteResult){ next, r.rflags };
+}
+
+/* bbport_guest_call from a site's handler in recompiled code: the game's function as recompiled
+ * code calls it (__recomp_dispatch: recompiled, or the original through the hybrid call path),
+ * on the guest's stack below the frame the site is in. A native call there would run on the host
+ * stack the recompiled frames are on, and the game code it reaches would enter recompiled code
+ * again at the thread's host stack top: over those frames (the GPU heap's grow hook calling the
+ * game's allocator lost a callee-saved register that way). Elsewhere: the native call. */
+static uint64_t aot_guest_call(const BbGuestCallArgs *c) {
+    RecompState *const cur = site_state;
+    if (!cur) {
+        typedef uint64_t (*Fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, double);
+        const uint64_t *a = c->args;
+        return ((Fn)(uintptr_t)(c->original ? c->original : c->address))(a[0], a[1], a[2], a[3], a[4], a[5], c->xmm0);
+    }
+    RecompState s = *cur;
+    uint64_t sp = (cur->gpr[G_RSP] - 256) & ~(uint64_t)15;  /* past the red zone */
+    sp -= 8;
+    *(uint64_t *)(uintptr_t)sp = 0;                         /* the return slot */
+    s.gpr[G_RSP] = sp;
+    static const unsigned regs[6] = { G_RDI, G_RSI, G_RDX, G_RCX, G_R8, G_R9 };
+    for (int i = 0; i < 6; ++i) s.gpr[regs[i]] = c->args[i];
+    s.xmm[0] = 0;
+    memcpy(&s.xmm[0], &c->xmm0, 8);
+    s.ymmh[0] = 0;
+    uint64_t target = c->address;
+    if (c->original) {
+        if (lookup(c->address - __recomp_slide)) site_bypass = c->address;  /* its entry site skipped once */
+        else target = c->original;                                         /* native: the trampoline */
+    }
+    site_state = NULL;
+    __recomp_dispatch(&s, target);
+    site_state = cur;
+    site_bypass = 0;
+    return s.gpr[G_RAX];
+}
+
 uint64_t __recomp_rdtsc(void) { return __rdtsc(); }  /* as the original's rdtsc reads it */
 
 void __recomp_cpuid(uint32_t leaf, uint32_t sub, uint32_t out[4]) {
@@ -265,6 +345,48 @@ static uint64_t code_hash(const unsigned char *p, uint64_t n) {
     uint64_t h = 0xcbf29ce484222325ull;
     for (uint64_t i = 0; i < n; ++i) h = (h ^ (p[i] == 0x65 ? 0x64 : p[i])) * 0x100000001b3ull;
     return h;
+}
+
+/* A function's code as the library was lifted from it: the port's guest sites (whose native
+ * patches are jumps to its stubs) read as their original bytes. */
+static uint64_t function_hash(const unsigned char *image, uint64_t start, uint64_t end) {
+    const BbGuestSite *sites = NULL;
+    const size_t n = bbport_guest_sites ? bbport_guest_sites(&sites) : 0;
+    const uint64_t base = (uint64_t)(uintptr_t)image;
+    int touched = 0;
+    for (size_t i = 0; i < n && !touched; ++i)
+        touched = sites[i].patch < base + end && sites[i].patch + sites[i].length > base + start;
+    if (!touched) return code_hash(image + start, end - start);
+    unsigned char *copy = malloc(end - start);
+    if (!copy) return 0;
+    memcpy(copy, image + start, end - start);
+    for (size_t i = 0; i < n; ++i)
+        for (uint32_t k = 0; k < sites[i].length; ++k) {
+            const uint64_t at = sites[i].patch + k - base;
+            if (at >= start && at < end) copy[at - start] = sites[i].original[k];
+        }
+    const uint64_t h = code_hash(copy, end - start);
+    free(copy);
+    return h;
+}
+
+/* BB_AOT_DUMP's `<dump>.sites`: the guest sites registered now, for the recompiler (one per line:
+ * the patch's link address, its length, the original bytes in hex, where the handler runs ("at" the
+ * patch, or "after" it), name). */
+static void dump_sites(const char *path, uint64_t base) {
+    const BbGuestSite *sites = NULL;
+    const size_t n = bbport_guest_sites ? bbport_guest_sites(&sites) : 0;
+    char name[4096];
+    snprintf(name, sizeof(name), "%s.sites", path);
+    FILE *f = fopen(name, "w");
+    if (!f) { printf("AOT: cannot write %s\n", name); return; }
+    for (size_t i = 0; i < n; ++i) {
+        fprintf(f, "0x%" PRIx64 " %u ", sites[i].patch - base, sites[i].length);
+        for (uint32_t k = 0; k < sites[i].length; ++k) fprintf(f, "%02x", sites[i].original[k]);
+        fprintf(f, " %s %s\n", sites[i].address == sites[i].patch ? "at" : "after", sites[i].name ? sites[i].name : "?");
+    }
+    fclose(f);
+    printf("AOT: %zu guest sites written to %s\n", n, name);
 }
 
 /* The image page by page: the gaps between its segments are not readable (zeros in the file);
@@ -290,7 +412,8 @@ static void report(void) {
     const HybridTotals n = recomp_hybrid_totals();
     printf("AOT: recompiled code entered %" PRIu64 "x from the original code; %" PRIu64 " calls back (%" PRIu64
            " into bbport, %" PRIu64 " into the game's system modules), %" PRIu64 " jumps back for good; deepest open "
-           "entries %" PRIu64 "\n", n.entries, n.native_calls, n.host_calls, n.module_calls, n.native_jumps, n.max_depth);
+           "entries %" PRIu64 "; %" PRIu64 " guest site handler calls\n", n.entries, n.native_calls, n.host_calls,
+           n.module_calls, n.native_jumps, n.max_depth, __atomic_load_n(&site_calls, __ATOMIC_RELAXED));
     fflush(stdout);
 }
 
@@ -308,7 +431,10 @@ static void *report_loop(void *arg) {
 
 int runtime_aot_install(unsigned char *image, uint64_t size) {
     const char *dump = bb_env("BB_AOT_DUMP");
-    if (dump && *dump) dump_image(dump, image, size);
+    if (dump && *dump) {
+        dump_image(dump, image, size);
+        dump_sites(dump, (uint64_t)(uintptr_t)image);
+    }
     const char *path = bb_env("BB_AOT");
     if (!path || !*path) return 0;
     void *lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
@@ -331,7 +457,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
             printf("AOT: %s: bad check entry %" PRIu64 "\n", path, i);
             return -1;
         }
-        if (code_hash(image + check[i][0], check[i][1] - check[i][0]) != check[i][2] && changed++ < 5)
+        if (function_hash(image, check[i][0], check[i][1]) != check[i][2] && changed++ < 5)
             printf("AOT: guest 0x%" PRIx64 " differs from the code the library was built from\n", check[i][0]);
     }
     if (changed) {
@@ -376,6 +502,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
             return -1;
         }
     }
+    if (&bbport_guest_call_hook) bbport_guest_call_hook = aot_guest_call;
     enabled = 1;
     pthread_t reporter;
     if (!pthread_create(&reporter, NULL, report_loop, NULL)) pthread_detach(reporter);

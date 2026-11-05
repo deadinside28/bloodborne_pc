@@ -161,7 +161,9 @@ int main(int argc, char **argv) {
     FILE *rf = rec ? fopen(rec, "wb") : NULL, *cf = chk ? fopen(chk, "rb") : NULL;
     if ((rec && !rf) || (chk && !cf)) die("record file");
     int tests = 0, failed = 0, missing = 0;
-    static uint8_t buf_init[256], buf_a[256], buf_b[256];
+    // 16-byte aligned: corpus/string.S t_cmpxchg16b (lock cmpxchg16b; on AArch64 an exclusive pair, which
+    // faults when misaligned) relies on it.
+    static _Alignas(16) uint8_t buf_init[256], buf_a[256], buf_b[256];
     for (int e = 0; e < n_exports; e++) {
         Export *x = &exports[e];
         if (filter && !strstr(x->name, filter)) continue;
@@ -227,7 +229,11 @@ int main(int argc, char **argv) {
         return failed ? 1 : 0;
     }
 #endif
-    printf("%d functions tested, %d failed, %d not recompiled; dispatch misses: %" PRIu64 "\n",
-           tests, failed, missing, recomp_dispatch_misses);
-    return failed || missing ? 1 : 0;
+    // Every recompiled function ran: the corpus's guest sites (corpus/sites.S) must have called
+    // their handler, else the lifter dropped them and the tests above passed without them.
+    const int sites_missed = recomp_symbol("gsite_add_1") && !filter && recomp_site_calls == 0;
+    if (sites_missed) printf("FAIL guest sites: the handler was never called\n");
+    printf("%d functions tested, %d failed, %d not recompiled; dispatch misses: %" PRIu64 "; guest site calls: %" PRIu64 "\n",
+           tests, failed, missing, recomp_dispatch_misses, recomp_site_calls);
+    return failed || missing || sites_missed ? 1 : 0;
 }
