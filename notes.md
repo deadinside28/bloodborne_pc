@@ -155,10 +155,15 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    7 original** (4 unsupported instructions, setjmp/longjmp, 1 CFG error; none for bbport's
    changes); gameplay OK, calls back into original game code 1.4M -> 1,421 per run, 59 FPS
    against 62 unmodified at the same time (the previous library matched: the sites' cost,
-   to look at). Open for AArch64: game calls from bbport outside handlers (BBSC calls dozens
-   directly), the "call the replaced original" path (game menu) on the recompiled side, the frame
-   rate's ~50 redirected constants (byte patches pointing at bbport's page: lifted as patched,
-   need that page at the same place), BBSC's own sites and runtime patches. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
+   to look at; back to back it measured the same, 61-62). Then BBSC: its ~250 hooks are sites,
+   its 70 switched byte patches variants (both forms lifted, the code bytes choose), its game
+   calls go through bbport_guest_call: one library for default, BB_FRAME_STATS and BBSC with
+   online play, gameplay OK in each. Open for AArch64: the frame rate's ~50 redirected constants
+   (byte patches pointing at bbport's page: lifted as patched, need that page at the same
+   place); the runtime's own calls into game code (thread entries, library callbacks such as
+   np_web_api's); the 7 functions left original. Next milestone: the game with no original x86
+   code at all on this PC (every entry through recompiled code), then an AArch64 runtime
+   (imports bridged to AAPCS64, C++ exceptions), then bbport on Android. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT
