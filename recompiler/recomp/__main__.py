@@ -89,8 +89,9 @@ def main():
     m = ModuleLifter(img, tso=a.tso, abi=a.abi, local_frames=not a.tso_strict,
                      rcpc={"rcpc": "check", "rcpc-fault": "fault", "barriers": None}[a.tso_mode], volatile=a.volatile)
     if a.sites:
-        from .game import read_sites, site_handlers
+        from .game import read_sites, site_handlers, site_variants
         m.sites = site_handlers(read_sites(a.sites))
+        m.variants = site_variants(read_sites(a.sites))
     m.discover()
     if a.select or a.only:
         keep = set(m.cfgs)

@@ -72,6 +72,24 @@ gtarget_jmp_1:
     ret
     .size t_site_jmp, . - t_site_jmp
 
+// A variant (a byte patch the port switches): `add rax, rdi` at gvariant_sub_1 becomes `sub rax,
+// rdi`. The runner writes the replacement into the code before the tests (the original code runs
+// it; the recompiled code, lifted both ways, finds it there).
+    .globl t_site_variant
+    .type t_site_variant, @function
+    .p2align 4
+t_site_variant:
+    mov rax, rsi
+    xor rdx, rdx                    // past the first 5 bytes (the hybrid entry jump)
+    .globl gvariant_sub_1
+gvariant_sub_1:
+    add rax, rdi                    // 3 bytes: 48 01 f8 -> 48 29 f8
+    setc dl
+    shl rdx, 40
+    xor rax, rdx
+    ret
+    .size t_site_variant, . - t_site_variant
+
 // A handler that returns from the function (as a hook at a function's entry that replaces it):
 // at gsite_ret_1 it does the function's work (rax ^= 0x55) and returns to the caller.
     .globl t_site_ret

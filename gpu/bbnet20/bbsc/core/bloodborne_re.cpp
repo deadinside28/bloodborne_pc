@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "core/bloodborne_re.h"
+#include "shim/bbport_guest_sites.h"
 
 #include <algorithm>
 #include <array>
@@ -158,6 +159,13 @@ constexpr std::array<u8, 5> SignPostAllowedArea{0xB0, 0x01, 0x90, 0x90, 0x90}; /
 constexpr u64 SummonMessageAreaCheckOffset = 0x0187387B;
 constexpr std::array<u8, 5> SummonMessageAreaCheck{0xE8, 0xD0, 0x6E, 0x0A, 0x00}; // call 0x0191A750
 constexpr u64 SignAreaCheckOffset = 0x0191A750;
+// bbport: a byte patch of the game's code, also registered as a variant (gpu/shim/bbport_guest_sites.h)
+// so the recompiled game lifts both forms and follows the bytes.
+static void BbscCodePatch(void* at, const u8* bytes, std::size_t size, const char* name) {
+    bbport_guest_variant_register(reinterpret_cast<u64>(at), static_cast<const u8*>(at), bytes, u32(size), name);
+    std::memcpy(at, bytes, size);
+}
+
 constexpr u64 WorldChrManPointerOffset = 0x0553E878;
 constexpr u64 ActiveBellAreaComparisonOffset = 0x015068BB;
 constexpr std::array<u8, 2> ActiveBellAreaComparison{0x77, 0x4A};
@@ -1518,15 +1526,15 @@ void ApplyCrossMapSummonGuestPlacement(const GuestRegisterSnapshot& registers) {
     using FlagSetter = void PS4_SYSV_ABI (*)();
     using PlacementSelector = bool PS4_SYSV_ABI (*)(u64 context, s32 warp_info_id);
     using StageTransition = s32 PS4_SYSV_ABI (*)();
-    const auto set_map = reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonMapOffset);
+    const auto set_map = BbGameFn<PlacementSetter>(image_base + SetForcedSummonMapOffset);
     const auto set_position =
-        reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonPositionOffset);
+        BbGameFn<PlacementSetter>(image_base + SetForcedSummonPositionOffset);
     const auto set_orientation =
-        reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonOrientationOffset);
-    const auto set_warp = reinterpret_cast<FlagSetter>(image_base + SetForcedSummonWarpOffset);
+        BbGameFn<PlacementSetter>(image_base + SetForcedSummonOrientationOffset);
+    const auto set_warp = BbGameFn<FlagSetter>(image_base + SetForcedSummonWarpOffset);
     const auto select =
-        reinterpret_cast<PlacementSelector>(image_base + SelectSummonedPlacementOffset);
-    const auto transition = reinterpret_cast<StageTransition>(image_base + StageTransitionOffset);
+        BbGameFn<PlacementSelector>(image_base + SelectSummonedPlacementOffset);
+    const auto transition = BbGameFn<StageTransition>(image_base + StageTransitionOffset);
 
     set_position(reinterpret_cast<const void*>(state + 0x14D0));
     set_orientation(reinterpret_cast<const void*>(state + 0x14E0));
@@ -1669,14 +1677,14 @@ void ApplySummonReloadStateAtDescriptor(const GuestRegisterSnapshot& registers) 
 
     using SummonedMapReload = void PS4_SYSV_ABI (*)();
     const auto reload_summoned_map =
-        reinterpret_cast<SummonedMapReload>(image_base + SummonedMapReloadOffset);
+        BbGameFn<SummonedMapReload>(image_base + SummonedMapReloadOffset);
     reload_summoned_map();
     record.summon_reload_started = true;
     record.state_after = ReadValue<s32>(record.reload_state, 0x84);
     if (record.state_after != 3) {
         using SummonReloadStateSetter = void PS4_SYSV_ABI (*)(u64 state);
         const auto set_reload_state =
-            reinterpret_cast<SummonReloadStateSetter>(image_base + SetSummonReloadStateOffset);
+            BbGameFn<SummonReloadStateSetter>(image_base + SetSummonReloadStateOffset);
         set_reload_state(record.reload_state);
         record.state_setter_used = true;
         record.state_after = ReadValue<s32>(record.reload_state, 0x84);
@@ -1705,11 +1713,11 @@ void ApplySummonReloadStateAtDescriptor(const GuestRegisterSnapshot& registers) 
         WriteTransportedSummonPlacement(placement_state, *transported_host)) {
         using PlacementSetter = void PS4_SYSV_ABI (*)(const void* value);
         const auto set_map =
-            reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonMapOffset);
+            BbGameFn<PlacementSetter>(image_base + SetForcedSummonMapOffset);
         const auto set_position =
-            reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonPositionOffset);
+            BbGameFn<PlacementSetter>(image_base + SetForcedSummonPositionOffset);
         const auto set_orientation =
-            reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonOrientationOffset);
+            BbGameFn<PlacementSetter>(image_base + SetForcedSummonOrientationOffset);
         set_position(reinterpret_cast<const void*>(placement_state + 0x14D0));
         set_orientation(reinterpret_cast<const void*>(placement_state + 0x14E0));
         set_map(reinterpret_cast<const void*>(placement_state + 0x14C4));
@@ -1802,7 +1810,7 @@ void ApplyDeferredSummonReload() {
 
     using SummonedMapReload = void PS4_SYSV_ABI (*)();
     const auto reload_summoned_map =
-        reinterpret_cast<SummonedMapReload>(image_base + SummonedMapReloadOffset);
+        BbGameFn<SummonedMapReload>(image_base + SummonedMapReloadOffset);
     reload_summoned_map();
     record.summon_reload_started = true;
     record.result = "applied";
@@ -1897,15 +1905,15 @@ void ApplyPreMatchCrossMapGuestWarp() {
     using FlagSetter = void PS4_SYSV_ABI (*)();
     using PlacementSelector = bool PS4_SYSV_ABI (*)(u64 context, s32 warp_info_id);
     using StageTransition = s32 PS4_SYSV_ABI (*)();
-    const auto set_map = reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonMapOffset);
+    const auto set_map = BbGameFn<PlacementSetter>(image_base + SetForcedSummonMapOffset);
     const auto set_position =
-        reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonPositionOffset);
+        BbGameFn<PlacementSetter>(image_base + SetForcedSummonPositionOffset);
     const auto set_orientation =
-        reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonOrientationOffset);
-    const auto set_warp = reinterpret_cast<FlagSetter>(image_base + SetForcedSummonWarpOffset);
+        BbGameFn<PlacementSetter>(image_base + SetForcedSummonOrientationOffset);
+    const auto set_warp = BbGameFn<FlagSetter>(image_base + SetForcedSummonWarpOffset);
     const auto select =
-        reinterpret_cast<PlacementSelector>(image_base + SelectSummonedPlacementOffset);
-    const auto transition = reinterpret_cast<StageTransition>(image_base + StageTransitionOffset);
+        BbGameFn<PlacementSelector>(image_base + SelectSummonedPlacementOffset);
+    const auto transition = BbGameFn<StageTransition>(image_base + StageTransitionOffset);
 
     set_position(reinterpret_cast<const void*>(state + 0x14D0));
     set_orientation(reinterpret_cast<const void*>(state + 0x14E0));
@@ -2047,7 +2055,7 @@ void ResumePreMatchCrossMapResponder() {
 
     using UseItemNativeApply = bool PS4_SYSV_ABI (*)(u64 player, s32 goods_id, s32 argument);
     const auto use_item =
-        reinterpret_cast<UseItemNativeApply>(image_base + UseItemNativeApplyOffset);
+        BbGameFn<UseItemNativeApply>(image_base + UseItemNativeApplyOffset);
     record.native_result = use_item(record.player, SmallResonantBellGoodsId, BellUseArgument);
     ++pending.attempts;
     pending.dispatched = true;
@@ -3648,7 +3656,7 @@ bool RemotePlayerExists(u64 task) {
         return false;
     }
     using MemberIdEquals = bool PS4_SYSV_ABI (*)(u64 a, u64 b);
-    const auto equals = reinterpret_cast<MemberIdEquals>(image_base + MemberIdEqualsOffset);
+    const auto equals = BbGameFn<MemberIdEquals>(image_base + MemberIdEqualsOffset);
     for (s32 i = 0; i < count; ++i) {
         const u64 player = ReadValue<u64>(entries, static_cast<size_t>(i) * 0x38);
         if (ReadablePointer(player, 0x400) && IsValidMemberId(player + 0x3D8) &&
@@ -3675,7 +3683,7 @@ MemberSlotInfo GetMemberSlotInfo(u64 task) {
         return info;
     }
     using MemberIdEquals = bool PS4_SYSV_ABI (*)(u64 a, u64 b);
-    const auto equals = reinterpret_cast<MemberIdEquals>(image_base + MemberIdEqualsOffset);
+    const auto equals = BbGameFn<MemberIdEquals>(image_base + MemberIdEqualsOffset);
     const u64 head = ReadValue<u64>(rules, 0x68);
     if (!ReadablePointer(head, 0x38) || !IsValidMemberId(task + 0xC8)) {
         return info;
@@ -3825,7 +3833,7 @@ void TickBbscReinsertV8() {
     }
 
     using SetState = void PS4_SYSV_ABI (*)(u64 task, s32 state);
-    const auto set_state = reinterpret_cast<SetState>(image_base + MultiPlayerInsSetStateOffset);
+    const auto set_state = BbGameFn<SetState>(image_base + MultiPlayerInsSetStateOffset);
     int restarted = 0;
     for (const u64 task : GetMultiPlayerInsTasks()) {
         const s32 mode = ReadValue<s32>(task, 0xE8);
@@ -3881,7 +3889,7 @@ void TickBbscSelfHeal() {
     }
 
     using SetState = void PS4_SYSV_ABI (*)(u64 task, s32 state);
-    const auto set_state = reinterpret_cast<SetState>(image_base + MultiPlayerInsSetStateOffset);
+    const auto set_state = BbGameFn<SetState>(image_base + MultiPlayerInsSetStateOffset);
     const auto tasks = GetMultiPlayerInsTasks();
     for (auto& slot : missing) {
         if (slot.task != 0 && std::ranges::find(tasks, slot.task) == tasks.end()) {
@@ -3959,7 +3967,7 @@ void RequestBbscDeathReload(std::string_view why) {
     // 0x01332BC0 already picked the destination (global+0xC map, global+0x10 respawn point) while
     // the death step ran, so the request alone reproduces the vanilla death reload.
     using ReloadRequest = u64 PS4_SYSV_ABI (*)();
-    const u64 result = reinterpret_cast<ReloadRequest>(image_base + DeathReloadRequestOffset)();
+    const u64 result = BbGameFn<ReloadRequest>(image_base + DeathReloadRequestOffset)();
     LOG_INFO(Debug, "BBSC death: reload requested ({}), result {}", why, result);
     BBSC_TIMELINE("DEATH", "death: reload requested ({}), result {}", why, result);
 }
@@ -4532,15 +4540,15 @@ bool RequestBbscSessionWarp(u64 global, const SummonPlacementDescriptor& to, std
     using FlagSetter = void PS4_SYSV_ABI (*)();
     using PlacementSelector = bool PS4_SYSV_ABI (*)(u64 context, s32 warp_info_id);
     using StageTransition = u64 PS4_SYSV_ABI (*)();
-    reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonPositionOffset)(
+    BbGameFn<PlacementSetter>(image_base + SetForcedSummonPositionOffset)(
         reinterpret_cast<const void*>(global + 0x14D0));
-    reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonOrientationOffset)(
+    BbGameFn<PlacementSetter>(image_base + SetForcedSummonOrientationOffset)(
         reinterpret_cast<const void*>(global + 0x14E0));
-    reinterpret_cast<PlacementSetter>(image_base + SetForcedSummonMapOffset)(
+    BbGameFn<PlacementSetter>(image_base + SetForcedSummonMapOffset)(
         reinterpret_cast<const void*>(global + 0x14C4));
-    reinterpret_cast<FlagSetter>(image_base + SetForcedSummonWarpOffset)();
+    BbGameFn<FlagSetter>(image_base + SetForcedSummonWarpOffset)();
     const bool selected =
-        reinterpret_cast<PlacementSelector>(image_base + SelectSummonedPlacementOffset)(0, -1);
+        BbGameFn<PlacementSelector>(image_base + SelectSummonedPlacementOffset)(0, -1);
     const u32 selected_map = ReadValue<u32>(global, 0x0C);
     if (!selected || selected_map != to.packed_region) {
         LOG_WARNING(Debug, "BBSC {} warp: selector picked {:#x}, wanted {:#x}; not loading", why,
@@ -4552,7 +4560,7 @@ bool RequestBbscSessionWarp(u64 global, const SummonPlacementDescriptor& to, std
         WriteValue<s32>(rules, 0x84, 3);
     }
     StartBbscLoadCover(why); // already on for the summon when this is the cross-map second reload
-    const u64 result = reinterpret_cast<StageTransition>(image_base + StageTransitionOffset)();
+    const u64 result = BbGameFn<StageTransition>(image_base + StageTransitionOffset)();
     LOG_INFO(Debug,
              "BBSC {} warp: full reload requested into map {:#x} at ({:.2f}, {:.2f}, {:.2f}), "
              "result {}",
@@ -4673,7 +4681,7 @@ void TickBbscJoinTeleport() {
     position[3] = 1.0f;
     rotation[3] = 0.0f;
     using Warp = void PS4_SYSV_ABI (*)(u64 chr, float* position, float* rotation, u32 flag);
-    reinterpret_cast<Warp>(warp)(player, position.data(), rotation.data(), 1);
+    BbGameFn<Warp>(warp)(player, position.data(), rotation.data(), 1);
     WriteValue<u8>(player, 0x1E1, static_cast<u8>(ReadValue<u8>(player, 0x1E1) | 0x02));
     LOG_INFO(Debug,
              "BBSC join teleport: guest moved from ({:.2f}, {:.2f}, {:.2f}) to the host at "
@@ -4975,7 +4983,7 @@ void TickBbscFollowHost() {
         alignas(16) std::array<float, 4> position{spot.x + 1.0f, spot.y, spot.z, 1.0f};
         alignas(16) std::array<float, 4> rotation{0.0f, spot.heading, 0.0f, 0.0f};
         using Warp = void PS4_SYSV_ABI (*)(u64 chr, float* position, float* rotation, u32 flag);
-        reinterpret_cast<Warp>(warp)(player, position.data(), rotation.data(), 1);
+        BbGameFn<Warp>(warp)(player, position.data(), rotation.data(), 1);
         WriteValue<u8>(player, 0x1E1, static_cast<u8>(ReadValue<u8>(player, 0x1E1) | 0x02));
         LOG_INFO(Debug,
                  "BBSC warp together: guest arrived in map {:#x} at the host's {} ({:.2f}, "
@@ -6781,7 +6789,7 @@ std::optional<BbscTransform> ResolveLampPoint(s32 point_id) {
     alignas(16) std::array<float, 4> rotation{};
     using ResolvePoint = u8 PS4_SYSV_ABI (*)(u64 map_list, float* position, float* rotation,
                                              s32 point_id);
-    if (reinterpret_cast<ResolvePoint>(image_base + 0x0154AFC0)(map_list, position.data(),
+    if (BbGameFn<ResolvePoint>(image_base + 0x0154AFC0)(map_list, position.data(),
                                                                 rotation.data(), point_id) == 0) {
         return std::nullopt;
     }
@@ -6926,7 +6934,7 @@ void ClearBbscStaleDeathRequest(std::string_view why) {
     if (ReadValue<u64>(image_base + 0x0553B0D8, 0) != 0 &&
         ReadValue<u64>(image_base + 0x0553B100, 0) != 0 && BbscEventFlag(4000)) {
         using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-        reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, 4000, 0);
+        BbGameFn<SetEventFlag>(image_base + 0x0132E5A0)(0, 4000, 0);
         LOG_INFO(Debug, "BBSC death script re-armed ({}): event flag 4000 cleared", why);
     }
 }
@@ -7009,10 +7017,10 @@ bool BbscLoadingScreen(bool open) {
         WriteValue<s32>(ReadValue<u64>(image_base + MenuManPointerOffset, 0), 0x808, 2);
         alignas(16) static std::array<u32, 4> args{}; // args+8: MenuMan+0x17C0, the stage flow's 0
         using Open = bool PS4_SYSV_ABI (*)(const void* args);
-        return reinterpret_cast<Open>(image_base + NowLoadingOpenOffset)(args.data());
+        return BbGameFn<Open>(image_base + NowLoadingOpenOffset)(args.data());
     }
     using Close = bool PS4_SYSV_ABI (*)();
-    return reinterpret_cast<Close>(image_base + NowLoadingCloseOffset)();
+    return BbGameFn<Close>(image_base + NowLoadingCloseOffset)();
 }
 
 void BbscCurtainStepTo(BbscCurtainStep step, s64 now) {
@@ -7332,7 +7340,7 @@ void TickBbscDeathCurtain() {
                 // Never shown (state 1, the usual case): nothing of the menu to undo.
                 // 0x0176D320 writes [MenuMan]+0x804 with no null check (review 2026-10-08).
                 if (ReadValue<u64>(image_base + MenuManPointerOffset, 0) != 0) {
-                    reinterpret_cast<void PS4_SYSV_ABI (*)(u32)>(image_base +
+                    BbGameFn<void PS4_SYSV_ABI (*)(u32)>(image_base +
                                                                  NowLoadingSetStateOffset)(0);
                 }
                 EndBbscDeathCurtain(now, "loading screen forced closed");
@@ -7534,24 +7542,24 @@ bool BbscRespawnInPlace(std::string_view why) {
         }
     }
     using Warp = void PS4_SYSV_ABI (*)(u64 chr, float* position, float* rotation, u32 flag);
-    reinterpret_cast<Warp>(warp)(player, position.data(), rotation.data(), 1);
+    BbGameFn<Warp>(warp)(player, position.data(), rotation.data(), 1);
     WriteValue<u8>(player, 0x1E4, static_cast<u8>(ReadValue<u8>(player, 0x1E4) | 0x02));
 
     // 3. leave the death animation
     const u64 behaviour = ReadValue<u64>(modules, 0x30);
     if (ReadablePointer(behaviour, 0x388) && ReadValue<u8>(behaviour, 0x384) != 0) {
         using PlayAnimation = void PS4_SYSV_ABI (*)(u64 behaviour, u64 name_utf16);
-        reinterpret_cast<PlayAnimation>(image_base + 0x01A19F60)(behaviour,
+        BbGameFn<PlayAnimation>(image_base + 0x01A19F60)(behaviour,
                                                                  image_base + 0x04992C40);
     }
 
     // 4. state reset, HP, death flags, drawing
     using Reset = void PS4_SYSV_ABI (*)(u64 chr);
-    reinterpret_cast<Reset>(reset)(player);
+    BbGameFn<Reset>(reset)(player);
     const u64 stats = ReadValue<u64>(modules, 0x20);
     if (ReadablePointer(stats, 0x100)) {
         using SetHp = void PS4_SYSV_ABI (*)(u64 chr, s32 hp);
-        reinterpret_cast<SetHp>(image_base + 0x018BCD40)(player, ReadValue<s32>(stats, 0xFC));
+        BbGameFn<SetHp>(image_base + 0x018BCD40)(player, ReadValue<s32>(stats, 0xFC));
     }
     const u64 control_flags = ReadValue<u64>(control, 0x38);
     if (ReadablePointer(control_flags, 0x50)) {
@@ -7858,7 +7866,7 @@ void TickBbscDeathLockClear() {
         }
         if (!flag_cleared_this_window) {
             using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-            reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, 0xFCF, 0);
+            BbGameFn<SetEventFlag>(image_base + 0x0132E5A0)(0, 0xFCF, 0);
             flag_cleared_this_window = true;
             flag = true;
         }
@@ -8054,11 +8062,11 @@ void TickBbscRemoteRevive() {
         *it = {};
 
         using PhysicsReset = void PS4_SYSV_ABI (*)(u64 chr, u8 flag);
-        reinterpret_cast<PhysicsReset>(image_base + 0x018BCF30)(chr, 1);
+        BbGameFn<PhysicsReset>(image_base + 0x018BCF30)(chr, 1);
         const u64 behaviour = ReadValue<u64>(modules, 0x30);
         if (ReadablePointer(behaviour, 0x388) && ReadValue<u8>(behaviour, 0x384) != 0) {
             using PlayAnimation = void PS4_SYSV_ABI (*)(u64 behaviour, u64 name_utf16);
-            reinterpret_cast<PlayAnimation>(image_base + 0x01A19F60)(behaviour,
+            BbGameFn<PlayAnimation>(image_base + 0x01A19F60)(behaviour,
                                                                      image_base + 0x04992C40);
         }
         WriteValue<u64>(chr, 0x208, 0x3F8000003F800000ull);
@@ -8233,9 +8241,9 @@ bool RaiseBbscDeathText(u64 event_object, std::string_view who) {
     }
     using Query = u32 PS4_SYSV_ABI (*)(u64 chr);
     using TextEvent = bool PS4_SYSV_ABI (*)(u64 event, u32 id, u32 first, u32 second);
-    const u32 first = reinterpret_cast<Query>(cause)(player);
-    const u32 second = reinterpret_cast<Query>(detail)(player);
-    const bool accepted = reinterpret_cast<TextEvent>(image_base + DeathTextEventOffset)(
+    const u32 first = BbGameFn<Query>(cause)(player);
+    const u32 second = BbGameFn<Query>(detail)(player);
+    const bool accepted = BbGameFn<TextEvent>(image_base + DeathTextEventOffset)(
         event_object, DeathTextEventId, first, second);
     LOG_INFO(Debug, "BBSC death text: \"YOU DIED\" raised for the {} (args {}, {}, accepted {})",
              who, first, second, accepted);
@@ -8330,7 +8338,7 @@ bool BbscApplyDeathPenalty(std::string_view why) {
         WriteValue<u8>(global, 0x1592, 1);
     }
     using DropBloodstain = void PS4_SYSV_ABI (*)(u64 stain_root, u64 chr, u8 drop);
-    reinterpret_cast<DropBloodstain>(image_base + DropBloodstainOffset)(stain_root, player, 1);
+    BbGameFn<DropBloodstain>(image_base + DropBloodstainOffset)(stain_root, player, 1);
     if (guest) {
         WriteValue<u8>(global, 0x1592, 0);
     }
@@ -8769,7 +8777,7 @@ void TickBbscBossUnlock() {
         return;
     }
     using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-    const auto set = reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0);
+    const auto set = BbGameFn<SetEventFlag>(image_base + 0x0132E5A0);
     set(0, 0xFCF, 0); // 4047
     set(0, 0xFA0, 0); // 4000
     set(0, 0xFFC, 0); // 4092
@@ -8886,7 +8894,7 @@ void BbscLeaveItemUsed(std::string_view event) {
     if (flag && ReadValue<u64>(image_base + 0x0553B0D8, 0) != 0 &&
         ReadValue<u64>(image_base + 0x0553B100, 0) != 0) {
         using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-        reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, 4047, 0);
+        BbGameFn<SetEventFlag>(image_base + 0x0132E5A0)(0, 4047, 0);
     }
     LOG_INFO(Debug, "BBSC leave: {} by the {} (event flag 4047 was {}) - the co-op ends", event,
              state == 3 ? "host" : "guest", flag ? "set, cleared" : "clear");
@@ -9154,7 +9162,7 @@ void TickBbscSessionEnd() {
                 if (ReadablePointer(session_manager, 0x128)) {
                     using Stop = u8 PS4_SYSV_ABI (*)(u64 session_manager);
                     const u8 stopped =
-                        reinterpret_cast<Stop>(image_base + MultiPlayStopRequestOffset)(
+                        BbGameFn<Stop>(image_base + MultiPlayStopRequestOffset)(
                             session_manager);
                     LOG_INFO(Debug,
                              "BBSC invasion over: the host has been gone from our world for {} s - "
@@ -9177,7 +9185,7 @@ void TickBbscSessionEnd() {
                 if (ReadablePointer(session_manager, 0x128)) {
                     using Stop = u8 PS4_SYSV_ABI (*)(u64 session_manager);
                     const u8 stopped =
-                        reinterpret_cast<Stop>(image_base + MultiPlayStopRequestOffset)(
+                        BbGameFn<Stop>(image_base + MultiPlayStopRequestOffset)(
                             session_manager);
                     LOG_INFO(Debug, "BBSC invasion won: the host is dead - leaving (Stop -> {})",
                              stopped);
@@ -9237,8 +9245,8 @@ void TickBbscSessionEnd() {
         using Stop = u8 PS4_SYSV_ABI (*)(u64 session_manager);
         using Cleanup = void PS4_SYSV_ABI (*)(u64 remote);
         const u8 stopped =
-            reinterpret_cast<Stop>(image_base + MultiPlayStopRequestOffset)(session_manager);
-        reinterpret_cast<Cleanup>(image_base + WorldChrManRemoteCleanupOffset)(remote);
+            BbGameFn<Stop>(image_base + MultiPlayStopRequestOffset)(session_manager);
+        BbGameFn<Cleanup>(image_base + WorldChrManRemoteCleanupOffset)(remote);
         LOG_INFO(Debug,
                  "BBSC partner gone for {} s: session ended on the host (Stop -> {}, remote "
                  "cleanup); host stays in their world",
@@ -9292,7 +9300,7 @@ void ReleaseBbscLeaveLocks(std::string_view why) {
     const bool flag = BbscEventFlag(4047);
     if (flag) {
         using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-        reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, 4047, 0);
+        BbGameFn<SetEventFlag>(image_base + 0x0132E5A0)(0, 4047, 0);
     }
     const u64 lua_man = ReadValue<u64>(image_base + 0x0553B0C8, 0);
     const u64 lua = ReadablePointer(lua_man, 0x10) ? ReadValue<u64>(lua_man, 8) : 0;
@@ -9447,8 +9455,8 @@ void TickBbscStrandedGuest() {
     WriteValue<u8>(global, 0x1520, 1);
     using HomePoint = void PS4_SYSV_ABI (*)(u64 lua, s32 point);
     using Transition = u64 PS4_SYSV_ABI (*)();
-    reinterpret_cast<HomePoint>(image_base + 0x01332BC0)(lua, -1);
-    reinterpret_cast<Transition>(image_base + 0x013CDE30)();
+    BbGameFn<HomePoint>(image_base + 0x01332BC0)(lua, -1);
+    BbGameFn<Transition>(image_base + 0x013CDE30)();
 }
 
 // Shop trace (2026-10-07). Report: in the host's Dream the Bath Messenger sold the guest everything
@@ -9568,8 +9576,8 @@ void PS4_SYSV_ABI BbscShopListHook(u64, const GuestRegisterSnapshot* registers) 
     };
     using GetRow = void PS4_SYSV_ABI (*)(RowRef* out, s32 id);
     using Unlocked = bool PS4_SYSV_ABI (*)(const RowRef* ref);
-    const auto get = reinterpret_cast<GetRow>(image_base + ShopLineupGetOffset);
-    const auto unlocked = reinterpret_cast<Unlocked>(image_base + ShopLineupUnlockedOffset);
+    const auto get = BbGameFn<GetRow>(image_base + ShopLineupGetOffset);
+    const auto unlocked = BbGameFn<Unlocked>(image_base + ShopLineupUnlockedOffset);
     size_t rows = 0;
     size_t open = 0;
     size_t gated_open = 0;
@@ -10143,7 +10151,7 @@ bool BbscEventFlag(u32 flag) {
         return false;
     }
     using GetEventFlag = bool PS4_SYSV_ABI (*)(u64 unused, u32 flag);
-    return reinterpret_cast<GetEventFlag>(image_base + GetEventFlagOffset)(0, flag);
+    return BbGameFn<GetEventFlag>(image_base + GetEventFlagOffset)(0, flag);
 }
 
 bool BbscNightIsOver() {
@@ -10183,7 +10191,7 @@ void BbscGiveHostWorkshopTools() {
         had[i] = BbscEventFlag(BbscDreamToolFlags[i]);
         if (host_has[i] && !had[i]) {
             using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-            reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, BbscDreamToolFlags[i], 1);
+            BbGameFn<SetEventFlag>(image_base + 0x0132E5A0)(0, BbscDreamToolFlags[i], 1);
         }
     }
     if (!bbsc_dream_tools_logged) {
@@ -10394,15 +10402,15 @@ bool GiveBbscBossGoods(const BbscBossGoodsLot& lot) {
     alignas(16) static u32 key = 0;
     code = 0x40000000u | lot.goods;
     key = 0x80000000u | (3u << 28) | lot.goods;
-    const s32 fits = reinterpret_cast<Fits>(image_base + 0x014D9A80)(carried, &code, lot.count);
+    const s32 fits = BbGameFn<Fits>(image_base + 0x014D9A80)(carried, &code, lot.count);
     const s32 slot =
-        fits > 0 ? reinterpret_cast<Add>(image_base + 0x014DA0A0)(carried, &key, lot.count) : -1;
+        fits > 0 ? BbGameFn<Add>(image_base + 0x014DA0A0)(carried, &key, lot.count) : -1;
     // Added for real (review 2026-10-11): "carried now" alone is also true when the guest had one
     // already (Blood Stone Chunks) and the add failed - then the award below gives it instead.
     const bool there = slot >= 0 && BbscInventoryHas(carried, code);
     if (there && lot.flag != 0) {
         using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-        reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, lot.flag, 1);
+        BbGameFn<SetEventFlag>(image_base + 0x0132E5A0)(0, lot.flag, 1);
     }
     LOG_INFO(Debug, "BBSC boss drop: goods {} x{} put into the carried items (fits {}, slot {}, there "
                     "now: {}, get flag {})",
@@ -10517,7 +10525,7 @@ void TickBbscBossRewards() {
             continue;
         }
         using AwardItemLot = void PS4_SYSV_ABI (*)(u64 item_man, s32 lot, u32 forced);
-        reinterpret_cast<AwardItemLot>(image_base + AwardItemLotOffset)(item_man, lot, 0);
+        BbGameFn<AwardItemLot>(image_base + AwardItemLotOffset)(item_man, lot, 0);
         LOG_INFO(Debug, "BBSC boss drop: event {} - item lot {} given to the guest ({})", event, lot,
                  taken ? "repeat lot, flag already set" : "first kill");
         BBSC_TIMELINE("BOSS", "boss drop: event {} - item lot {} given to the guest ({})", event, lot,
@@ -10665,7 +10673,7 @@ void NoteBbscGuestEnemyDeath(u64 dead) {
     if (!IsEbootCodeAddress(info_fn)) {
         return;
     }
-    const u64 info = reinterpret_cast<u64 PS4_SYSV_ABI (*)(u64)>(info_fn)(dead);
+    const u64 info = BbGameFn<u64 PS4_SYSV_ABI (*)(u64)>(info_fn)(dead);
     const u64 row = ReadablePointer(info, 0x10) ? ReadValue<u64>(info, 8) : 0;
     if (!ReadablePointer(row, 0x150) || ((ReadValue<u8>(row, 329) >> 4) & 1) != 0) {
         return; // no NpcParam row (a player), or a boss
@@ -10703,12 +10711,12 @@ s32 AddBbscCarriedGoods(u32 goods, s32 count) {
     alignas(16) static u32 key = 0;
     code = 0x40000000u | goods;
     key = 0x80000000u | (3u << 28) | goods;
-    const s32 fits = reinterpret_cast<Fits>(image_base + 0x014D9A80)(carried, &code, count);
+    const s32 fits = BbGameFn<Fits>(image_base + 0x014D9A80)(carried, &code, count);
     if (fits <= 0) {
         return -1;
     }
     const s32 slot =
-        reinterpret_cast<Add>(image_base + 0x014DA0A0)(carried, &key, std::min(fits, count));
+        BbGameFn<Add>(image_base + 0x014DA0A0)(carried, &key, std::min(fits, count));
     return slot >= 0 && BbscInventoryHas(carried, code) ? slot : -1;
 }
 
@@ -10773,7 +10781,7 @@ void GiveBbscGuestDrop(s32 lot, u32 name) {
     const s32 slot = AddBbscCarriedGoods(static_cast<u32>(item), count);
     if (slot >= 0 && flag > 0) {
         using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-        reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, static_cast<u32>(flag), 1);
+        BbGameFn<SetEventFlag>(image_base + 0x0132E5A0)(0, static_cast<u32>(flag), 1);
     }
     LOG_INFO(Debug, "BBSC guest drop: enemy (name id {}) died - goods {} x{} from lot {} {}", name,
              item, count, lot,
@@ -10876,7 +10884,7 @@ std::pair<s64, size_t> MergeBbscSharedProgress(std::string_view when) {
         bbsc_progress_backed_up = BackupBbscSaves();
     }
     using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-    const auto set = reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0);
+    const auto set = BbGameFn<SetEventFlag>(image_base + 0x0132E5A0);
     s64 bosses = 0;
     for (const u32 flag : flags) {
         if (!BbscEventFlag(flag)) {
@@ -11325,7 +11333,7 @@ u64 BbscNpcParamRow(u32 id) {
     }
     alignas(16) std::array<u32, 4> found{};
     using NpcParamRow = void PS4_SYSV_ABI (*)(u32* out, u32 id);
-    reinterpret_cast<NpcParamRow>(image_base + NpcParamRowOffset)(found.data(), id);
+    BbGameFn<NpcParamRow>(image_base + NpcParamRowOffset)(found.data(), id);
     u64 row = 0;
     std::memcpy(&row, &found[2], sizeof(row));
     return row;
@@ -12301,10 +12309,10 @@ void TickBbscUnstuckKey() {
     position[3] = 1.0f;
     rotation[3] = 0.0f;
     using Warp = void PS4_SYSV_ABI (*)(u64 chr, float* position, float* rotation, u32 flag);
-    reinterpret_cast<Warp>(warp)(player, position.data(), rotation.data(), 1);
+    BbGameFn<Warp>(warp)(player, position.data(), rotation.data(), 1);
     WriteValue<u8>(player, 0x1E4, static_cast<u8>(ReadValue<u8>(player, 0x1E4) | 0x02));
     using PhysicsReset = void PS4_SYSV_ABI (*)(u64 chr, u8 flag);
-    reinterpret_cast<PhysicsReset>(image_base + 0x018BCF30)(player, 1);
+    BbGameFn<PhysicsReset>(image_base + 0x018BCF30)(player, 1);
     LOG_INFO(Debug, "BBSC unstuck: F8 - player put back at ({:.2f}, {:.2f}, {:.2f}), map {:#x}",
              position[0], position[1], position[2], GetCurrentPackedMap());
 #endif
@@ -12360,7 +12368,7 @@ void TickBbscGuestItemsPickable() {
         }
     }
     using EnableItem = u64 PS4_SYSV_ABI (*)(u64 manager, u32* id, u32 on);
-    const auto enable = reinterpret_cast<EnableItem>(image_base + ItemEnableOffset);
+    const auto enable = BbGameFn<EnableItem>(image_base + ItemEnableOffset);
     u32 switched = 0;
     for (u32 id : off) {
         switched += enable(manager, &id, 1) != 0 ? 1 : 0;
@@ -12406,7 +12414,7 @@ std::string BbscActionGateReport(u64 action_chr, bool with_extras) {
         return {};
     }
     std::string gates;
-    const u32 mask = reinterpret_cast<u32 PS4_SYSV_ABI (*)()>(image_base + 0x0176B7E0)();
+    const u32 mask = BbGameFn<u32 PS4_SYSV_ABI (*)()>(image_base + 0x0176B7E0)();
     if (mask != 0) {
         gates += fmt::format(" menu-busy mask {:#x} (MenuMan", mask);
         static constexpr std::array<u32, 31> MaskFields{
@@ -13080,7 +13088,7 @@ void BbscAnnounce(const char16_t* text, std::string_view what) {
     WriteBbscRoleColumn(RoleGuestLine, nullptr, BbscNoticeCarrierId);
     alignas(16) static const std::array<u8, 16> args{}; // args+8 == 0: "not skipped"
     using SummonedLine = void PS4_SYSV_ABI (*)(u64 unused, u64 unused2, const void* args);
-    reinterpret_cast<SummonedLine>(image_base + SummonedLineOffset)(0, 0, args.data());
+    BbGameFn<SummonedLine>(image_base + SummonedLineOffset)(0, 0, args.data());
     WriteBbscRoleColumn(RoleGuestLine, &column, 0);
     bbsc_banner_own_pending = true; // BBSC's own: never hidden by the join filter
     LOG_INFO(Debug, "BBSC notice shown: {}", what);
@@ -14266,7 +14274,7 @@ u64 BbscStorageInventory() {
         return 0;
     }
     using GameData = u64 PS4_SYSV_ABI (*)(u64 chr);
-    const u64 data = reinterpret_cast<GameData>(getter)(player);
+    const u64 data = BbGameFn<GameData>(getter)(player);
     const u64 inventory = ReadablePointer(data, 0x5B8) ? ReadValue<u64>(data, 0x5B0) : 0;
     return ReadablePointer(inventory, 0x90) ? inventory : 0;
 }
@@ -14324,10 +14332,10 @@ bool BbscInventoryRemove(u64 inventory, u32 code) {
     over = 0;
     using Change = s32 PS4_SYSV_ABI (*)(u64 inventory, u32 slot, s32 delta, s32* over);
     using Free = void PS4_SYSV_ABI (*)(u64 inventory, u32 slot, s32 one);
-    const s32 left = reinterpret_cast<Change>(image_base + 0x014D94A0)(
+    const s32 left = BbGameFn<Change>(image_base + 0x014D94A0)(
         inventory, static_cast<u32>(slot), -std::max(count, 1), &over);
     if (over == 0 && left == 0) {
-        reinterpret_cast<Free>(image_base + 0x014DAB20)(inventory, static_cast<u32>(slot), 1);
+        BbGameFn<Free>(image_base + 0x014DAB20)(inventory, static_cast<u32>(slot), 1);
     }
     return BbscInventorySlot(inventory, code) < 0;
 }
@@ -14403,22 +14411,22 @@ void BbscRestockFromStorage(std::string_view why) {
         }
         code = item;
         key = 0x80000000u | (3u << 28) | goods;
-        const s32 fits = reinterpret_cast<Fits>(image_base + 0x014D9A80)(carried, &code, stored);
+        const s32 fits = BbGameFn<Fits>(image_base + 0x014D9A80)(carried, &code, stored);
         const s32 want = std::min(fits, stored);
         if (want <= 0) {
             summary += fmt::format(" {} {} (full)", name, before);
             continue;
         }
-        reinterpret_cast<Add>(image_base + 0x014DA0A0)(carried, &key, want);
+        BbGameFn<Add>(image_base + 0x014DA0A0)(carried, &key, want);
         const s32 moved = std::clamp(BbscInventoryCount(carried, item) - before, 0, want);
         if (moved > 0) {
             const s32 slot = BbscInventorySlot(storage, item);
             if (slot >= 0) {
                 over = 0;
-                const s32 left = reinterpret_cast<Change>(image_base + 0x014D94A0)(
+                const s32 left = BbGameFn<Change>(image_base + 0x014D94A0)(
                     storage, static_cast<u32>(slot), -moved, &over);
                 if (over == 0 && left == 0) {
-                    reinterpret_cast<Free>(image_base + 0x014DAB20)(storage,
+                    BbGameFn<Free>(image_base + 0x014DAB20)(storage,
                                                                     static_cast<u32>(slot), 1);
                 }
             }
@@ -14594,7 +14602,7 @@ void TickBbscDuelBellGive() {
     if (ReadValue<u8>(global, 0x1592) != 0 && ReadValue<u64>(image_base + 0x0553B0D8, 0) != 0 &&
         ReadValue<u64>(image_base + EventFlagManPointerOffset, 0) != 0 && !BbscEventFlag(6622)) {
         using SetEventFlag = u64 PS4_SYSV_ABI (*)(u64 unused, u32 flag, u8 value);
-        reinterpret_cast<SetEventFlag>(image_base + 0x0132E5A0)(0, 6622, 1);
+        BbGameFn<SetEventFlag>(image_base + 0x0132E5A0)(0, 6622, 1);
         bbport_kit_journal_flag(6622);
         LOG_INFO(Debug, "BBSC kit: the Dream messenger's vanilla Beckoning Bell marked as given "
                         "(flag 6622) - the kit's Hunt Bell replaces it");
@@ -14672,13 +14680,13 @@ void TickBbscDuelBellGive() {
         code = 0x40000000u | item->id;
         key = 0x80000000u | (3u << 28) | item->id;
         u64 destination = carried;
-        s32 fits = reinterpret_cast<Fits>(image_base + InventoryFitsOffset)(carried, &code, 1);
+        s32 fits = BbGameFn<Fits>(image_base + InventoryFitsOffset)(carried, &code, 1);
         if (fits <= 0) {
             destination = storage;
-            fits = reinterpret_cast<Fits>(image_base + InventoryFitsOffset)(storage, &code, 1);
+            fits = BbGameFn<Fits>(image_base + InventoryFitsOffset)(storage, &code, 1);
         }
         const s32 slot = fits > 0
-                             ? reinterpret_cast<Add>(image_base + InventoryAddOffset)(destination, &key, 1)
+                             ? BbGameFn<Add>(image_base + InventoryAddOffset)(destination, &key, 1)
                              : -1;
         const bool now_there = has(item->id);
         LOG_INFO(Debug, "BBSC kit: goods {} added to the {} (fits {}, slot {}, there now: {})",
@@ -14796,7 +14804,7 @@ bool BbscEraseLocalEffect(s32 id) {
     }
     const u64 manager = ReadValue<u64>(GetLocalPlayerCharacter(), 0x1C8);
     using EraseFn = void PS4_SYSV_ABI (*)(u64 manager, u64 node, s32 now);
-    reinterpret_cast<EraseFn>(image_base + 0x017E1D90)(manager, node, 1);
+    BbGameFn<EraseFn>(image_base + 0x017E1D90)(manager, node, 1);
     return BbscLocalEffectNode(id) == 0;
 }
 
@@ -14876,7 +14884,7 @@ void TickBbscInvadable() {
     }
     using AddSpEffect = void PS4_SYSV_ABI (*)(u64 chr, s32 id, u64 source, s32, s32, s32, float,
                                                float, float, float, float, s32);
-    reinterpret_cast<AddSpEffect>(add)(player, static_cast<s32>(BbscInvadableEffectId), player, 0, 0,
+    BbGameFn<AddSpEffect>(add)(player, static_cast<s32>(BbscInvadableEffectId), player, 0, 0,
                                        0, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0);
     if (added++ < 20) {
         LOG_INFO(Debug, "BBSC invasions: world open to invaders (SpEffect {} added, session state {}, "
@@ -15016,8 +15024,8 @@ void TickBbscGuestBlank() {
     // As 0x018FF74D..0x018FF759: the Lua event by name, then every remote slot marked as leaving.
     using LuaEvent = void PS4_SYSV_ABI (*)(u64 lua, u64 name);
     using MarkSlotsLeaving = void PS4_SYSV_ABI (*)();
-    reinterpret_cast<LuaEvent>(image_base + 0x01339870)(lua, image_base + 0x0492EA75);
-    reinterpret_cast<MarkSlotsLeaving>(image_base + 0x014EB860)();
+    BbGameFn<LuaEvent>(image_base + 0x01339870)(lua, image_base + 0x0492EA75);
+    BbGameFn<MarkSlotsLeaving>(image_base + 0x014EB860)();
 }
 
 void SendBbscPvpPacket(u8 kind, bool on) {
@@ -15097,7 +15105,7 @@ void TickBbscSignPostCheck() {
         return;
     }
     using AreaCheck = bool PS4_SYSV_ABI (*)(u64 world_chr_man);
-    const bool allowed = reinterpret_cast<AreaCheck>(image_base + SignAreaCheckOffset)(world);
+    const bool allowed = BbGameFn<AreaCheck>(image_base + SignAreaCheckOffset)(world);
     const bool patched = EnvFlagEnabled("SHADPS4_BBSC_SIGN_ANY_AREA");
     if (allowed) {
         LOG_INFO(Debug, "BBSC sign post: sign up in map {:#x}; the game's area check allows it",
@@ -15830,7 +15838,7 @@ void TickBbscFreeBell() {
         u64 row;
     } result{0xFFFFFFFFu, 0, 0};
     using Lookup = void PS4_SYSV_ABI (*)(LookupResult* out, u32 id);
-    reinterpret_cast<Lookup>(image_base + 0x01F1E3D0)(&result, 200);
+    BbGameFn<Lookup>(image_base + 0x01F1E3D0)(&result, 200);
     if (!ReadablePointer(result.row, 0x40) ||
         !HasMemoryAccess(result.row + 0x38, 1, MemoryProt::CpuWrite)) {
         return;
@@ -17372,7 +17380,7 @@ void InstallBbscSignPostAreaPatch(u64 base, u64 image_size) {
                       check.offset, BytesToHex(check.expected), BytesToHex(actual));
             continue;
         }
-        std::memcpy(site, SignPostAllowedArea.data(), SignPostAllowedArea.size());
+        BbscCodePatch(site, SignPostAllowedArea.data(), SignPostAllowedArea.size(), check.what);
         LOG_INFO(Debug, "BBSC sign post: {} in any area ({:#x})", check.what, check.offset);
     }
 }
@@ -17778,32 +17786,19 @@ void InstallSeamlessCoopPatches() {
     }
     healing_fountain_host_availability_hook_installed = true;
 
-    std::memcpy(area_comparison, BeckoningSignedAreaComparison.data(),
-                BeckoningSignedAreaComparison.size());
-    std::memcpy(area_flag_result, BeckoningAllowedAreaFlagResult.data(),
-                BeckoningAllowedAreaFlagResult.size());
-    std::memcpy(responder_bell_area_result, ResponderBellAllowedAreaResult.data(),
-                ResponderBellAllowedAreaResult.size());
-    std::memcpy(responder_bell_common_result, ResponderBellAllowedCommonResult.data(),
-                ResponderBellAllowedCommonResult.size());
-    std::memcpy(active_bell_area_comparison, ActiveBellSignedAreaComparison.data(),
-                ActiveBellSignedAreaComparison.size());
-    std::memcpy(active_bell_area_flag_result, ActiveBellAllowedAreaFlagResult.data(),
-                ActiveBellAllowedAreaFlagResult.size());
-    std::memcpy(responder_search_area_range_result, ResponderSearchSignedAreaRangeResult.data(),
-                ResponderSearchSignedAreaRangeResult.size());
-    std::memcpy(sos_status_area_restriction, SosStatusAllowedArea.data(),
-                SosStatusAllowedArea.size());
-    std::memcpy(summon_candidate_area_restriction, SummonCandidateAllowedCrossMap.data(),
-                SummonCandidateAllowedCrossMap.size());
-    std::memcpy(summon_build_area_restriction, SummonBuildAllowedCrossMap.data(),
-                SummonBuildAllowedCrossMap.size());
-    std::memcpy(summon_build_world_state_restriction, SummonBuildAllowedWorldState.data(),
-                SummonBuildAllowedWorldState.size());
-    std::memcpy(summon_build_negative_event_restriction, SummonBuildAllowedNegativeEvent.data(),
-                SummonBuildAllowedNegativeEvent.size());
-    std::memcpy(stage_transition_stop_matching_call, StageTransitionKeepMatchingCall.data(),
-                StageTransitionKeepMatchingCall.size());
+    BbscCodePatch(area_comparison, BeckoningSignedAreaComparison.data(), BeckoningSignedAreaComparison.size(), "BeckoningSignedAreaComparison");
+    BbscCodePatch(area_flag_result, BeckoningAllowedAreaFlagResult.data(), BeckoningAllowedAreaFlagResult.size(), "BeckoningAllowedAreaFlagResult");
+    BbscCodePatch(responder_bell_area_result, ResponderBellAllowedAreaResult.data(), ResponderBellAllowedAreaResult.size(), "ResponderBellAllowedAreaResult");
+    BbscCodePatch(responder_bell_common_result, ResponderBellAllowedCommonResult.data(), ResponderBellAllowedCommonResult.size(), "ResponderBellAllowedCommonResult");
+    BbscCodePatch(active_bell_area_comparison, ActiveBellSignedAreaComparison.data(), ActiveBellSignedAreaComparison.size(), "ActiveBellSignedAreaComparison");
+    BbscCodePatch(active_bell_area_flag_result, ActiveBellAllowedAreaFlagResult.data(), ActiveBellAllowedAreaFlagResult.size(), "ActiveBellAllowedAreaFlagResult");
+    BbscCodePatch(responder_search_area_range_result, ResponderSearchSignedAreaRangeResult.data(), ResponderSearchSignedAreaRangeResult.size(), "ResponderSearchSignedAreaRangeResult");
+    BbscCodePatch(sos_status_area_restriction, SosStatusAllowedArea.data(), SosStatusAllowedArea.size(), "SosStatusAllowedArea");
+    BbscCodePatch(summon_candidate_area_restriction, SummonCandidateAllowedCrossMap.data(), SummonCandidateAllowedCrossMap.size(), "SummonCandidateAllowedCrossMap");
+    BbscCodePatch(summon_build_area_restriction, SummonBuildAllowedCrossMap.data(), SummonBuildAllowedCrossMap.size(), "SummonBuildAllowedCrossMap");
+    BbscCodePatch(summon_build_world_state_restriction, SummonBuildAllowedWorldState.data(), SummonBuildAllowedWorldState.size(), "SummonBuildAllowedWorldState");
+    BbscCodePatch(summon_build_negative_event_restriction, SummonBuildAllowedNegativeEvent.data(), SummonBuildAllowedNegativeEvent.size(), "SummonBuildAllowedNegativeEvent");
+    BbscCodePatch(stage_transition_stop_matching_call, StageTransitionKeepMatchingCall.data(), StageTransitionKeepMatchingCall.size(), "StageTransitionKeepMatchingCall");
     negative_area_patch_installed = true;
     area_flag_patch_installed = true;
     responder_bell_area_patch_installed = true;

@@ -129,7 +129,13 @@ output, which must equal the x86-64 run's.
   a library also runs in configurations that register other sites (no handler: nothing runs).
   Handlers call game functions only through `bbport_guest_call` (inside a handler the runtime
   calls them as recompiled code does, on the guest stack: a native call there would enter
-  recompiled code again over the live host frames). `corpus/sites.S` tests the three kinds.
+  recompiled code again over the live host frames). Byte patches the port switches while the game
+  runs (BBSC's session patches and its install-time edits) are *variants*: the original and the
+  replacement bytes are registered; the lifter lifts the replacement's instructions (decoded
+  over the original bytes) on a path of their own and takes it when the code holds the
+  replacement (`lift.py variant`: the code bytes are the switch), so one library serves BBSC on
+  and off; a function with a variant in its first 5 bytes keeps its entry (BBSC's one-byte
+  `ret` would land in the entry jump). `corpus/sites.S` tests each kind.
 - **Configurations:** settings install hooks of their own (`BB_FRAME_STATS`: one at 0x26aa860), so
   a library is built against one dump per configuration it must run in
   (`build_aot.sh EBOOT LIST dump1.bin,dump2.bin NAME`); bbport refuses it in any other.

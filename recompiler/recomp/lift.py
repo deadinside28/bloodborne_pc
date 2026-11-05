@@ -609,6 +609,46 @@ class FunctionLifter:
         self.exit_dynamic(nxt)
         self.label(on)
 
+    def variant(self, ins, b, after_site):
+        """A byte patch the port switches (bbport_guest_variant_register): the code's bytes there
+        tell which form runs. The patched form's instructions (the replacement over the original
+        bytes) are lifted on their own path, which rejoins the original at the first instruction
+        boundary past the patch."""
+        repl = self.mod.variants[ins.ip]
+        n = self.site_count = getattr(self, "site_count", 0) + 1
+        tag = f"{n}_{ins.ip:x}"
+        same = "true"
+        for k, byte in enumerate(repl):
+            p = self.op(f"inttoptr i64 {self.code_addr(ins.ip + k)} to ptr")
+            v = self.op(f"load volatile i8, ptr {p}")
+            same = self.op(f"and i1 {same}, {self.op(f'icmp eq i8 {v}, {byte - 256 if byte > 127 else byte}')}")
+        self.e(f"br i1 {same}, label %variant_{tag}, label %original_{tag}")
+        self.label(f"variant_{tag}")
+        code = bytearray(self.mod.image.read(ins.ip, 64) or b"")
+        if len(code) < len(repl):
+            raise Unsupported("variant past the image")
+        code[:len(repl)] = repl
+        boundaries = {i.ip for i in b.insns if i.ip > ins.ip}
+        saved = self.cur_ins
+        terminated = False
+        for i in X.Decoder(64, bytes(code), ip=ins.ip):
+            if i.code == X.Code.INVALID:
+                raise Unsupported("variant: undecodable")
+            self.cur_ins = i
+            terminated = self.lift_insn(i, b)
+            if terminated or i.next_ip >= ins.ip + len(repl):
+                break
+        self.cur_ins = saved
+        if not terminated:
+            at = i.next_ip
+            if at in boundaries:
+                self.e(f"br label %{after_site.setdefault(at, f'variant_past_{tag}')}")
+            elif at == b.insns[-1].next_ip:
+                self.e(f"br label {self.target_label(at)}")
+            else:
+                raise Unsupported("variant: ends inside an instruction")
+        self.label(f"original_{tag}")
+
     def trap(self, kind):
         self.spill()
         self.e(f"call void @__recomp_trap(ptr %st, i64 {self.code_addr(self.cur_ins.ip)}, i32 {kind})")
@@ -667,6 +707,8 @@ class FunctionLifter:
                 self.label(after_site.pop(ins.ip))
             if ins.ip in self.mod.sites:
                 self.guest_site(ins, b, after_site)
+            if ins.ip in self.mod.variants:
+                self.variant(ins, b, after_site)
             try:
                 terminated = self.lift_insn(ins, b)
             except Unsupported as ex:
@@ -1628,6 +1670,7 @@ class ModuleLifter:
         self.unresolved = set()
         self.intrinsics = {"declare i8 @llvm.ctpop.i8(i8)"}
         self.sites = {}  # the port's guest sites (__recomp_guest_site): link address -> span length
+        self.variants = {}  # the port's switched byte patches: link address -> replacement bytes
         self.lifted_names = set()
         self.cfgs = {}
         self._stubs = {}

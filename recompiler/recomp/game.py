@@ -36,6 +36,7 @@ def _work(job):
     mod = ModuleLifter(img, tso=_OPTS["tso"], abi=_OPTS["abi"], rcpc="check", volatile=_OPTS.get("volatile", False))
     mod.lifted_names = _OPTS.get("lifted") or starts
     mod.sites = _OPTS.get("sites") or {}
+    mod.variants = _OPTS.get("variants") or {}
 
     def twice(t):  # a call target that returns twice (setjmp, getcontext...)
         return mod.import_stub(t) in getattr(img, "nonlocal_got", ()) or t in getattr(img, "returns_twice_funcs", ())
@@ -66,6 +67,9 @@ def _work(job):
             continue
         if any(a < blk < a + 5 for blk in c.blocks):
             nopatch[a] = "a jump target inside the first 5 bytes"
+        if any(a <= v < a + 5 for v in mod.variants):
+            # the port switches bytes there (BBSC's entry returns): they would land in the entry jump
+            nopatch[a] = "a switched byte patch in the first 5 bytes"
         if c.errors:
             bad[a] = "CFG error"
         elif a in getattr(img, "nonlocal_funcs", ()):
@@ -239,19 +243,30 @@ def _overlay(img, live, ranges):
 
 def read_sites(path):
     """BB_AOT_DUMP's `<dump>.sites` (src/runtime_aot.c): {patch link address: (original bytes,
-    whether the handler runs after them)} of the port's guest sites registered when the dump was
-    written."""
+    kind, replacement bytes or None)} of the port's guest sites registered when the dump was
+    written; kind: "at" (the handler at the patch), "after" (past it) or "variant" (a byte patch
+    the code switches on and off: both forms lifted)."""
     sites = {}
     for line in open(path):
         parts = line.split()
-        if len(parts) >= 3:
-            sites[int(parts[0], 16)] = (bytes.fromhex(parts[2])[:int(parts[1])], len(parts) > 3 and parts[3] == "after")
+        if len(parts) < 3:
+            continue
+        n = int(parts[1])
+        kind = parts[3] if len(parts) > 3 and parts[3] in ("at", "after", "variant") else "at"
+        repl = bytes.fromhex(parts[4])[:n] if kind == "variant" else None
+        sites[int(parts[0], 16)] = (bytes.fromhex(parts[2])[:n], kind, repl)
     return sites
 
 
 def site_handlers(sites):
     """{where the handler runs: the span past it the lifter may continue at (0: none)}."""
-    return {(a + len(b) if after else a): (0 if after else len(b)) for a, (b, after) in sites.items()}
+    return {(a + len(b) if kind == "after" else a): (0 if kind == "after" else len(b))
+            for a, (b, kind, _) in sites.items() if kind != "variant"}
+
+
+def site_variants(sites):
+    """{patch link address: replacement bytes} of the variants."""
+    return {a: r for a, (_, kind, r) in sites.items() if kind == "variant"}
 
 
 def restore_sites(live, sites):
@@ -260,7 +275,7 @@ def restore_sites(live, sites):
     out = []
     for lv in live:
         b = bytearray(lv)
-        for a, (orig, _) in sites.items():
+        for a, (orig, _, _) in sites.items():
             if a + len(orig) <= len(b):
                 b[a:a + len(orig)] = orig
         out.append(bytes(b))
@@ -342,7 +357,8 @@ def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limi
     extra = _extra_functions(img, starts, workers, shard_size)
     starts = starts | frozenset(extra)
     addrs = sorted(starts)
-    opts = dict(out=out, tso=tso, abi=abi, volatile=volatile, sites=site_handlers(sites or {}))
+    opts = dict(out=out, tso=tso, abi=abi, volatile=volatile, sites=site_handlers(sites or {}),
+                variants=site_variants(sites or {}))
     if sites and live:
         live = restore_sites(live, sites)
     excluded = nopatch = None

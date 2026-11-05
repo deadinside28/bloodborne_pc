@@ -44,7 +44,7 @@ for v in $variants; do
     $cc $opt -march=$march $cflags "${extra[@]}" -o "$so" "$here"/corpus/*.c "$here"/corpus/*.S
     if readelf -rW "$so" | grep -q JUMP_SLOT; then echo "[$v] corpus has PLT calls (libgcc?)"; status=1; continue; fi
     # corpus/sites.S's guest sites: gsite_add_* (3 bytes), gsite_vec_* and gsite_ret_* (4 bytes), gsite_jmp_* (2)
-    nm -D --defined-only "$so" | awk '$3 ~ /^gsite_add_/ {print "0x"$1, 3, "000000", $3} $3 ~ /^gsite_vec_/ {print "0x"$1, 4, "00000000", $3} $3 ~ /^gsite_ret_/ {print "0x"$1, 4, "00000000", $3} $3 ~ /^gsite_jmp_/ {print "0x"$1, 2, "0000", $3}' \
+    nm -D --defined-only "$so" | awk '$3 ~ /^gsite_add_/ {print "0x"$1, 3, "000000", $3} $3 ~ /^gsite_vec_/ {print "0x"$1, 4, "00000000", $3} $3 ~ /^gsite_ret_/ {print "0x"$1, 4, "00000000", $3} $3 ~ /^gsite_jmp_/ {print "0x"$1, 2, "0000", $3} $3 ~ /^gvariant_sub_/ {print "0x"$1, 3, "4801f8 variant 4829f8", $3}' \
         > "$out/sites-$v.txt"
     st=(--sites "$out/sites-$v.txt")
     for mode in ${BB_RECOMP_MODES:-default abi}; do

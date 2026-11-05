@@ -41,13 +41,24 @@ std::size_t SlotOf(std::uint64_t address) {
 
 namespace {
 int Register(std::uint64_t address, std::uint64_t patch, const std::uint8_t* original, std::uint32_t length,
-             BbGuestSiteHandler handler, std::uint64_t tag, const char* name);
+             BbGuestSiteHandler handler, std::uint64_t tag, const char* name, const std::uint8_t* replacement = nullptr);
 }
 
 extern "C" __attribute__((visibility("default"))) int bbport_guest_site_register(
     std::uint64_t address, const std::uint8_t* original, std::uint32_t length,
     BbGuestSiteHandler handler, std::uint64_t tag, const char* name) {
     return Register(address, address, original, length, handler, tag, name);
+}
+
+extern "C" __attribute__((visibility("default"))) int bbport_guest_variant_register(
+    std::uint64_t address, const std::uint8_t* original, const std::uint8_t* replacement, std::uint32_t length,
+    const char* name) {
+    if (!replacement || length == 0 || length > BB_GUEST_SITE_MAX_BYTES) {
+        return -1;
+    }
+    std::uint8_t r[BB_GUEST_SITE_MAX_BYTES] = {};
+    std::memcpy(r, replacement, length);
+    return Register(address, address, original, length, nullptr, 0, name, r);
 }
 
 extern "C" __attribute__((visibility("default"))) int bbport_guest_site_register_after(
@@ -58,8 +69,8 @@ extern "C" __attribute__((visibility("default"))) int bbport_guest_site_register
 
 namespace {
 int Register(std::uint64_t address, std::uint64_t patch, const std::uint8_t* original, std::uint32_t length,
-             BbGuestSiteHandler handler, std::uint64_t tag, const char* name) {
-    if (!handler || !original || length == 0 || length > BB_GUEST_SITE_MAX_BYTES) {
+             BbGuestSiteHandler handler, std::uint64_t tag, const char* name, const std::uint8_t* replacement) {
+    if ((!handler && !replacement) || !original || length == 0 || length > BB_GUEST_SITE_MAX_BYTES) {
         return -1;
     }
     std::scoped_lock lock{writer};
@@ -75,6 +86,9 @@ int Register(std::uint64_t address, std::uint64_t patch, const std::uint8_t* ori
     s.length = length;
     std::memcpy(s.original, original, length);
     s.handler = handler;
+    if (replacement) {
+        std::memcpy(s.replacement, replacement, length);
+    }
     s.tag = tag;
     s.name = name;
     std::size_t slot = SlotOf(address);
@@ -108,16 +122,29 @@ extern "C" __attribute__((visibility("default"))) const BbGuestSite* bbport_gues
 
 extern "C" __attribute__((visibility("default"))) BbGuestCallHook bbport_guest_call_hook = nullptr;
 
-extern "C" __attribute__((visibility("default"))) std::uint64_t bbport_guest_call_args(const BbGuestCallArgs* call) {
+extern "C" __attribute__((visibility("default"))) std::uint64_t bbport_guest_call_args(BbGuestCallArgs* call) {
     if (bbport_guest_call_hook) {
         return bbport_guest_call_hook(call);
     }
 #if defined(__x86_64__)
-    using Fn = std::uint64_t(__attribute__((sysv_abi))*)(std::uint64_t, std::uint64_t, std::uint64_t,
-                                                         std::uint64_t, std::uint64_t, std::uint64_t, double);
-    const auto* a = call->args;
-    return reinterpret_cast<Fn>(call->original ? call->original : call->address)(a[0], a[1], a[2], a[3], a[4], a[5],
-                                                                                  call->xmm0);
+    // Every register and stack slot passed (the function reads what it takes); the result in rax
+    // and xmm0 (a struct of an integer and a double comes back in both).
+    struct Result {
+        std::uint64_t rax;
+        double xmm0;
+    };
+    using U = std::uint64_t;
+    using Fn = Result(__attribute__((sysv_abi))*)(U, U, U, U, U, U, double, double, double, double, double, double,
+                                                  double, double, U, U, U, U, U, U, U, U);
+    double x[8];
+    std::memcpy(x, call->xmm, sizeof(x));
+    const U* a = call->args;
+    const U* s = call->stack;
+    const Result r = reinterpret_cast<Fn>(call->original ? call->original : call->address)(
+        a[0], a[1], a[2], a[3], a[4], a[5], x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], s[0], s[1], s[2], s[3],
+        s[4], s[5], s[6], s[7]);
+    std::memcpy(&call->xmm0_result, &r.xmm0, 8);
+    return r.rax;
 #else
     std::fprintf(stderr, "Guest call %#llx: no way to call the game's code here\n",
                  static_cast<unsigned long long>(call->address));
@@ -128,6 +155,9 @@ extern "C" __attribute__((visibility("default"))) std::uint64_t bbport_guest_cal
 extern "C" __attribute__((visibility("default"))) std::uint64_t bbport_guest_call(
     std::uint64_t address, std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d, std::uint64_t e,
     std::uint64_t f) {
-    const BbGuestCallArgs call{address, 0, {a, b, c, d, e, f}, 0.0};
+    BbGuestCallArgs call{};
+    call.address = address;
+    const std::uint64_t w[6] = {a, b, c, d, e, f};
+    std::memcpy(call.args, w, sizeof(w));
     return bbport_guest_call_args(&call);
 }

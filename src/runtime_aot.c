@@ -274,7 +274,7 @@ RecompSiteResult __recomp_guest_site(RecompState *st, uint64_t link, uint64_t fl
         return (RecompSiteResult){ 0, flags };
     }
     const BbGuestSite *s = bbport_guest_site_at ? bbport_guest_site_at(__recomp_slide + link) : NULL;
-    if (!s) return (RecompSiteResult){ 0, flags };
+    if (!s || !s->handler) return (RecompSiteResult){ 0, flags };  /* none, or a variant (lifted both ways) */
     __atomic_add_fetch(&site_calls, 1, __ATOMIC_RELAXED);
     static const unsigned order[16] = { G_RAX, G_RBX, G_RCX, G_RDX, G_RSI, G_RDI, G_RBP, G_RSP,
                                         G_R8, G_R9, G_R10, G_R11, G_R12, G_R13, G_R14, G_R15 };
@@ -305,23 +305,38 @@ RecompSiteResult __recomp_guest_site(RecompState *st, uint64_t link, uint64_t fl
  * stack the recompiled frames are on, and the game code it reaches would enter recompiled code
  * again at the thread's host stack top: over those frames (the GPU heap's grow hook calling the
  * game's allocator lost a callee-saved register that way). Elsewhere: the native call. */
-static uint64_t aot_guest_call(const BbGuestCallArgs *c) {
+static uint64_t native_guest_call(BbGuestCallArgs *c) {
+    typedef struct { uint64_t rax; double xmm0; } Result;  /* rax and xmm0 */
+    typedef uint64_t U;
+    typedef Result (*Fn)(U, U, U, U, U, U, double, double, double, double, double, double, double, double,
+                         U, U, U, U, U, U, U, U);
+    double x[8];
+    memcpy(x, c->xmm, sizeof(x));
+    const U *a = c->args, *s = c->stack;
+    const Result r = ((Fn)(uintptr_t)(c->original ? c->original : c->address))(
+        a[0], a[1], a[2], a[3], a[4], a[5], x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
+        s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]);
+    memcpy(&c->xmm0_result, &r.xmm0, 8);
+    return r.rax;
+}
+
+static uint64_t aot_guest_call(BbGuestCallArgs *c) {
     RecompState *const cur = site_state;
-    if (!cur) {
-        typedef uint64_t (*Fn)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, double);
-        const uint64_t *a = c->args;
-        return ((Fn)(uintptr_t)(c->original ? c->original : c->address))(a[0], a[1], a[2], a[3], a[4], a[5], c->xmm0);
-    }
+    if (!cur) return native_guest_call(c);
     RecompState s = *cur;
     uint64_t sp = (cur->gpr[G_RSP] - 256) & ~(uint64_t)15;  /* past the red zone */
+    sp -= 8 * BB_GUEST_CALL_STACK;                          /* the stack arguments (16-byte aligned) */
+    memcpy((void *)(uintptr_t)sp, c->stack, 8 * BB_GUEST_CALL_STACK);
     sp -= 8;
     *(uint64_t *)(uintptr_t)sp = 0;                         /* the return slot */
     s.gpr[G_RSP] = sp;
     static const unsigned regs[6] = { G_RDI, G_RSI, G_RDX, G_RCX, G_R8, G_R9 };
     for (int i = 0; i < 6; ++i) s.gpr[regs[i]] = c->args[i];
-    s.xmm[0] = 0;
-    memcpy(&s.xmm[0], &c->xmm0, 8);
-    s.ymmh[0] = 0;
+    for (int i = 0; i < 8; ++i) {
+        s.xmm[i] = 0;
+        memcpy(&s.xmm[i], &c->xmm[i], 8);
+        s.ymmh[i] = 0;
+    }
     uint64_t target = c->address;
     if (c->original) {
         if (lookup(c->address - __recomp_slide)) site_bypass = c->address;  /* its entry site skipped once */
@@ -331,6 +346,7 @@ static uint64_t aot_guest_call(const BbGuestCallArgs *c) {
     __recomp_dispatch(&s, target);
     site_state = cur;
     site_bypass = 0;
+    memcpy(&c->xmm0_result, &s.xmm[0], 8);
     return s.gpr[G_RAX];
 }
 
@@ -372,7 +388,7 @@ static uint64_t function_hash(const unsigned char *image, uint64_t start, uint64
 
 /* BB_AOT_DUMP's `<dump>.sites`: the guest sites registered now, for the recompiler (one per line:
  * the patch's link address, its length, the original bytes in hex, where the handler runs ("at" the
- * patch, or "after" it), name). */
+ * patch, or "after" it) or "variant" and the replacement bytes in hex, name). */
 static void dump_sites(const char *path, uint64_t base) {
     const BbGuestSite *sites = NULL;
     const size_t n = bbport_guest_sites ? bbport_guest_sites(&sites) : 0;
@@ -383,6 +399,12 @@ static void dump_sites(const char *path, uint64_t base) {
     for (size_t i = 0; i < n; ++i) {
         fprintf(f, "0x%" PRIx64 " %u ", sites[i].patch - base, sites[i].length);
         for (uint32_t k = 0; k < sites[i].length; ++k) fprintf(f, "%02x", sites[i].original[k]);
+        if (!sites[i].handler) {  /* a variant: its replacement bytes */
+            fprintf(f, " variant ");
+            for (uint32_t k = 0; k < sites[i].length; ++k) fprintf(f, "%02x", sites[i].replacement[k]);
+            fprintf(f, " %s\n", sites[i].name ? sites[i].name : "?");
+            continue;
+        }
         fprintf(f, " %s %s\n", sites[i].address == sites[i].patch ? "at" : "after", sites[i].name ? sites[i].name : "?");
     }
     fclose(f);

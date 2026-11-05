@@ -18,6 +18,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "recomp_loader.h"
 #if defined(RECOMP_HYBRID)
@@ -139,6 +141,17 @@ int main(int argc, char **argv) {
     }
     if (!image) { fprintf(stderr, "usage: runner IMAGE [-n N] [-f FILTER] [-r REC | -c REC] [-v] [-H]\n"); return 2; }
     recomp_load(image);
+    // corpus/sites.S's variant: its replacement written into the code (as the port switches its
+    // patches on), before anything runs: the original code runs it, the recompiled code finds it.
+    if (recomp_symbol("gvariant_sub_1")) {
+        uint8_t *at = (uint8_t *)(uintptr_t)(__recomp_slide + recomp_symbol("gvariant_sub_1"));
+        const long page = sysconf(_SC_PAGESIZE);
+        uint8_t *first = (uint8_t *)((uintptr_t)at & ~(uintptr_t)(page - 1));
+        if (mprotect(first, (size_t)(at + 3 - first), PROT_READ | PROT_WRITE | PROT_EXEC) == 0) {
+            at[1] = 0x29;  // add rax, rdi -> sub rax, rdi
+            mprotect(first, (size_t)(at + 3 - first), PROT_READ | PROT_EXEC);
+        }
+    }
     find_exports();
 #if defined(RECOMP_HYBRID)
     if (hybrid) {

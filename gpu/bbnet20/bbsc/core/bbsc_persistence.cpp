@@ -3,6 +3,7 @@
 
 #include "core/bbsc_persistence.h"
 #include "core/bbsc_patch_tables.h"
+#include "shim/bbport_guest_sites.h" // bbport: the recompiled game follows these patches
 
 #include <array>
 #include <cstdlib>
@@ -94,6 +95,43 @@ int WritePatches(bool enable, Scope scope) {
         role_patches_on = enable;
     }
     return count;
+}
+
+// bbport: every enabled site as a variant (gpu/shim/bbport_guest_sites.h): its original and its
+// patched bytes, for the recompiled game, which takes whichever the code holds as WritePatches
+// switches them.
+void RegisterVariants(u64 base) {
+    for (const auto& entry : EntryJumps) {
+        if (GroupEnabled(entry.group)) {
+            const auto patched = EncodeRel32(0xE9, entry.site, entry.target);
+            bbport_guest_variant_register(base + entry.site, entry.prologue.data(), patched.data(), 5, entry.name);
+        }
+    }
+    for (const auto& entry : Retargets) {
+        if (GroupEnabled(entry.group)) {
+            const auto original = EncodeRel32(entry.opcode, entry.site, entry.original);
+            const auto patched = EncodeRel32(entry.opcode, entry.site, entry.target);
+            bbport_guest_variant_register(base + entry.site, original.data(), patched.data(), 5, entry.name);
+        }
+    }
+    for (const auto& entry : EntryReturns) {
+        if (GroupEnabled(entry.group)) {
+            const u8 ret = 0xC3;
+            bbport_guest_variant_register(base + entry.site, entry.prologue.data(), &ret, 1, entry.name);
+        }
+    }
+    for (const auto& entry : ByteEdits) {
+        if (GroupEnabled(entry.group)) {
+            bbport_guest_variant_register(base + entry.site, entry.original.data(), entry.replacement.data(),
+                                          u32(entry.original.size()), entry.name);
+        }
+    }
+    for (const auto& entry : WideEdits) {
+        if (GroupEnabled(entry.group)) {
+            bbport_guest_variant_register(base + entry.site, entry.original.data(), entry.replacement.data(),
+                                          u32(entry.original.size()), entry.name);
+        }
+    }
 }
 
 } // namespace
@@ -248,6 +286,7 @@ void InstallPersistentSessionPatches() {
     }
 
     patches_verified = true;
+    RegisterVariants(base);
     const int applied = WritePatches(true, Scope::Install);
     LOG_INFO(Debug,
              "BBSC persistence enabled ({} sites; boss={}, matching-check={}, lamp={}, "

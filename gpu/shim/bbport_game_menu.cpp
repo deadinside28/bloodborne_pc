@@ -88,6 +88,16 @@ const u8 AddPageItemPrologue[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
 const u8 RowInputPrologue[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
 
 u64 image_base = 0;
+/// A call of the game's function at `va` itself, its entry being the port's (`original`: the moved
+/// prologue's trampoline): bbport_guest_call_args.
+BbGuestCallArgs OriginalCall(u64 va, u64 original, std::array<u64, 6> args) {
+    BbGuestCallArgs call{};
+    call.address = image_base + va;
+    call.original = original;
+    std::memcpy(call.args, args.data(), sizeof(call.args));
+    return call;
+}
+
 /// The game's function (called through bbport_guest_call: bbport_guest_sites.h) or data at `va`.
 template <typename F>
 auto Game(u64 va) {
@@ -609,8 +619,9 @@ u64 PS4_SYSV_ABI RowInputHook(u8* row, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, d
     if (*reinterpret_cast<int**>(row + RowValue) == &values[OutputRes]) {
         RefreshOutputRow(row);
     }
-    const BbGuestCallArgs call{image_base + RowInput, reinterpret_cast<u64>(row_input_original),
-                               {reinterpret_cast<u64>(row), a1, a2, a3, a4, a5}, frame_time};
+    BbGuestCallArgs call = OriginalCall(RowInput, reinterpret_cast<u64>(row_input_original),
+                                        {reinterpret_cast<u64>(row), a1, a2, a3, a4, a5});
+    std::memcpy(&call.xmm[0], &frame_time, 8);
     return bbport_guest_call_args(&call);
 }
 
@@ -620,9 +631,9 @@ LookupFn lookup_original = nullptr;
 AddFn add_original = nullptr;
 /// The game's AddPageItem itself (its entry is the port's: bbport_guest_call_args `original`).
 void* AddOriginal(void* menu, void* pair, void* function, void* out) {
-    const BbGuestCallArgs call{image_base + AddPageItem, reinterpret_cast<u64>(add_original),
-                               {reinterpret_cast<u64>(menu), reinterpret_cast<u64>(pair),
-                                reinterpret_cast<u64>(function), reinterpret_cast<u64>(out), 0, 0}, 0.0};
+    BbGuestCallArgs call = OriginalCall(AddPageItem, reinterpret_cast<u64>(add_original),
+                                        {reinterpret_cast<u64>(menu), reinterpret_cast<u64>(pair),
+                                         reinterpret_cast<u64>(function), reinterpret_cast<u64>(out), 0, 0});
     return reinterpret_cast<void*>(bbport_guest_call_args(&call));
 }
 std::atomic<const void*> screen_sound_text{nullptr};
@@ -650,8 +661,8 @@ const char16_t* PS4_SYSV_ABI LookupHook(void* repository, u32 table, u32 categor
         if (id == pages[p].layout->title) return TextOf(pages[p].name);
         if (pages[p].layout->subtitle && id == pages[p].layout->subtitle) return TextOf(pages[p].help);
     }
-    const BbGuestCallArgs call{image_base + MsgLookup, reinterpret_cast<u64>(lookup_original),
-                               {reinterpret_cast<u64>(repository), table, category, id, 0, 0}, 0.0};
+    BbGuestCallArgs call = OriginalCall(MsgLookup, reinterpret_cast<u64>(lookup_original),
+                                        {reinterpret_cast<u64>(repository), table, category, id, 0, 0});
     const auto* text = reinterpret_cast<const char16_t*>(bbport_guest_call_args(&call));
     // BB_MSG_TRACE=1 (diagnostics): the game's text lookups per 2 s by category, with an example
     // id and caller and its text (which menu is on screen, issue #255).

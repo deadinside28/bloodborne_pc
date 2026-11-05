@@ -41,7 +41,8 @@ typedef struct BbGuestSite {
     uint64_t patch;    // the original instructions the native patch covers: [patch, patch + length)
     uint32_t length;   //   (address == patch, or address == patch + length: an "after" site)
     uint8_t original[BB_GUEST_SITE_MAX_BYTES];
-    BbGuestSiteHandler handler;
+    BbGuestSiteHandler handler;        // NULL: a variant (below)
+    uint8_t replacement[BB_GUEST_SITE_MAX_BYTES];
     uint64_t tag;
     const char *name;
 } BbGuestSite;
@@ -54,26 +55,35 @@ int bbport_guest_site_register(uint64_t address, const uint8_t *original, uint32
 // them first, then the port's code): it runs at address + length and returns 0, or where to go.
 int bbport_guest_site_register_after(uint64_t address, const uint8_t *original, uint32_t length,
                                      BbGuestSiteHandler handler, uint64_t tag, const char *name);
+// A variant: a byte patch the port writes into the game's code, maybe turned on and off while the
+// game runs (BBSC's). The recompiler lifts both the original and the patched code there; the
+// recompiled code takes the one the game's code holds now (the bytes are the switch).
+int bbport_guest_variant_register(uint64_t address, const uint8_t *original, const uint8_t *replacement,
+                                  uint32_t length, const char *name);
 // The sites so far (the table only grows; entries never move): the count, and the first entry.
 size_t bbport_guest_sites(const BbGuestSite **sites);
 // The site at `address`, or NULL.
 const BbGuestSite *bbport_guest_site_at(uint64_t address);
 
-// A call of the game's own function at `address` (absolute) from a handler or other port code,
-// with up to six integer arguments and one double (xmm0) (System V). Inside a site's handler in
+// A call of the game's own function at `address` (absolute) from a handler or other port code
+// (System V: six integer registers, eight vector registers, then the stack). Inside a site's handler in
 // recompiled code the runtime makes it (bbport_guest_call_hook: the function as recompiled code
 // calls it, on the guest's stack); elsewhere it is the native call. `original`, when set, is a
 // function replaced at its entry (a site there): the call runs the game's own function, not the
 // site's handler (natively: `original`, the moved prologue's trampoline).
+#define BB_GUEST_CALL_STACK 8
 typedef struct BbGuestCallArgs {
     uint64_t address;
     uint64_t original;
-    uint64_t args[6];
-    double xmm0;
+    uint64_t args[6];                      // rdi rsi rdx rcx r8 r9
+    uint64_t xmm[8];                       // xmm0-7's low 64 bits (a float in the low 32)
+    uint64_t stack[BB_GUEST_CALL_STACK];   // the arguments past those, in order
+    uint64_t xmm0_result;                  // out: xmm0's low 64 bits after the call
 } BbGuestCallArgs;
-typedef uint64_t (*BbGuestCallHook)(const BbGuestCallArgs *call);
+typedef uint64_t (*BbGuestCallHook)(BbGuestCallArgs *call);
 extern BbGuestCallHook bbport_guest_call_hook;
-uint64_t bbport_guest_call_args(const BbGuestCallArgs *call);
+// Returns rax; call->xmm0_result: xmm0 (a float or double result).
+uint64_t bbport_guest_call_args(BbGuestCallArgs *call);
 uint64_t bbport_guest_call(uint64_t address, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e,
                            uint64_t f);
 
@@ -82,36 +92,60 @@ uint64_t bbport_guest_call(uint64_t address, uint64_t a, uint64_t b, uint64_t c,
 
 #include <type_traits>
 
-/// A game function called through bbport_guest_call with its C++ type (integers and pointers
-/// only: the x86 System V integer registers): BbGuestFunction<R(*)(A...)>{address}(args...).
+/// A game function called through bbport_guest_call_args with its C++ type (integers, pointers,
+/// floats and doubles; no structs by value): BbGuestFunction<R(*)(A...)>{address}(args...).
 template <typename F>
 struct BbGuestFunction;
 template <typename R, typename... A>
 struct BbGuestFunction<R (*)(A...)> {
     uint64_t address;
-    template <typename T>
-    static uint64_t Word(T v) {
-        static_assert(!std::is_floating_point_v<T>, "floating-point arguments: not in integer registers");
-        if constexpr (std::is_pointer_v<T> || std::is_null_pointer_v<T>) {
-            return reinterpret_cast<uint64_t>(v);
-        } else {
-            return static_cast<uint64_t>(v);
+    struct Slots {
+        BbGuestCallArgs call{};
+        unsigned ints = 0, vecs = 0, stack = 0;
+        void Stack(uint64_t w) {
+            if (stack == BB_GUEST_CALL_STACK) __builtin_trap();  // more than the call block holds
+            call.stack[stack++] = w;
         }
-    }
+        template <typename T>
+        void Put(T v) {
+            static_assert(std::is_scalar_v<T>, "no structs by value");
+            if constexpr (std::is_floating_point_v<T>) {
+                uint64_t w = 0;
+                __builtin_memcpy(&w, &v, sizeof(v));
+                if (vecs < 8) call.xmm[vecs++] = w; else Stack(w);
+            } else {
+                uint64_t w;
+                if constexpr (std::is_pointer_v<T> || std::is_null_pointer_v<T>) w = reinterpret_cast<uint64_t>(v);
+                else w = static_cast<uint64_t>(v);
+                if (ints < 6) call.args[ints++] = w; else Stack(w);
+            }
+        }
+    };
     R operator()(A... args) const {
-        static_assert(sizeof...(A) <= 6, "at most six arguments");
-        uint64_t w[6] = {Word(args)...};
-        const uint64_t r = bbport_guest_call(address, w[0], w[1], w[2], w[3], w[4], w[5]);
+        Slots s;
+        s.call.address = address;
+        (s.Put(args), ...);
+        const uint64_t r = bbport_guest_call_args(&s.call);
         if constexpr (std::is_void_v<R>) {
             return;
+        } else if constexpr (std::is_floating_point_v<R>) {
+            R v;
+            __builtin_memcpy(&v, &s.call.xmm0_result, sizeof(v));
+            return v;
         } else if constexpr (std::is_pointer_v<R>) {
             return reinterpret_cast<R>(r);
         } else if constexpr (std::is_same_v<R, bool>) {
             return (r & 0xff) != 0;
         } else {
-            static_assert(!std::is_floating_point_v<R>, "floating-point results: not in rax");
             return static_cast<R>(r);
         }
     }
 };
+/// BbGuestFunction for a function pointer type and an address (an integer or a pointer): what
+/// `reinterpret_cast<F>(address)(...)` was for the game's functions.
+template <typename F, typename T>
+BbGuestFunction<F> BbGameFn(T address) {
+    if constexpr (std::is_pointer_v<T>) return BbGuestFunction<F>{reinterpret_cast<uint64_t>(address)};
+    else return BbGuestFunction<F>{static_cast<uint64_t>(address)};
+}
 #endif
