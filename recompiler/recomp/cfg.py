@@ -128,7 +128,7 @@ def recover(image, fn, function_starts, noreturn=None, _limits=None, _noret=froz
                     cfg.tail_targets.add(t)
                 break
             if fc == FC.INDIRECT_BRANCH:
-                tbl = jumptable.match(image, insns, ins, fn.start, fn.end)
+                tbl = jumptable.match(image, insns, ins, fn.start, fn.end, tables)
                 if tbl is not None and ins.ip in _limits:
                     tbl.targets = tbl.targets[:_limits[ins.ip]]
                     tbl.count = len(tbl.targets)

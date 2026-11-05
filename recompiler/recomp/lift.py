@@ -1078,7 +1078,7 @@ def _shxd(L, ins, b):
     cnt = L.read(ins, 2, 8)
     c8 = L.op(f"and i8 {cnt}, {mask}")
     if bits == 16:
-        raise Unsupported("16-bit shld/shrd")
+        return _shxd16(L, ins, a, src, c8, addr)
     c = L.resize(c8, 8, bits)
     if ins.mnemonic == M.SHLD:
         res = L.op(f"call i{bits} @llvm.fshl.i{bits}(i{bits} {a}, i{bits} {src}, i{bits} {c})")
@@ -1104,6 +1104,37 @@ def _shxd(L, ins, b):
     for f, v in new.items():  # count 0: no flag changes
         L.setf(f, L.op(f"select i1 {zero}, i1 {old[f]}, i1 {v}"))
     L.write(ins, 0, res, bits, addr)
+
+
+def _shxd16(L, ins, a, src, c8, addr):
+    """16-bit shld/shrd, counts 0-31 (past 16 the manuals leave the result undefined): the
+    hardware (AMD, as the PS4's) shifts the 48-bit dest:src:src (shld, left, the top word kept) or
+    src:src:dest (shrd, right, the low word kept); CF is the last bit shifted out of it, 0 for
+    counts past 16 (harness: corpus/flags.S shld16_*, shrd16_*)."""
+    a64 = L.resize(a, 16, 64)
+    s64 = L.resize(src, 16, 64)
+    c = L.resize(c8, 8, 64)
+    if ins.mnemonic == M.SHLD:
+        v = L.op(f"or i64 {L.op(f'shl i64 {a64}, 32')}, {L.op(f'or i64 {L.op(f'shl i64 {s64}, 16')}, {s64}')}")
+        res = L.op(f"trunc i64 {L.op(f'lshr i64 {L.op(f'shl i64 {v}, {c}')}, 32')} to i16")
+        out = L.op(f"sub i64 48, {c}")  # the last bit out: bit 48 - c
+    else:
+        v = L.op(f"or i64 {L.op(f'shl i64 {s64}, 32')}, {L.op(f'or i64 {L.op(f'shl i64 {s64}, 16')}, {a64}')}")
+        res = L.op(f"trunc i64 {L.op(f'lshr i64 {v}, {c}')} to i16")
+        out = L.op(f"sub i64 {c}, 1")  # bit c - 1
+    zero = L.op(f"icmp eq i8 {c8}, 0")
+    safe = L.op(f"select i1 {zero}, i64 0, i64 {out}")
+    cfv = L.op(f"trunc i64 {L.op(f'lshr i64 {v}, {safe}')} to i1")
+    cfv = L.op(f"and i1 {cfv}, {L.op(f'icmp ule i8 {c8}, 16')}")  # past 16: CF 0 (measured)
+    ofv = L.op(f"xor i1 {L.op(f'icmp slt i16 {res}, 0')}, {L.op(f'icmp slt i16 {a}, 0')}")
+    new = {"cf": cfv, "of": ofv}
+    old = {f: L.getf(f) for f in ("cf", "of", "zf", "sf", "pf")}
+    L.flags_zsp(res, 16)
+    for f in ("zf", "sf", "pf"):
+        new[f] = L.getf(f)
+    for f, v_ in new.items():  # count 0: no flag changes
+        L.setf(f, L.op(f"select i1 {zero}, i1 {old[f]}, i1 {v_}"))
+    L.write(ins, 0, res, 16, addr)
 
 
 @sem(M.IMUL)

@@ -180,7 +180,26 @@ def load_ps4(path):
     img.link_base = r["link_base"]
     img.entry = r["entry"]
     img.relocations_applied = r["applied"]
+    img.noreturn_funcs = _noreturn_by_shape(img)
     return img
+
+
+def _noreturn_by_shape(img):
+    """Functions that end in a call (`call rel32` as their last bytes, into code):
+    compilers never fall through into the next function, so that call does not return, and
+    neither does the function (std::__throw_*("...") wrappers, abort paths). Their callers'
+    code after the call is not decoded (0xf94b00: a jump table followed one)."""
+    found = set()
+    for a, f in img.functions.items():
+        if not f.end or f.end - a < 5:
+            continue
+        tail = img.read(f.end - 5, 5)
+        if not tail or tail[0] != 0xE8:
+            continue
+        target = (f.end + int.from_bytes(tail[1:], "little", signed=True)) & 0xFFFFFFFFFFFFFFFF
+        if target in img.functions or img.is_code(target):  # a function, or an import stub
+            found.add(a)
+    return found
 
 
 # Imports and exports that return twice or jump across frames: hybrid execution keeps them
@@ -207,7 +226,7 @@ def load_ps4_linked(eboot, modules):
     nonlocal_ = {prepare.nid(n) for n in NONLOCAL}
     twice = {prepare.nid(n) for n in RETURNS_TWICE}
     sj, lj = {prepare.nid(n) for n in SETJMP}, {prepare.nid(n) for n in LONGJMP}
-    img.noreturn_funcs, img.nonlocal_funcs, img.returns_twice_funcs = set(), set(), set()
+    img.nonlocal_funcs, img.returns_twice_funcs = set(), set()
     img.setjmp_funcs, img.longjmp_funcs = set(), set()
     for path, base in modules:
         r = _load_into(img, path, base)
@@ -224,6 +243,7 @@ def load_ps4_linked(eboot, modules):
             if nid in lj:
                 img.longjmp_funcs.add(addr)
     img.setjmp_got = {slot for slot, name in img.imports.items() if name.split("#")[0] in sj}
+    img.noreturn_funcs |= _noreturn_by_shape(img)  # the modules' too
     return img
 
 

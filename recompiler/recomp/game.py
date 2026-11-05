@@ -340,8 +340,18 @@ def _extra_functions(img, starts, workers, shard_size):
     extra = set()
     for r in results:
         extra.update(t for t in r["extra_calls"] if img.is_code(t))
+    every = frozenset(starts) | frozenset(extra)
     for t in extra:
-        img.functions.setdefault(t, Function(t, 0, f"sub_{t:x}"))
+        # its extent from its control flow (no FDE gives one): the end of its last instruction
+        fn = Function(t, 0, f"sub_{t:x}")
+        try:
+            c = cfgmod.recover(img, fn, every)
+            ends = [i.next_ip for b in c.blocks.values() for i in b.insns]
+            if ends and not c.errors:
+                fn = Function(t, max(ends), fn.name)
+        except Exception:
+            pass
+        img.functions.setdefault(t, fn)
     return extra
 
 
@@ -363,6 +373,7 @@ def run(img, out=None, shard_size=2000, workers=None, tso=False, abi=False, limi
         live = restore_sites(live, sites)
     excluded = nopatch = None
     if only is not None:
+        only = set(only) | set(extra)  # code found from direct calls (the startup's 0x20): always
         img.nonlocal_got = _nonlocal_slots(img)
         if only:  # small subsets: shards of 200 spread the work over the workers
             shard_size = max(1, min(shard_size, (len(only) + workers - 1) // workers))

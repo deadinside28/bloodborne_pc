@@ -132,8 +132,8 @@ uint64_t runtime_aot_guest_pc(uint64_t host_pc) {
 }
 
 /* BB_AOT_TARGETS=1: every 64th call or jump of recompiled code into original game code is
- * counted by target (and its recompiled caller), and the most frequent are printed at exit: what
- * still runs as original code, and from where. */
+ * counted by target (and its recompiled caller), and the most frequent are printed every 60 s:
+ * what still runs as original code, and from where. BB_AOT_TARGETS=all: every one. */
 static int sample_targets;
 static __thread unsigned sample_tick;
 typedef struct { uint64_t target, caller, count; int jump; } TargetCount;
@@ -141,7 +141,7 @@ static TargetCount target_counts[4096];
 static pthread_mutex_t target_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void sample(uint64_t target, uint64_t caller, int jump) {
-    if (!sample_targets || (++sample_tick & 63)) return;
+    if (!sample_targets || (sample_targets == 1 && (++sample_tick & 63))) return;
     pthread_mutex_lock(&target_lock);
     for (uint64_t s = (target * 0x9e3779b97f4a7c15ull) >> 52, n = 0; n < 4096; s = (s + 1) & 4095, ++n) {
         TargetCount *t = &target_counts[s];
@@ -165,7 +165,8 @@ static void report_targets(void) {
     memcpy(sorted, target_counts, sizeof(sorted));
     pthread_mutex_unlock(&target_lock);
     qsort(sorted, 4096, sizeof(*sorted), by_count);
-    printf("AOT: most frequent targets in the original game code (every 64th call or jump, by count):\n");
+    printf("AOT: most frequent targets in the original game code (%s call or jump, by count):\n",
+           sample_targets == 2 ? "every" : "every 64th");
     for (int i = 0; i < 40 && sorted[i].count; ++i) {
         Dl_info where;
         const char *n = dladdr((void *)(uintptr_t)sorted[i].caller, &where) && where.dli_sname ? where.dli_sname : "?";
@@ -500,7 +501,8 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     const uint64_t n_nopatch = nopatch && nopatch_count ? *nopatch_count : 0;
     const char *host_calls = bb_env("BB_AOT_HOST_CALLS");
     host_calls_light = !(host_calls && !strcmp(host_calls, "full"));
-    sample_targets = bb_env_on("BB_AOT_TARGETS");
+    const char *targets = bb_env("BB_AOT_TARGETS");
+    sample_targets = targets && !strcmp(targets, "all") ? 2 : bb_env_on("BB_AOT_TARGETS");
     recomp_hybrid_fs_from_gs = 1;
     recomp_hybrid_enable();
     /* BB_AOT_SKIP=addr,addr...: these functions' entries stay original (bisecting one function:

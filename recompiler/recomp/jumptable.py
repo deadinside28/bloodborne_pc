@@ -38,8 +38,15 @@ def _full(reg):
     return X.RegisterInfo(reg).full_register
 
 
-def _preds(insns):
+def _preds(insns, tables=None):
+    """Predecessors: fall-through, direct branches, and the jump tables resolved so far (a block
+    reached only through a table: 0x210e5c0's switches inside switches, their base registers
+    loaded once at the entry)."""
     p = {}
+    for jmp, tbl in (tables or {}).items():
+        if jmp in insns:
+            for t in set(tbl.targets):
+                p.setdefault(t, []).append(insns[jmp])
     for i in insns.values():
         fc = i.flow_control
         if fc not in (X.FlowControl.UNCONDITIONAL_BRANCH, X.FlowControl.RETURN, X.FlowControl.INDIRECT_BRANCH):
@@ -64,7 +71,7 @@ def _writes(ins, full):
     return False
 
 
-def _defs(preds, start, full, limit=200):
+def _defs(preds, start, full, limit=2000):
     """The instructions that last wrote `full` on each path reaching `start` (exclusive)."""
     found, seen, work = [], set(), [start]
     steps = 0
@@ -162,10 +169,10 @@ def _through_copies(preds, at, reg, depth=4):
     return out
 
 
-def match(image, insns, jmp, fn_start=0, fn_end=0):
+def match(image, insns, jmp, fn_start=0, fn_end=0, tables=None):
     if jmp.op_count != 1 or jmp.op0_kind != OK.REGISTER:
         return None
-    preds = _preds(insns)
+    preds = _preds(insns, tables)
     tgt = _full(jmp.op0_register)
     adds = _defs(preds, jmp, tgt)
     if not adds or len(adds) != 1:

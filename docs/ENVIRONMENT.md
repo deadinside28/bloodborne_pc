@@ -347,7 +347,7 @@ Logs, dumps, traces, probes and experiments, for finding bugs. Most cost frame t
 | `BB_AOT_DUMP` | =path: the game's code as it runs (after the port's patches and hooks) written there at start, for building a BB_AOT library |
 | `BB_AOT_HOST_CALLS` | =full: with BB_AOT, recompiled code calls the port's runtime with the whole register file, as calls into the game's own code (default: argument and result registers only) |
 | `BB_AOT_SKIP` | =addr,addr...: these recompiled functions' entries stay original (bisecting) |
-| `BB_AOT_TARGETS` | =1: with BB_AOT, the most frequent calls and jumps from recompiled code into the original game code, sampled, printed at exit |
+| `BB_AOT_TARGETS` | =1: with BB_AOT, the most frequent calls and jumps from recompiled code into the original game code, sampled, printed at exit (=all: every one) |
 | `BB_ARENA_VRAM_ONLY` | =1 (tests): the arena in VRAM only, as NVIDIA's sparse buffers |
 | `BB_AUDIO_DUMP` | =dir: raw converted PCM per audio port |
 | `BB_AUDIO_STATS` | set: audio port statistics |

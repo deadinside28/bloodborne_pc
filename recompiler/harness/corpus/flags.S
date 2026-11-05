@@ -191,6 +191,35 @@ T shrd1
     mov rax, rdi
     shrd rax, rsi, 1
 FL shrd1, CF|PF|ZF|SF|OF
+// 16-bit, counts 0-31 (past 16: the hardware's own result, libc.prx uses them)
+T shld16_cl
+    cmp rsi, rdi
+    mov ecx, edx
+    mov rax, rdi
+    shld ax, si, cl
+FL shld16_cl, CF|PF|ZF|SF
+T shrd16_cl
+    cmp rdi, rsi
+    mov ecx, edx
+    mov rax, rdi
+    shrd ax, si, cl
+FL shrd16_cl, CF|PF|ZF|SF
+T shld16_mem
+    cmp rsi, rdi                    // flags as they stay for a count of 0
+    mov [rcx + 8], di
+    mov r8, rcx
+    mov ecx, edx
+    shld word ptr [r8 + 8], si, cl
+    movzx eax, word ptr [r8 + 8]
+FL shld16_mem, CF|PF|ZF|SF
+T shld16_1
+    mov rax, rdi
+    shld ax, si, 1
+FL shld16_1, CF|PF|ZF|SF|OF
+T shrd16_imm
+    mov rax, rdi
+    shrd ax, si, 21
+FL shrd16_imm, CF|PF|ZF|SF
 
 // ---- bit scans and counts ---------------------------------------------------------------------
 T bsf64

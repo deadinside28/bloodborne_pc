@@ -163,7 +163,24 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    place); the runtime's own calls into game code (thread entries, library callbacks such as
    np_web_api's); the 7 functions left original. Next milestone: the game with no original x86
    code at all on this PC (every entry through recompiled code), then an AArch64 runtime
-   (imports bridged to AAPCS64, C++ exceptions), then bbport on Android. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
+   (imports bridged to AAPCS64, C++ exceptions), then bbport on Android.
+   **Where it stopped (2026-11-05):** a gameplay crash after a BBSC session was kit restore and
+   the menu pointer calling game functions directly from handlers (fixed: BbGameFn; handler
+   game calls go through recomp_hybrid_call_native). Profiling gameplay (perf, BB_AOT_TARGETS=all):
+   0.05% of samples in original game code, from 4 sources only: libc's longjmp (runtime-replaced,
+   fine), an unresolved jump table in 0x210e5c0 (base in r12/r13 at the entry, block reached only
+   through another table), libc's 16-bit shld/shrd functions, the startup's 0x20 (no FDE, not in
+   the list). Fixed in the recompiler (harness 144/144): 16-bit shld/shrd (AMD's results for
+   counts past 16, measured), jump-table predecessors through resolved tables (+ search limit
+   2000), no-return by shape (a function ending in a call: ~5,900, cuts ~5% of lifted code and
+   fixed 0xf94b00's CFG error), call-discovered functions added to hybrid lists with an extent
+   from their CFG. Library `recompiler/out/aot/sites5` built: **165,771 recompiled, 3 original**
+   (libc setjmp/longjmp, getcontext's fxsave) - **not yet run in the game**: run it (default and
+   BB_ONLINE=1 BB_BBSC=1), watch for "no-return function returned" traps (the shape rule), then
+   profile again (perf + BB_AOT_TARGETS=all). Still left for this milestone: getcontext/setcontext
+   (fxsave, segment reads, returns twice), runtime entries into game code (thread starts,
+   callbacks) made direct instead of through the x86 entry jumps. Diagnostics added:
+   BB_AOT_SKIP=addr,... (leave entries original), BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.
    Needs: the linked PRX modules lifted too (`scripts/link_modules.py` image), the game's 661 GOT
