@@ -19,6 +19,7 @@
 //  - Event flags: 0x1399bf0 (0, flag) reads one, 0x132e5a0 (0, flag, value) sets it; both need
 //    SprjEventFlagMan ([0x553b100]) to exist.
 #include "bloodborne_kit_restore.h"
+#include "shim/bbport_guest_sites.h"
 #include "shim/bb_env.h"
 
 #include <algorithm>
@@ -143,7 +144,7 @@ Addr Storage(Addr chr) {
         return 0;
     }
     using GameData = Addr PS4_SYSV_ABI (*)(Addr chr);
-    const Addr data = reinterpret_cast<GameData>(getter)(chr);
+    const Addr data = BbGameFn<GameData>(getter)(chr);
     const Addr inventory = data ? Get<Addr>(data + 0x5b0) : 0;
     return inventory && Readable(inventory + 0x90) ? inventory : 0;
 }
@@ -200,10 +201,10 @@ std::int32_t Add(Addr inventory, std::uint32_t id, std::int32_t count) {
         code = 0x40000000u | id;
         key = 0x80000000u | (3u << 28) | id;
         const std::int32_t before = Count(inventory, id);
-        if (reinterpret_cast<Fits>(At(FitsFn))(inventory, &code, 1) <= 0) {
+        if (BbGameFn<Fits>(At(FitsFn))(inventory, &code, 1) <= 0) {
             break;
         }
-        reinterpret_cast<AddItem>(At(AddFn))(inventory, &key, 1);
+        BbGameFn<AddItem>(At(AddFn))(inventory, &key, 1);
         if (Count(inventory, id) <= before) {
             break;
         }
@@ -225,9 +226,9 @@ bool Remove(Addr inventory, std::uint32_t id) {
     alignas(16) static std::int32_t over = 0;
     over = 0;
     const std::int32_t count = std::max(Get<std::int32_t>(entry + 8), 1);
-    const std::int32_t left = reinterpret_cast<Change>(At(ChangeFn))(inventory, slot, -count, &over);
+    const std::int32_t left = BbGameFn<Change>(At(ChangeFn))(inventory, slot, -count, &over);
     if (over == 0 && left == 0) {
-        reinterpret_cast<Free>(At(FreeFn))(inventory, slot, 1);
+        BbGameFn<Free>(At(FreeFn))(inventory, slot, 1);
     }
     return SlotEntry(inventory, id) == 0;
 }
@@ -237,7 +238,7 @@ bool EventFlag(std::uint32_t flag) {
         return false;
     }
     using GetFlag = bool PS4_SYSV_ABI (*)(std::uint64_t unused, std::uint32_t flag);
-    return reinterpret_cast<GetFlag>(At(GetFlagFn))(0, flag);
+    return BbGameFn<GetFlag>(At(GetFlagFn))(0, flag);
 }
 
 void ClearEventFlag(std::uint32_t flag) {
@@ -246,7 +247,7 @@ void ClearEventFlag(std::uint32_t flag) {
     }
     using SetFlag = std::uint64_t PS4_SYSV_ABI (*)(std::uint64_t unused, std::uint32_t flag,
                                                    std::uint8_t value);
-    reinterpret_cast<SetFlag>(At(SetFlagFn))(0, flag, 0);
+    BbGameFn<SetFlag>(At(SetFlagFn))(0, flag, 0);
 }
 
 // ---- The journal ---------------------------------------------------------------------------------

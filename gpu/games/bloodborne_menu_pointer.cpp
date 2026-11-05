@@ -25,6 +25,7 @@
 //    blocked), 0x5562878 another input block (+0x2e4), 0x5128948 the region (5: Japan, circle
 //    confirms), 0x557fc60 the menu sound request (+8 its label: 0x49344e4 the cursor's move).
 #include "bloodborne_menu_pointer.h"
+#include "shim/bbport_guest_sites.h"
 #include "shim/bb_env.h"
 
 #include <algorithm>
@@ -142,7 +143,7 @@ public:
         const Addr object_interface = Field<Addr>(bytes, 0x40);
         if (const Addr release = object_interface ? VirtualFunction(object_interface, 0x18) : 0) {
             using Fn = void(PS4_SYSV_ABI*)(void*, void*, Addr);
-            reinterpret_cast<Fn>(release)(reinterpret_cast<void*>(object_interface), bytes + 0x30,
+            BbGameFn<Fn>(release)(reinterpret_cast<void*>(object_interface), bytes + 0x30,
                                           Field<Addr>(bytes, 0x50));
         }
     }
@@ -160,14 +161,14 @@ public:
     /// Its child at `path` ("Cursor", "Widgets/Slider/LeftArrow").
     void Child(const char* path, Value& out) {
         using Fn = void(PS4_SYSV_ABI*)(void*, const void*, const char*, int);
-        reinterpret_cast<Fn>(At(FindChildFn))(out.Raw(), bytes, path, 0);
+        BbGameFn<Fn>(At(FindChildFn))(out.Raw(), bytes, path, 0);
     }
     void SetVisible(bool visible) {
         const Addr vtable = Field<Addr>(bytes, 0);
         const Addr set = vtable ? Get<Addr>(vtable + 8) : 0;
         if (DisplayObject() && IsGameFunction(set)) {
             using Fn = void(PS4_SYSV_ABI*)(void*, int);
-            reinterpret_cast<Fn>(set)(bytes, visible ? 1 : 0);
+            BbGameFn<Fn>(set)(bytes, visible ? 1 : 0);
         }
     }
 
@@ -203,13 +204,13 @@ bool Contains(Addr object, float x, float y, Rect* stage, float grow = 0.0f) {
     alignas(16) const float identity[8] = {1, 0, 0, 0, 0, 1, 0, 0};
     alignas(16) float local[4] = {};
     using BoundsFn = void(PS4_SYSV_ABI*)(float*, void*, const float*);
-    reinterpret_cast<BoundsFn>(get_bounds)(local, reinterpret_cast<void*>(object), identity);
+    BbGameFn<BoundsFn>(get_bounds)(local, reinterpret_cast<void*>(object), identity);
     if (!(local[2] > local[0]) || !(local[3] > local[1])) {
         return false;
     }
     alignas(16) float m[8] = {1, 0, 0, 0, 0, 1, 0, 0};
     using MatrixFn = void(PS4_SYSV_ABI*)(void*, float*);
-    reinterpret_cast<MatrixFn>(At(WorldMatrixFn))(reinterpret_cast<void*>(object), m);
+    BbGameFn<MatrixFn>(At(WorldMatrixFn))(reinterpret_cast<void*>(object), m);
     constexpr float Twips = 20.0f;
     if (stage) {
         *stage = {1e9f, 1e9f, -1e9f, -1e9f};
@@ -343,15 +344,15 @@ public:
         const int line_scroll = Field<std::int32_t>(c, LineScroll);
         const int scroll = Field<std::int32_t>(c, Scroll);
         using SetCursor = std::int32_t(PS4_SYSV_ABI*)(std::uint8_t*, int);
-        const int scrolled = reinterpret_cast<SetCursor>(At(SetCursorFn))(c, index);
+        const int scrolled = BbGameFn<SetCursor>(At(SetCursorFn))(c, index);
         const int d_line = line_scroll - Field<std::int32_t>(c, LineScroll);
         const int d_scroll = scroll - Field<std::int32_t>(c, Scroll);
         if (scrolled == 1 && (d_line || d_scroll)) {
             // The list scrolled to it: back where the pointer is, with the cursor on that item.
             using ScrollBy = void(PS4_SYSV_ABI*)(std::uint8_t*, int, int);
             using HideCursors = void(PS4_SYSV_ABI*)(std::uint8_t*);
-            reinterpret_cast<ScrollBy>(At(ScrollByFn))(c, d_line, d_scroll);
-            reinterpret_cast<HideCursors>(At(HideCursorsFn))(c);
+            BbGameFn<ScrollBy>(At(ScrollByFn))(c, d_line, d_scroll);
+            BbGameFn<HideCursors>(At(HideCursorsFn))(c);
             if (MakerReady()) {
                 Value item, cursor;
                 MakeItem(slot, item);
@@ -374,7 +375,7 @@ private:
     }
     void MakeItem(std::uint64_t slot, Value& out) {
         using Fn = void(PS4_SYSV_ABI*)(void*, void*, const std::uint64_t*);
-        reinterpret_cast<Fn>(make_item)(out.Raw(), reinterpret_cast<void*>(provider), &slot);
+        BbGameFn<Fn>(make_item)(out.Raw(), reinterpret_cast<void*>(provider), &slot);
     }
     /// The item's own cursor area if it has one, else the item; its combo box and slider too.
     bool ItemContains(Value& item, Addr object, float x, float y, Rect& bounds) {
@@ -399,7 +400,7 @@ private:
         if (const Addr moved = listener ? VirtualFunction(listener, 0x10) : 0) {
             std::int32_t at = index;
             using Fn = void(PS4_SYSV_ABI*)(void*, std::int32_t*);
-            reinterpret_cast<Fn>(moved)(reinterpret_cast<void*>(listener), &at);
+            BbGameFn<Fn>(moved)(reinterpret_cast<void*>(listener), &at);
         }
         // The cursor's sound, unless one is already queued.
         auto* sound = reinterpret_cast<std::int32_t*>(At(MenuSound));

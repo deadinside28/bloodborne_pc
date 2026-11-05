@@ -128,8 +128,9 @@ output, which must equal the x86-64 run's.
   goes through the dispatcher). The runtime hashes functions with the sites' original bytes, so
   a library also runs in configurations that register other sites (no handler: nothing runs).
   Handlers call game functions only through `bbport_guest_call` (inside a handler the runtime
-  calls them as recompiled code does, on the guest stack: a native call there would enter
-  recompiled code again over the live host frames). Byte patches the port switches while the game
+  makes the call on the guest stack through the hybrid call into original code, whose landing
+  catches code that hands control to the original for good: a plain native call there entered
+  recompiled code again over the live host frames, and a bare return slot sent such code to 0). Byte patches the port switches while the game
   runs (BBSC's session patches and its install-time edits) are *variants*: the original and the
   replacement bytes are registered; the lifter lifts the replacement's instructions (decoded
   over the original bytes) on a path of their own and takes it when the code holds the

@@ -337,15 +337,16 @@ static uint64_t aot_guest_call(BbGuestCallArgs *c) {
         memcpy(&s.xmm[i], &c->xmm[i], 8);
         s.ymmh[i] = 0;
     }
-    uint64_t target = c->address;
-    if (c->original) {
-        if (lookup(c->address - __recomp_slide)) site_bypass = c->address;  /* its entry site skipped once */
-        else target = c->original;                                         /* native: the trampoline */
-    }
+    /* Through the hybrid call into the original code (recomp_hybrid_call_native): a real landing
+     * in the return slot, so code that hands control to the original code for good (a jump into
+     * the middle of a function) still comes back here; a recompiled function is entered by its
+     * patched entry. A replaced function: its trampoline (the moved prologue). On a host without
+     * the x86 code (AArch64) this is a direct call of the recompiled function instead, its entry
+     * site skipped once for `original` (site_bypass). */
+    const uint64_t target = c->original ? c->original : c->address;
     site_state = NULL;
-    __recomp_dispatch(&s, target);
+    recomp_dispatch_fallback(&s, target);
     site_state = cur;
-    site_bypass = 0;
     memcpy(&c->xmm0_result, &s.xmm[0], 8);
     return s.gpr[G_RAX];
 }
@@ -502,10 +503,22 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     sample_targets = bb_env_on("BB_AOT_TARGETS");
     recomp_hybrid_fs_from_gs = 1;
     recomp_hybrid_enable();
+    /* BB_AOT_SKIP=addr,addr...: these functions' entries stay original (bisecting one function:
+     * native callers run the original; recompiled callers still call the recompiled one). */
+    uint64_t skip[64];
+    unsigned n_skip = 0;
+    for (const char *at = bb_env("BB_AOT_SKIP"); at && *at && n_skip < 64;) {
+        char *end = NULL;
+        skip[n_skip++] = strtoull(at, &end, 16);
+        at = end && *end ? end + 1 : "";
+    }
     uint64_t patched = 0, k = 0;
     for (uint64_t i = lo; i < hi; ++i) {
         while (k < n_nopatch && nopatch[k] < table[i].guest) ++k;
         if (k < n_nopatch && nopatch[k] == table[i].guest) continue;  /* recompiled callers only */
+        int skipped = 0;
+        for (unsigned j = 0; j < n_skip; ++j) skipped |= skip[j] == table[i].guest;
+        if (skipped) continue;
         char why[160];
         if (recomp_hybrid_patch(__recomp_slide + table[i].guest, table[i].fn, why)) {
             printf("AOT: guest 0x%" PRIx64 ": %s\n", table[i].guest, why);

@@ -327,6 +327,7 @@ BB_ENV(BB_WORK_RETIRED, TUNING, "=0: the recording thread and fences do not wait
 // Diagnostics: logs, dumps, traces, probes, experiments; for finding bugs, not for playing.
 BB_ENV(BB_AOT, DEBUG, "=path: hybrid execution, the game's functions in this library (recompiler/harness/build_aot.sh) run recompiled instead of the original code (x86-64 Linux)")
 BB_ENV(BB_AOT_BISECT, DEBUG, "=lo:hi: with BB_AOT, only the library's functions lo..hi-1 (by address) are swapped in, to find one that misbehaves")
+BB_ENV(BB_AOT_SKIP, DEBUG, "=addr,addr...: these recompiled functions' entries stay original (bisecting)")
 BB_ENV(BB_AOT_TARGETS, DEBUG, "=1: with BB_AOT, the most frequent calls and jumps from recompiled code into the original game code, sampled, printed at exit")
 BB_ENV(BB_AOT_HOST_CALLS, DEBUG, "=full: with BB_AOT, recompiled code calls the port's runtime with the whole register file, as calls into the game's own code (default: argument and result registers only)")
 BB_ENV(BB_AOT_DUMP, DEBUG, "=path: the game's code as it runs (after the port's patches and hooks) written there at start, for building a BB_AOT library")
