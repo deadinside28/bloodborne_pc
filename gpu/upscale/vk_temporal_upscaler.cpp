@@ -210,7 +210,7 @@ bool TemporalUpscaler::OnFrameStart() {
             if (fields >= 2 && output >= 0 && output < outputs.count) {
                 BbSettings::Get().output_res.store(BbSettings::PackSize(outputs.sizes[output]));
             }
-            if (fields == 3 && provider >= 0 && provider < BbSettings::UpscalerCount) {
+            if (fields >= 3 && provider >= 0 && provider < BbSettings::UpscalerCount) {
                 BbSettings::Get().upscaler.store(provider);
             }
             std::fclose(f);
