@@ -664,12 +664,14 @@ void CommandProcessor::SubmitGfx(std::span<const u32> dcb, std::span<const u32> 
         BbFreeCheck::NoteSubmit(work->seq, work->copy ? work->copy->guest_dcb : dcb.data(),
                                 dcb.size_bytes());
         queue.works.push_back(std::move(work));
+        // Visible only once counted: the decoder reads this queue under the same lock,
+        // so the count it tests must be published before the task can be seen.
+        std::scoped_lock submit_lock{submit_mutex};
+        ++num_submits;
+        ++submissions_total;
+        BbTimeline::Note(BbTimeline::GuestSubmit, 0, submissions_total);
+        work_retired = false;
     }
-    std::scoped_lock lock{submit_mutex};
-    ++num_submits;
-    ++submissions_total;
-    BbTimeline::Note(BbTimeline::GuestSubmit, 0, submissions_total);
-    work_retired = false;
     submit_cv.notify_one();
 }
 
@@ -684,12 +686,12 @@ void CommandProcessor::SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
         std::scoped_lock lock{queue.mutex};
         work->stamp = BbStats::guest_submit_stamp.fetch_add(1, std::memory_order_acq_rel) + 1;
         queue.works.push_back(std::move(work));
+        std::scoped_lock submit_lock{submit_mutex};
+        num_mapped_queues = std::max(num_mapped_queues, gnm_vqid + 1);
+        ++num_submits;
+        ++submissions_total;
+        work_retired = false;
     }
-    std::scoped_lock lock{submit_mutex};
-    num_mapped_queues = std::max(num_mapped_queues, gnm_vqid + 1);
-    ++num_submits;
-    ++submissions_total;
-    work_retired = false;
     submit_cv.notify_one();
 }
 
