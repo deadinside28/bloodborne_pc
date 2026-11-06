@@ -364,8 +364,13 @@ void TextureCache::GarbageCollectSamplers() {
             return true;
         }
         --deletions;
-        sampler_lru.Free(samplers.at(key).lru_id);
+        auto& sampler = samplers.at(key);
+        const auto lru_id = sampler.lru_id;
+        // LRU age can select a sampler still referenced by render work (including age zero).
+        // Retain its owner through the current scheduler tick before destroying the VkSampler.
+        scheduler.DeferOperation([retired = std::move(sampler)] { (void)retired; });
         samplers.erase(key);
+        sampler_lru.Free(lru_id);
         return false;
     };
     configure(false);
