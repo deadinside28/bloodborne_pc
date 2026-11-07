@@ -82,8 +82,8 @@ a sorted range table) so that `fault_sites` keeps reporting guest offsets.
 | Where | What | ARM64 replacement |
 |---|---|---|
 | `shader/ir/passes/flatten_extended_userdata_pass.cpp` | Xbyak JIT that walks the shader resource tables; non-x86 branch is `UNREACHABLE_MSG` | write the walker as plain C++ (an interpreter of the same walk, no JIT needed) or emit AArch64 with a small assembler (oaknut, as shadPS4/Dynarmic use) **Done (2026-11-07):** the walk is also a program (`srt_program.cpp`), run on non-x86 hosts; checked against the x86 code in gameplay (`BB_SRT_INTERP=verify`: 33.5M walks, none differ) |
-| `common/rdtsc.h` | `__rdtsc` + `lfence` | `cntvct_el0` + `isb` (and its frequency `cntfrq_el0`) |
-| `common/spin_lock.h` | `_mm_pause` | `yield` / `wfe` |
+| `common/rdtsc.h` | `__rdtsc` + `lfence` | `cntvct_el0` + `isb` (and its frequency `cntfrq_el0`) **Done (2026-11-07).** |
+| `common/spin_lock.h` | `_mm_pause` | `yield` / `wfe` **Done (2026-11-07).** |
 | `common/signal_context.h` | `REG_RIP`, `REG_ERR & 2` (write fault) | `uc_mcontext.pc`; write fault from ESR in `__reserved` (`ESR_MAGIC`) on Linux/Android **Done (2026-11-07).** |
 | `render/vk_draw_pipe.h`, `vk_bind_helper.h`, `raster_pipe.cpp` (27 hits) | SSE intrinsics for state hashing/copies | `sse2neon` short-term, then NEON or portable code |
 | `buffers/*`, `memory/read_sample.cpp`, `vulkan/timeline.*` | scattered intrinsics / `REG_RIP` | the same treatment |

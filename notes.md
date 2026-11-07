@@ -214,7 +214,8 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    non-x86 hosts; `BB_SRT_INTERP=1` runs it on x86 (same FPS, rendering OK), `=verify` runs
    both and compares (33.5M walks in gameplay, none differ; 58 differed once, the tables
    changing between the two walks). `common/signal_context.h` has its AArch64 side (pc, ESR
-   WnR). Both files compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   WnR), and `common/rdtsc.h` (CNTVCT_EL0; the runtime's TSC frequency must then report
+   CNTFRQ_EL0) and `common/spin_lock.h` (yield) theirs. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

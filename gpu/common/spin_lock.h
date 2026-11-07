@@ -6,7 +6,9 @@
 
 #include <atomic>
 
+#if !defined(__aarch64__)
 #include <immintrin.h>
+#endif
 
 namespace Common {
 
@@ -19,7 +21,11 @@ public:
     void lock() {
         while (locked.exchange(true, std::memory_order_acquire)) {
             while (locked.load(std::memory_order_relaxed)) {
+#if defined(__aarch64__)
+                __asm__ volatile("yield");
+#else
                 _mm_pause();
+#endif
             }
         }
     }
