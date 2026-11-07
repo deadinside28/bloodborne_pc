@@ -234,7 +234,7 @@ void NoteResStats(const Pipeline* pipeline) {
         }
         ++s.stages;
         s.shaders.insert(stage->pgm_hash);
-        if (stage->srt_info.walker_func) {
+        if (stage->srt_info.HasWalker()) {
             ++s.walker_stages;
             s.walker_shaders.insert(stage->pgm_hash);
         }

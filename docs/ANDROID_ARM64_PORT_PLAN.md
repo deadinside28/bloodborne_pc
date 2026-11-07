@@ -81,10 +81,10 @@ a sorted range table) so that `fault_sites` keeps reporting guest offsets.
 
 | Where | What | ARM64 replacement |
 |---|---|---|
-| `shader/ir/passes/flatten_extended_userdata_pass.cpp` | Xbyak JIT that walks the shader resource tables; non-x86 branch is `UNREACHABLE_MSG` | write the walker as plain C++ (an interpreter of the same walk, no JIT needed) or emit AArch64 with a small assembler (oaknut, as shadPS4/Dynarmic use) |
+| `shader/ir/passes/flatten_extended_userdata_pass.cpp` | Xbyak JIT that walks the shader resource tables; non-x86 branch is `UNREACHABLE_MSG` | write the walker as plain C++ (an interpreter of the same walk, no JIT needed) or emit AArch64 with a small assembler (oaknut, as shadPS4/Dynarmic use) **Done (2026-11-07):** the walk is also a program (`srt_program.cpp`), run on non-x86 hosts; checked against the x86 code in gameplay (`BB_SRT_INTERP=verify`: 33.5M walks, none differ) |
 | `common/rdtsc.h` | `__rdtsc` + `lfence` | `cntvct_el0` + `isb` (and its frequency `cntfrq_el0`) |
 | `common/spin_lock.h` | `_mm_pause` | `yield` / `wfe` |
-| `common/signal_context.h` | `REG_RIP`, `REG_ERR & 2` (write fault) | `uc_mcontext.pc`; write fault from ESR in `__reserved` (`ESR_MAGIC`) on Linux/Android |
+| `common/signal_context.h` | `REG_RIP`, `REG_ERR & 2` (write fault) | `uc_mcontext.pc`; write fault from ESR in `__reserved` (`ESR_MAGIC`) on Linux/Android **Done (2026-11-07).** |
 | `render/vk_draw_pipe.h`, `vk_bind_helper.h`, `raster_pipe.cpp` (27 hits) | SSE intrinsics for state hashing/copies | `sse2neon` short-term, then NEON or portable code |
 | `buffers/*`, `memory/read_sample.cpp`, `vulkan/timeline.*` | scattered intrinsics / `REG_RIP` | the same treatment |
 | `dlss_bridge/`, FSR 4 / 4.1.1 | NVIDIA / RDNA-specific | not built for Android; FSR 1 and FSR 3.1 stay |
@@ -282,7 +282,7 @@ up to 5 GiB of PS4 memory. Realistic minimum: 12 GB device, 16 GB recommended.
 2. Profile the existing x86 build (Phase 0 list): peak guest address, hot functions, RAM.
 3. Check `VA_BITS`, LRCPC and the Vulkan memory extensions on the candidate devices
    (`getconf PAGESIZE`, `/proc/cpuinfo` features, `vulkaninfo`).
-4. Prototype the userdata walker without Xbyak: needed for any non-x86 build, small, and
+4. ~~Prototype the userdata walker without Xbyak~~ (done 2026-11-07, §1c): needed for any non-x86 build, small, and
    upstreamable on its own.
 5. Prototype hooks-as-input on x86-64 with one hook (the heap allocator site in
    `hooks.cpp`) before building the full lifter around it.

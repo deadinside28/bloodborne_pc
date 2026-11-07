@@ -1066,7 +1066,7 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
             const auto& snapshot = Shader::Info::ud_snapshots[i];
             const auto& srt = snapshot.info->srt_info;
             // Stages the pipeline selection did not refresh (no user data) keep their tables.
-            if (!srt.walker_func || snapshot.flat_size == 0 || snapshot.user_data_size == 0) {
+            if (!srt.HasWalker() || snapshot.flat_size == 0 || snapshot.user_data_size == 0) {
                 continue;
             }
             std::vector<u32> flat(snapshot.flat_size);
@@ -1079,7 +1079,7 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
                 continue;
             }
             runtime_fault_recover = &recover;
-            srt.walker_func(snapshot.user_data, flat.data());
+            srt.RunWalker(snapshot.user_data, flat.data());
             runtime_fault_recover = nullptr;
             if (std::memcmp(flat.data(), snapshot.flat, snapshot.flat_size * sizeof(u32)) != 0) {
                 u32 first = 0, count = 0;

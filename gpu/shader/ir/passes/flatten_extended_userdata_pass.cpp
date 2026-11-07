@@ -5,7 +5,8 @@
 // reads one flat buffer instead: this pass gives every such read (ReadConst, and constant buffer
 // reads that produce sharps) a slot in it after the user data registers, and generates the x86
 // "SRT walker" that fills the buffer at draw time: it follows the same pointers from the user
-// data, recomputing dynamic offsets from slots already copied.
+// data, recomputing dynamic offsets from slots already copied. The same walk is also written as a
+// program (srt.h SrtOp, srt_program.cpp) for hosts without the x86 code.
 //
 // Reads that compute the same value (global value numbering over the pointer and offset
 // arithmetic) share a slot. A walker load from unmapped memory (a stale pointer) faults; the
@@ -19,8 +20,6 @@
 #include <boost/container/flat_map.hpp>
 #include <boost/container/small_vector.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <xbyak/xbyak.h>
-#include <xbyak/xbyak_util.h>
 
 #include "common/arch.h"
 #include "common/assert.h"
@@ -39,8 +38,13 @@
 #include "shader/info.h"
 
 #ifdef ARCH_X86_64
+#include <xbyak/xbyak.h>
+#include <xbyak/xbyak_util.h>
+#endif
 
 namespace Shader {
+
+#ifdef ARCH_X86_64
 
 namespace {
 
@@ -142,6 +146,14 @@ PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     return func;
 }
 
+#else
+
+PFN_SrtWalker RegisterWalkerCode(const u8*, size_t) {
+    return nullptr; // the walker program runs instead
+}
+
+#endif
+
 } // namespace Shader
 
 namespace Shader::Optimization {
@@ -149,7 +161,9 @@ namespace Shader::Optimization {
 namespace {
 
 using IR::Opcode;
+#ifdef ARCH_X86_64
 using namespace Xbyak::util;
+#endif
 
 /// Value numbers of the pointer and offset arithmetic: equal numbers, equal values.
 class ValueNumbering {
@@ -313,11 +327,16 @@ bool IsOffsetArithmetic(Opcode op) {
     }
 }
 
-/// Builds one walker. Calling convention: rdi the user data (then the current table), rsi the
-/// flat buffer; offsets are computed in r10d with ecx and edx as scratch.
+/// Builds one walker: the program (any host), and on x86-64 the code. Calling convention of the
+/// code: rdi the user data (then the current table), rsi the flat buffer; offsets are computed
+/// in r10d with ecx and edx as scratch.
 class WalkerBuilder {
 public:
+#ifdef ARCH_X86_64
     explicit WalkerBuilder(Xbyak::CodeGenerator& c_) : c{c_} {}
+#endif
+
+    std::vector<u32> program;
 
     ValueNumbering numbering;
     /// The reads through each pointer (by its value number's first instruction).
@@ -348,17 +367,29 @@ public:
         // Contiguous in the guest table, contiguous in the flat buffer.
         for (const auto& [off_dw, read] : *reads) {
             if (off_dw.IsImmediate()) {
+                program.insert(program.end(), {SrtOp::CopyImm, next_slot, off_dw.U32() << 2});
+#ifdef ARCH_X86_64
                 c.mov(r10d, ptr[rdi + (off_dw.U32() << 2)]);
+#endif
             } else {
-                if (!Compute(r10d, off_dw)) {
+                std::vector<u32> expr;
+                if (!Expr(expr, off_dw)) {
                     LOG_ERROR(Render_Recompiler, "Failed to compute offset for SRT walker");
                     continue;
                 }
+                program.insert(program.end(), expr.begin(), expr.end());
+                program.insert(program.end(), {SrtOp::CopyExpr, next_slot});
+#ifdef ARCH_X86_64
+                [[maybe_unused]] const bool computed = Compute(r10d, off_dw);
+                ASSERT(computed); // the program's expression came out: so does this
                 c.shl(r10d, 2);
                 c.mov(r10d, r10d);
                 c.mov(r10d, dword[rdi + r10]);
+#endif
             }
+#ifdef ARCH_X86_64
             c.mov(ptr[rsi + (next_slot << 2)], r10d);
+#endif
             SetFlatbufOffset(read, next_slot++);
         }
         for (const auto& [off_dw, read] : *reads) {
@@ -366,7 +397,10 @@ public:
                 Visit(off_dw, read);
             }
         }
+        program.push_back(SrtOp::PopTable);
+#ifdef ARCH_X86_64
         c.pop(rdi);
+#endif
     }
 
 private:
@@ -377,23 +411,96 @@ private:
 
     /// Saves the current table and loads the 48-bit pointer at `off_dw` of it.
     bool PushTable(const IR::Value& off_dw) {
-        c.push(rdi);
         if (off_dw.IsImmediate()) {
+            program.insert(program.end(), {SrtOp::PushTableImm, off_dw.U32() << 2});
+#ifdef ARCH_X86_64
+            c.push(rdi);
             c.mov(rdi, ptr[rdi + (off_dw.U32() << 2)]);
+#endif
         } else {
-            if (!Compute(r10d, off_dw)) {
-                c.pop(rdi);
+            std::vector<u32> expr;
+            if (!Expr(expr, off_dw)) {
                 return false;
             }
+            program.insert(program.end(), expr.begin(), expr.end());
+            program.push_back(SrtOp::PushTableExpr);
+#ifdef ARCH_X86_64
+            c.push(rdi);
+            [[maybe_unused]] const bool computed = Compute(r10d, off_dw);
+            ASSERT(computed);
             c.shl(r10d, 2);
             c.mov(r10d, r10d);
             c.mov(rdi, ptr[rdi + r10]);
+#endif
         }
+#ifdef ARCH_X86_64
         c.mov(r10, 0xFFFFFFFFFFFFULL);
         c.and_(rdi, r10);
+#endif
         return true;
     }
 
+    /// The program's postfix form of `off_dw` (Compute's value; fails where Compute fails).
+    bool Expr(std::vector<u32>& out, const IR::Value& off_dw) {
+        if (off_dw.IsImmediate()) {
+            out.insert(out.end(), {SrtOp::Imm, off_dw.U32()});
+            return true;
+        }
+        IR::Inst* const inst = off_dw.Inst();
+        switch (inst->GetOpcode()) {
+        case Opcode::GetUserData:
+            out.insert(out.end(), {SrtOp::Flat, static_cast<u32>(inst->Arg(0).ScalarReg())});
+            return true;
+        case Opcode::ReadConst:
+        case Opcode::ReadConstBuffer: {
+            const u16 slot = FlatbufOffset(Canonical(inst));
+            if (slot == 0) {
+                return false;
+            }
+            out.insert(out.end(), {SrtOp::Flat, slot});
+            return true;
+        }
+        default:
+            break;
+        }
+        if (!IsOffsetArithmetic(inst->GetOpcode())) {
+            LOG_ERROR(Render_Recompiler, "Unexpected instruction for offset computation, {}",
+                      magic_enum::enum_name(inst->GetOpcode()));
+            return false;
+        }
+        ASSERT(!inst->AreAllArgsImmediates());
+        u32 op{};
+        switch (inst->GetOpcode()) {
+        case Opcode::IAdd32: op = SrtOp::Add; break;
+        case Opcode::ISub32: op = SrtOp::Sub; break;
+        case Opcode::IMul32: op = SrtOp::Mul; break;
+        case Opcode::BitwiseAnd32: op = SrtOp::And; break;
+        case Opcode::BitwiseOr32: op = SrtOp::Or; break;
+        case Opcode::BitwiseXor32: op = SrtOp::Xor; break;
+        case Opcode::UMin32: op = SrtOp::UMin; break;
+        case Opcode::UMax32: op = SrtOp::UMax; break;
+        case Opcode::ShiftLeftLogical32: op = SrtOp::Shl; break;
+        case Opcode::ShiftRightLogical32: op = SrtOp::Shr; break;
+        case Opcode::BitwiseNot32:
+            return Expr(out, inst->Arg(0)) && (out.push_back(SrtOp::Not), true);
+        case Opcode::BitFieldUExtract: {
+            const IR::Value count = inst->Arg(2);
+            if (!Expr(out, inst->Arg(0)) || !Expr(out, inst->Arg(1))) {
+                return false;
+            }
+            if (count.IsImmediate()) {
+                out.insert(out.end(), {SrtOp::BfeImmCount, count.U32()});
+                return true;
+            }
+            return Expr(out, count) && (out.push_back(SrtOp::Bfe), true);
+        }
+        default:
+            UNREACHABLE();
+        }
+        return Expr(out, inst->Arg(0)) && Expr(out, inst->Arg(1)) && (out.push_back(op), true);
+    }
+
+#ifdef ARCH_X86_64
     /// reg = a op b. `op_imm` takes an immediate, `op_mem` the other operand on the stack.
     template <typename OpImm, typename OpMem>
     bool Binary(Xbyak::Reg32 reg, const IR::Inst* inst, OpImm&& op_imm, OpMem&& op_mem) {
@@ -600,6 +707,7 @@ private:
     }
 
     Xbyak::CodeGenerator& c;
+#endif
 };
 
 /// s_add_u32 s12, s2, off; s_addc_u32 s13, s3, 0; s_load_dword s16, s[12:13], 0: the pointer
@@ -710,9 +818,13 @@ InstVector CollectReads(IR::Program& program) {
 } // namespace
 
 void FlattenExtendedUserdataPass(IR::Program& program) {
+#ifdef ARCH_X86_64
     WalkerCode& walkers = Walkers();
     std::scoped_lock lock{walkers.mutex};
     WalkerBuilder builder{walkers.code};
+#else
+    WalkerBuilder builder;
+#endif
 
     const InstVector reads = CollectReads(program);
     for (IR::Inst* const read : reads) {
@@ -737,13 +849,18 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
 
     Info& info = program.info;
     if (!builder.roots.empty()) {
+#ifdef ARCH_X86_64
         Xbyak::CodeGenerator& c = WalkerBuffer(walkers);
         info.srt_info.walker_func = c.getCurr<PFN_SrtWalker>();
+#endif
         builder.next_slot = NUM_USER_DATA_REGS;
         ASSERT(builder.next_slot == info.srt_info.flattened_bufsize_dw);
         for (const auto& [sgpr, root] : builder.roots) {
             builder.Visit(IR::Value(static_cast<u32>(sgpr)), root);
         }
+        builder.program.push_back(SrtOp::End);
+        info.srt_info.walker_program = std::move(builder.program);
+#ifdef ARCH_X86_64
         c.ret();
         c.ready();
         walkers.published_size.store(c.getSize(), std::memory_order_release);
@@ -752,6 +869,7 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
         if (EmulatorSettings.IsDumpShaders()) {
             DumpWalker(info, code, info.srt_info.walker_func_size);
         }
+#endif
         info.srt_info.flattened_bufsize_dw = builder.next_slot;
     }
 
@@ -764,19 +882,3 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
 }
 
 } // namespace Shader::Optimization
-
-#else
-
-namespace Shader {
-
-PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
-    UNREACHABLE_MSG("RegisterWalkerCode unimplemented for target architecture.");
-}
-
-void Optimization::FlattenExtendedUserdataPass(IR::Program& program) {
-    UNREACHABLE_MSG("FlattenExtendedUserdataPass unimplemented for target architecture.");
-}
-
-} // namespace Shader
-
-#endif

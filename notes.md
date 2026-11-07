@@ -208,7 +208,14 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    (gpu/bbnet20 calls their handlers natively; none fired in solo play), BBSC's code
    permission changes during a co-op session (they could make pages executable again), C++
    exceptions (the unwinder's resume; none seen). Next: the AArch64 runtime (the stubs become
-   bridges: runtime_guest_entry is the one place). Diagnostics: BB_AOT_SKIP=addr,...,
+   bridges: runtime_guest_entry is the one place). Toward it, the GPU side (port plan §1c): the
+   shader resource table walker is also a portable program (`gpu/shader/ir/passes/
+   srt_program.cpp`, kept in the shader cache, ShaderMetaVersion 9), the only walker on
+   non-x86 hosts; `BB_SRT_INTERP=1` runs it on x86 (same FPS, rendering OK), `=verify` runs
+   both and compares (33.5M walks in gameplay, none differ; 58 differed once, the tables
+   changing between the two walks). `common/signal_context.h` has its AArch64 side (pc, ESR
+   WnR). Both files compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.

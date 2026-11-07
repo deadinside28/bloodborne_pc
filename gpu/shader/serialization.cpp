@@ -45,21 +45,40 @@ bool Gcn::FetchShaderData::Deserialize(Serialization::Archive& ar) {
 
 void PersistentSrtInfo::Serialize(Serialization::Archive& ar) const {
     Serialization::Writer writer{ar};
-    writer.Write(this, sizeof(*this));
-    if (walker_func_size) {
-        writer.Write(reinterpret_cast<void*>(walker_func), walker_func_size);
+    const u64 code_size = walker_func_size;
+    const u64 program_size = walker_program.size();
+    writer.Write(code_size);
+    writer.Write(flattened_bufsize_dw);
+    writer.Write(program_size);
+    if (code_size) {
+        writer.Write(reinterpret_cast<void*>(walker_func), code_size);
+    }
+    if (program_size) {
+        writer.Write(walker_program.data(), program_size * sizeof(u32));
     }
 }
 
 bool PersistentSrtInfo::Deserialize(Serialization::Archive& ar) {
     Serialization::Reader reader{ar};
-    reader.Read(this, sizeof(*this));
-    if (walker_func_size) {
+    u64 code_size{}, program_size{};
+    reader.Read(code_size);
+    reader.Read(flattened_bufsize_dw);
+    reader.Read(program_size);
+    walker_func = nullptr;
+    walker_func_size = code_size;
+    if (code_size) {
         // The size is checked before the code is registered (it becomes executable): a file cut
         // short must not have bytes past its end run as the walker.
         const auto code = ar.CurrPtr();
-        ar.Advance(walker_func_size);
-        walker_func = RegisterWalkerCode(code, walker_func_size);
+        ar.Advance(code_size);
+        walker_func = RegisterWalkerCode(code, code_size); // nullptr on hosts other than x86-64
+    }
+    if (program_size > (1u << 20)) {
+        return false; // no walker is that long: a damaged entry
+    }
+    walker_program.resize(program_size);
+    if (program_size) {
+        reader.Read(walker_program.data(), program_size * sizeof(u32));
     }
     return true;
 }
