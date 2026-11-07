@@ -49,7 +49,7 @@ private:
     vk::UniqueSemaphore semaphore;
     std::atomic<u64> gpu_tick{0};
     std::atomic<u64> current_tick{1};
-    std::atomic<s64> last_read_tsc{0}; ///< Refresh: __rdtsc() of the last read
+    std::atomic<s64> last_read_tsc{0}; ///< Refresh: Common::Tsc() of the last read
 };
 
 } // namespace Vulkan

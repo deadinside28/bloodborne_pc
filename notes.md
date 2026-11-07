@@ -215,7 +215,11 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    both and compares (33.5M walks in gameplay, none differ; 58 differed once, the tables
    changing between the two walks). `common/signal_context.h` has its AArch64 side (pc, ESR
    WnR), and `common/rdtsc.h` (CNTVCT_EL0; the runtime's TSC frequency must then report
-   CNTFRQ_EL0) and `common/spin_lock.h` (yield) theirs. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   CNTFRQ_EL0) and `common/spin_lock.h` (yield) theirs; the renderer's "SSE" was TSC reads and
+   spin hints only: `common/cpu.h` (Tsc, CpuPause, TscTicks(seconds): fixed cycle counts became
+   times). Left in gpu/ for AArch64: code that reads the game's x86 registers from a fault
+   context (shim/bbport_write_log.cpp, buffers/buffer_maintain.cpp, hooks.cpp, free_check,
+   fault_sites: §1b, the recompiler's state holds them there) and the Xbyak hook trampolines. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

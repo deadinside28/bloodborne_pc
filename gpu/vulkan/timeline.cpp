@@ -7,7 +7,7 @@
 #include <cstdlib>
 
 #include <limits>
-#include <x86intrin.h>
+#include "common/cpu.h"
 
 #include "common/assert.h"
 #include "render/vk_breadcrumbs.h"
@@ -46,7 +46,7 @@ void Semaphore::Refresh() {
     // thread (callers check the GPU's progress thousands of times a frame).
     static const s64 poll_ticks = s64(double(poll_ns) * double(runtime_tsc_frequency()) / 1e9);
     if (poll_ticks > 0) {
-        const s64 now = s64(__rdtsc());
+        const s64 now = s64(Common::Tsc());
         s64 last = last_read_tsc.load(std::memory_order_relaxed);
         if (now - last < poll_ticks ||
             !last_read_tsc.compare_exchange_strong(last, now, std::memory_order_relaxed)) {

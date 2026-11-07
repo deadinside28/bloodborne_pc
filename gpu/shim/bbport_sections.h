@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <x86intrin.h>
+#include "common/cpu.h"
 
 namespace BbSections {
 enum Id : std::uint32_t {
@@ -81,10 +81,10 @@ inline thread_local bool command_thread = false;
 
 struct Scope {
     explicit Scope(Id id_)
-        : id{id_}, start{Enabled() && (recording_thread || command_thread) ? __rdtsc() : 0} {}
+        : id{id_}, start{Enabled() && (recording_thread || command_thread) ? Common::Tsc() : 0} {}
     ~Scope() {
         if (start) {
-            cycles[id].fetch_add(__rdtsc() - start, std::memory_order_relaxed);
+            cycles[id].fetch_add(Common::Tsc() - start, std::memory_order_relaxed);
         }
     }
     Id id;

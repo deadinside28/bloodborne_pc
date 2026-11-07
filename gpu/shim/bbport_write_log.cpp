@@ -11,7 +11,7 @@
 #include <cstring>
 #include <ucontext.h>
 #include <unistd.h>
-#include <x86intrin.h>
+#include "common/cpu.h"
 
 namespace BbWriteLog {
 namespace {
@@ -66,7 +66,7 @@ void NoteMirrorCopy(std::uint64_t address, std::uint64_t size) {
 
 void Record(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
     static thread_local const std::uint32_t tid = static_cast<std::uint32_t>(gettid());
-    Entry e{address, size, 0, __rdtsc(), source, tid};
+    Entry e{address, size, 0, Common::Tsc(), source, tid};
     std::memcpy(&e.first, data, size < 8 ? size : 8);
     Push(ring, head, e);
     // Only small writes are scanned: scanning downloads of megabytes delays them enough to hide
@@ -94,7 +94,7 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
     const char* sources[] = {"backing",      "WriteData",           "fence",
                              "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData",
                              "GPU mirror copy (queued)"};
-    const std::uint64_t now = __rdtsc(), n = head.load();
+    const std::uint64_t now = Common::Tsc(), n = head.load();
     int shown = 0;
     for (std::uint64_t i = n; i-- > (n > Size ? n - Size : 0) && shown < 64;) {
         const Entry& e = ring[i % Size];
@@ -103,7 +103,7 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
                          "Write log: into range %s %#llx +%llu first %#llx tid %u, %.3f s before\n",
                          e.source < 8 ? sources[e.source] : "?", (unsigned long long)e.address,
                          (unsigned long long)e.size, (unsigned long long)e.first, e.tid,
-                         double(now - e.tsc) / 3.0e9);
+                         double(now - e.tsc) / Common::TscFrequency());
             ++shown;
         }
     }
@@ -131,13 +131,13 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     const char* sources[] = {"backing",      "WriteData",           "fence",
                              "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData",
                              "GPU mirror copy (queued)"};
-    const std::uint64_t now = __rdtsc();
+    const std::uint64_t now = Common::Tsc();
     const auto print = [&](const Entry& e, const char* what) {
         std::fprintf(stderr,
                      "Write log: %s %s %#llx +%llu first %#llx tid %u, %.3f s before the fault\n",
                      what, e.source < 8 ? sources[e.source] : "?", (unsigned long long)e.address,
                      (unsigned long long)e.size, (unsigned long long)e.first, e.tid,
-                     double(now - e.tsc) / 3.0e9);
+                     double(now - e.tsc) / Common::TscFrequency());
     };
     const std::uint64_t nh = hits_head.load();
     for (std::uint64_t i = nh > hits.size() ? nh - hits.size() : 0; i < nh; ++i) {

@@ -41,7 +41,7 @@
 
 #include <mutex>
 #include <pthread.h>
-#include <x86intrin.h>
+#include "common/cpu.h"
 #include <cstring>
 #include <dlfcn.h>
 #include <string>

@@ -85,7 +85,7 @@ a sorted range table) so that `fault_sites` keeps reporting guest offsets.
 | `common/rdtsc.h` | `__rdtsc` + `lfence` | `cntvct_el0` + `isb` (and its frequency `cntfrq_el0`) **Done (2026-11-07).** |
 | `common/spin_lock.h` | `_mm_pause` | `yield` / `wfe` **Done (2026-11-07).** |
 | `common/signal_context.h` | `REG_RIP`, `REG_ERR & 2` (write fault) | `uc_mcontext.pc`; write fault from ESR in `__reserved` (`ESR_MAGIC`) on Linux/Android **Done (2026-11-07).** |
-| `render/vk_draw_pipe.h`, `vk_bind_helper.h`, `raster_pipe.cpp` (27 hits) | SSE intrinsics for state hashing/copies | `sse2neon` short-term, then NEON or portable code |
+| `render/vk_draw_pipe.h`, `vk_bind_helper.h`, `raster_pipe.cpp` (27 hits) | SSE intrinsics for state hashing/copies | `sse2neon` short-term, then NEON or portable code **Done (2026-11-07):** these were TSC reads and spin hints, not SSE: `common/cpu.h` (Tsc, CpuPause, TscTicks); fixed cycle counts became times |
 | `buffers/*`, `memory/read_sample.cpp`, `vulkan/timeline.*` | scattered intrinsics / `REG_RIP` | the same treatment |
 | `dlss_bridge/`, FSR 4 / 4.1.1 | NVIDIA / RDNA-specific | not built for Android; FSR 1 and FSR 3.1 stay |
 

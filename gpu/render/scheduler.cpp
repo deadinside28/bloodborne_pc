@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "common/cpu.h"
 #include "bbport_timeline.h"
 #include "shim/bb_env.h"
 #include "render/scheduler.h"
@@ -675,7 +676,7 @@ void Scheduler::RecorderThread(std::stop_token stoken, u32 index) {
             for (u32 spins = 1; worker.queued.load(std::memory_order_acquire) == 0 &&
                                 ordered_queued.load(std::memory_order_acquire) == 0;
                  ++spins) {
-                __builtin_ia32_pause();
+                Common::CpuPause();
                 // The clock is read every 256 pauses, not per iteration.
                 if (!(spins & 255) &&
                     (stoken.stop_requested() || std::chrono::steady_clock::now() >= spin_until)) {

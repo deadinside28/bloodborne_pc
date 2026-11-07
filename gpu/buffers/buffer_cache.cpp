@@ -36,7 +36,7 @@
 
 #include <mutex>
 #include <pthread.h>
-#include <x86intrin.h>
+#include "common/cpu.h"
 #include <cstring>
 #include <dlfcn.h>
 #include <string>
@@ -740,7 +740,7 @@ bool BufferCache::IsRegionGpuModified(VAddr addr, size_t size) {
     // counts as not done, which only takes the slower, always correct path; the GPU signal
     // thread refreshes the known tick on every fence anyway).
     thread_local u64 last_refresh = 0;
-    if (const u64 now = __rdtsc(); now - last_refresh > 800000) {
+    if (const u64 now = Common::Tsc(); now - last_refresh > Common::TscTicks(250e-6)) {
         last_refresh = now;
         scheduler.GetWorkSemaphore()->Refresh();
     }

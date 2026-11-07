@@ -10,7 +10,7 @@
 #include <cstring>
 #include <optional>
 
-#include <immintrin.h>
+#include "common/cpu.h"
 #include <pthread.h>
 #include <sys/resource.h>
 #ifndef _WIN32
@@ -273,7 +273,7 @@ void CommandProcessor::WaitForWork(std::stop_token stop) {
     if (spin_time.count() > 0) {
         const auto spin_until = idle_start + spin_time;
         for (u32 spins = 1; !has_work() && !stop.stop_requested(); ++spins) {
-            _mm_pause();
+            Common::CpuPause();
             if (!(spins & 255) && std::chrono::steady_clock::now() >= spin_until) {
                 break;
             }
@@ -468,7 +468,7 @@ void CommandProcessor::Run(std::stop_token stop) {
                 status = current_queue == GfxQueueId ? RunGraphics(*work) : RunCompute(*work);
             }
             if (status == Status::Wait) {
-                _mm_pause(); // the other queues' turn
+                Common::CpuPause(); // the other queues' turn
                 continue;
             }
             BbTimeline::Note(BbTimeline::DecodeEnd, u64(current_queue), decoded_total + 1);

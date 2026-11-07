@@ -3,6 +3,7 @@
 // bbport render: Rasterizer, the two-stage draw pipeline: stage A (GPU command thread) packs each draw
 // (dirty registers, user data, constants) and stage B (draw recording thread) records it.
 
+#include "common/cpu.h"
 #include "render/raster_internal.h"
 #include "shim/bb_env.h"
 
@@ -298,10 +299,10 @@ void Rasterizer::WaitForInPlaceReads(u64 packet) {
         },
         &data, sizeof(data), BbToggle::PipelinedTasks, false);
     DrainDrawPipe(DrawPipe::ReasonConstRam);
-    const u64 start = __rdtsc();
+    const u64 start = Common::Tsc();
     semaphore->Wait(tick);
     ++constram_gpu_waits;
-    constram_gpu_wait_cycles += __rdtsc() - start;
+    constram_gpu_wait_cycles += Common::Tsc() - start;
 }
 
 void Rasterizer::NoteCommandWriteInOrder(VAddr addr, const void* data, u64 size) {
@@ -1002,13 +1003,13 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
         self.buffer_cache.NewPacket();
         const auto& task = *reinterpret_cast<const TaskPacket*>(data);
         if (BbSections::Enabled()) {
-            const u64 t0 = __rdtsc();
+            const u64 t0 = Common::Tsc();
             task.task(self, data + sizeof(TaskPacket));
             void* fn = reinterpret_cast<void*>(task.task);
             for (std::size_t k = 0; k < TaskKinds; ++k) {
                 if (task_kinds[k] == fn || !task_kinds[k]) {
                     task_kinds[k] = fn;
-                    task_cycles[k] += __rdtsc() - t0;
+                    task_cycles[k] += Common::Tsc() - t0;
                     ++task_counts[k];
                     break;
                 }
@@ -1212,13 +1213,13 @@ void Rasterizer::PrintPipeStats() {
     }
     static auto window = std::chrono::steady_clock::now();
     static u64 last_packets = 0, last_drains = 0, last_drain_cycles = 0, last_busy = 0;
-    static u64 last_tsc = __rdtsc();
+    static u64 last_tsc = Common::Tsc();
     const auto now = std::chrono::steady_clock::now();
     const double seconds = std::chrono::duration<double>(now - window).count();
     if (seconds < 5.0) {
         return;
     }
-    const u64 tsc = __rdtsc();
+    const u64 tsc = Common::Tsc();
     const double cycles = double(tsc - last_tsc);
     const u64 busy = draw_pipe->busy_cycles.load(std::memory_order_relaxed);
     std::printf("Draw pipe: %.0f draws/s pipelined, %.0f drains/s that waited, stage A waited "

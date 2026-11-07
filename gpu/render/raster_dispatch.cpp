@@ -6,6 +6,7 @@
 
 // The copy shader's history hashes ~5000 copies of ~250 bytes a frame: inlined, not a DLL call each.
 #define XXH_INLINE_ALL
+#include "common/cpu.h"
 #include <xxhash.h>
 #include <mutex>
 #include "shim/bb_env.h"
@@ -70,9 +71,9 @@ bool CopySkipSameOn() {
 
 /// Stage B: copy_filter_room from its busy share, every ~0.3 s.
 void UpdateCopyFilterRoom(const DrawPipe& pipe) {
-    static u64 last_tsc = __rdtsc(), last_busy = 0;
-    const u64 tsc = __rdtsc();
-    if (tsc - last_tsc < 1'000'000'000ull) {
+    static u64 last_tsc = Common::Tsc(), last_busy = 0;
+    const u64 tsc = Common::Tsc();
+    if (tsc - last_tsc < Common::TscTicks(0.3)) {
         return;
     }
     const u64 busy = pipe.busy_cycles.load(std::memory_order_relaxed);

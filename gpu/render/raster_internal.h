@@ -5,7 +5,7 @@
 #pragma once
 
 #include <dlfcn.h>
-#include <x86intrin.h>
+#include "common/cpu.h"
 
 #include <bit>
 #include <csetjmp>
