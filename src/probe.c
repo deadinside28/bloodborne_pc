@@ -194,7 +194,7 @@ static ABI void guest_exit(void) { puts("Runtime: process finalizer callback rea
 static void enter_game(void *p) {
     struct { void *entry, *params; } *start=p;
     typedef void (ABI *Entry)(void *, void (ABI *)(void));
-    ((Entry)start->entry)(start->params, guest_exit);
+    GUEST_FN(Entry, start->entry)(start->params, guest_exit);
 }
 /* The linker rewrote the game's `mov r64, fs:[0]` (its thread pointer) to `mov r64, gs:[0]`
  * (link_modules.py). GS is the TEB on Windows: the load reads a TEB TLS slot instead
@@ -218,6 +218,8 @@ static void patch_guest_tls(const Segment *segments, uint64_t ns) {
 }
 #endif
 static void fault(int sig, siginfo_t *info, void *context) {
+    /* BB_AOT_STRICT: the runtime called the game's original code (no longer executable). */
+    if (sig == SIGSEGV && runtime_aot_strict_fault(context, info->si_addr)) return;
     /* GPU page tracking (write-protected guest pages) is resolved first. */
     if (gpu_enabled && sig == SIGSEGV && bbgpu_handle_fault(context, info->si_addr)) return;
     /* A speculative guest memory read (runtime_memory.c) failed: resume its recovery point. */
@@ -788,7 +790,7 @@ int main(int argc, char **argv) {
         for (uint64_t m=0;m<module_count;++m) {
             printf("Starting linked module %" PRIu64 " at image offset 0x%" PRIx64 "; native bindings=%" PRIu64 "\n",m,modules[m].init,nb);
             typedef int (ABI *ModuleInit)(uint64_t,void *,void *);
-            int result=((ModuleInit)(image+modules[m].init))(0,NULL,NULL);
+            int result=GUEST_FN(ModuleInit, image+modules[m].init)(0,NULL,NULL);
             printf("Module %" PRIu64 " initializer returned %d\n",m,result);
             if (result) fail("module initializer failed");
         }
@@ -820,7 +822,7 @@ int main(int argc, char **argv) {
     enum { MAIN_STACK=8*1024*1024 };
     unsigned char *stack=runtime_low_map(MAIN_STACK,PROT_READ|PROT_WRITE);
     if (!stack) fail("cannot allocate guest main stack");
-    enter_on_stack(image+entry,&params,(void *)guest_exit,stack+MAIN_STACK-64);
+    enter_on_stack((void *)runtime_guest_entry((uintptr_t)(image+entry)),&params,(void *)guest_exit,stack+MAIN_STACK-64);
 #endif
     fail("entry unexpectedly returned");
 }

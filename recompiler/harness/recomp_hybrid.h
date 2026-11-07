@@ -76,9 +76,14 @@ void recomp_hybrid_thread_fini(void);
 // far (live threads read without locking).
 typedef struct { uint64_t entries, native_calls, native_jumps, max_depth, host_calls, module_calls; } HybridTotals;  // max_depth: open entries, deepest live thread
 HybridTotals recomp_hybrid_totals(void);
-// Sends the original function at host address `entry` to `fn` (a 5-byte jump at the entry).
-// 0, or -1 with `why` filled in (at most 160 bytes).
-int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why);
+// Sends the original function at host address `entry` to `fn` (a 5-byte jump at the entry, to a
+// stub that enters recomp_hybrid_enter with `fn`; *stub := the stub, when given). 0, or -1 with
+// `why` filled in (at most 160 bytes).
+int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why, uint64_t *stub);
+// A stub alone (no entry patched; within reach of `near`): calling it with the guest's ABI enters
+// `fn` as a call of the original function would, without running any of the original code.
+// The stub's address, or 0 with `why` filled in.
+uint64_t recomp_hybrid_stub(uint64_t near, RecompFn fn, char *why);
 // The dispatcher's fallback for targets that have no recompiled function.
 void recomp_hybrid_call_native(RecompState *st, uint64_t target);
 // A call to a host function (SysV ABI, not guest code): argument and result registers only.

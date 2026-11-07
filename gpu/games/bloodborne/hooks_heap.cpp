@@ -240,7 +240,7 @@ void HeapGrowSetup(u64 core) {
         }
     } commit_if_off;
     const BbGuestFunction<CoreAlloc> alloc{ImageBase + CoreAllocate};
-    const auto release = reinterpret_cast<CoreFree>(ImageBase + CoreRelease);
+    const BbGuestFunction<CoreFree> release{ImageBase + CoreRelease};
     const u64 low = JobProbeWord(core + 0xa0), high = JobProbeWord(core + 0xa8);
     u64 dphys = 0, dend = 0, low_phys = 0;
     uintptr_t map_end = 0;
@@ -332,7 +332,7 @@ void HeapGrowAhead() {
 
 /// An allocation found no room: the next piece gets its GPU memory and its reserve is freed.
 bool HeapGrowOne(u64 core, u64 wanted) {
-    const auto release = reinterpret_cast<CoreFree>(ImageBase + CoreRelease);
+    const BbGuestFunction<CoreFree> release{ImageBase + CoreRelease};
     for (auto& p : heap_grow.pieces) {
         if (p.committed) {
             continue;
@@ -390,7 +390,7 @@ void HeapGrowShrink(u64 core) {
     }
     const u64 high = JobProbeWord(core + 0xa8);
     const BbGuestFunction<CoreAlloc> alloc{ImageBase + CoreAllocate};
-    const auto release = reinterpret_cast<CoreFree>(ImageBase + CoreRelease);
+    const BbGuestFunction<CoreFree> release{ImageBase + CoreRelease};
     // Every 20 s: how full each piece is (the first one: the heap below the deferred part).
     static long long reported = 0;
     if (now - reported >= 20) {

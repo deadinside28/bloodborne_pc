@@ -195,10 +195,20 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    on). Library `sites9`: **181,841 recompiled, 2 original** (libc's setjmp/longjmp, both taken
    over by the runtime: no original game code runs). Gameplay OK in the default configuration
    and with BB_ONLINE=1 BB_BBSC=1: the only call into original code is longjmp's entry, 0 jumps
-   back, FPS as unmodified on the same walk. Left for item 1: the runtime's entries into game
-   code (thread starts, callbacks) made direct calls of recompiled code instead of the x86
-   entry jumps (the step the AArch64 runtime needs anyway); C++ exceptions (the unwinder's
-   resume jumps into original code: none seen in play). Diagnostics: BB_AOT_SKIP=addr,...,
+   back, FPS as unmodified on the same walk. Then the runtime's own entries: every call of a
+   game function by bbport goes through `runtime_guest_entry` / `GUEST_FN` (the recompiled
+   function's stub: the game's entry, module inits, thread starts, atexit, once routines, key
+   destructors, the malloc-counter wrappers' originals, the heap-grow hook's release, and
+   bbport_guest_call outside recompiled code); libc's longjmp is in the dispatch table; the
+   module inits and entry points (no FDE) are lifted (`sites10`: 181,843 recompiled).
+   **`BB_AOT_STRICT=1`**: the game's code pages lose execute permission after install; a native
+   call of a game function faults, is sent to its stub and counted by caller. With `sites10`,
+   default and BB_ONLINE=1 BB_BBSC=1, title to gameplay: **no native call of the game's code;
+   none of the original x86 code runs.** Not covered yet: the online module's np callouts
+   (gpu/bbnet20 calls their handlers natively; none fired in solo play), BBSC's code
+   permission changes during a co-op session (they could make pages executable again), C++
+   exceptions (the unwinder's resume; none seen). Next: the AArch64 runtime (the stubs become
+   bridges: runtime_guest_entry is the one place). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
    chosen set, grow the set, and bisect when the game misbehaves; then run with no original code.

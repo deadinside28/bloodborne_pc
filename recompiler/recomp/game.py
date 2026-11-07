@@ -385,6 +385,8 @@ def _extra_functions(img, starts, workers, shard_size):
     for r in results:
         extra.update(t for t in r["extra_calls"] if img.is_code(t))
     extra |= _startup_tables(img)
+    # the entry points the runtime calls (bbport's probe.c: the executable's, each module's init)
+    extra |= {a for a in getattr(img, "entries", ()) if img.is_code(a) and a not in img.functions}
     every = frozenset(starts) | frozenset(extra)
     # calls that never return end a path (__stack_chk_fail's import stub after the epilogue):
     # without this the path ran on into the padding and 2,837 functions had no extent

@@ -18,6 +18,9 @@
 #include <cstdlib>
 #include <vector>
 
+
+// src/runtime_aot.c (bb-probe): weak, the GPU library also loads without it.
+extern "C" __attribute__((weak)) uintptr_t runtime_guest_entry(uintptr_t address);
 namespace BbHeapSites {
 namespace {
 using u32 = std::uint32_t;
@@ -246,12 +249,16 @@ void InstallWrappers(bool counters) {
         allocs.resize(1ull << AllocBits);
         tracking = true;
     }
-    orig_malloc = reinterpret_cast<MallocFn>(targets[0]);
-    orig_free = reinterpret_cast<FreeFn>(targets[1]);
-    orig_calloc = reinterpret_cast<CallocFn>(targets[2]);
-    orig_realloc = reinterpret_cast<ReallocFn>(targets[3]);
-    orig_memalign = reinterpret_cast<MemalignFn>(targets[4]);
-    orig_posix_memalign = reinterpret_cast<PosixMemalignFn>(targets[5]);
+    // the game's functions as the runtime enters them (hybrid execution: their recompiled code)
+    const auto entry = [](u64 address) {
+        return runtime_guest_entry ? u64(runtime_guest_entry(address)) : address;
+    };
+    orig_malloc = reinterpret_cast<MallocFn>(entry(targets[0]));
+    orig_free = reinterpret_cast<FreeFn>(entry(targets[1]));
+    orig_calloc = reinterpret_cast<CallocFn>(entry(targets[2]));
+    orig_realloc = reinterpret_cast<ReallocFn>(entry(targets[3]));
+    orig_memalign = reinterpret_cast<MemalignFn>(entry(targets[4]));
+    orig_posix_memalign = reinterpret_cast<PosixMemalignFn>(entry(targets[5]));
     __atomic_store_n(&slots[SlotMalloc / 8], reinterpret_cast<u64>(&WrapMalloc), __ATOMIC_SEQ_CST);
     __atomic_store_n(&slots[SlotFree / 8], reinterpret_cast<u64>(&WrapFree), __ATOMIC_SEQ_CST);
     __atomic_store_n(&slots[SlotCalloc / 8], reinterpret_cast<u64>(&WrapCalloc), __ATOMIC_SEQ_CST);

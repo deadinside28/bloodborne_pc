@@ -226,15 +226,13 @@ static uint8_t *stub_near(uint64_t entry) {
     return NULL;
 }
 
-int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why) {
-    pthread_mutex_lock(&patch_lock);
-    int rc = -1;
+static uint8_t *make_stub(uint64_t entry, RecompFn fn, char *why) {
     uint8_t *page = stub_near(entry);
-    if (!page) { snprintf(why, 160, "no stub space within reach of %#" PRIx64, entry); goto out; }
+    if (!page) { snprintf(why, 160, "no stub space within reach of %#" PRIx64, entry); return NULL; }
     StubPage *sp = NULL;
     for (int i = 0; i < n_stub_pages; i++) if (stub_pages[i].base == page) sp = &stub_pages[i];
     uint8_t *s = page + sp->used;
-    if (mprotect(page, STUB_PAGE, PROT_READ | PROT_WRITE)) { snprintf(why, 160, "stub page: %s", strerror(errno)); goto out; }
+    if (mprotect(page, STUB_PAGE, PROT_READ | PROT_WRITE)) { snprintf(why, 160, "stub page: %s", strerror(errno)); return NULL; }
     static const uint8_t head[] = { 0x48, 0x89, 0x44, 0x24, 0xf0, 0x48, 0xb8 };           // mov [rsp-0x10], rax; movabs rax,
     static const uint8_t tail[] = { 0x48, 0x89, 0x44, 0x24, 0xe8, 0x48, 0x8b, 0x44, 0x24, 0xf0,  // mov [rsp-0x18], rax; mov rax, [rsp-0x10]
                                     0xff, 0x25, 0, 0, 0, 0 };                                 // jmp [rip+0]
@@ -246,7 +244,23 @@ int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why) {
     memcpy(s + n, &enter, 8); n += 8;
     memset(s + n, 0xcc, STUB_SIZE - n);
     sp->used += STUB_SIZE;
-    if (mprotect(page, STUB_PAGE, PROT_READ | PROT_EXEC)) { snprintf(why, 160, "stub page: %s", strerror(errno)); goto out; }
+    if (mprotect(page, STUB_PAGE, PROT_READ | PROT_EXEC)) { snprintf(why, 160, "stub page: %s", strerror(errno)); return NULL; }
+    return s;
+}
+
+uint64_t recomp_hybrid_stub(uint64_t near, RecompFn fn, char *why) {
+    pthread_mutex_lock(&patch_lock);
+    uint8_t *s = make_stub(near, fn, why);
+    pthread_mutex_unlock(&patch_lock);
+    return (uint64_t)(uintptr_t)s;
+}
+
+int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why, uint64_t *stub) {
+    pthread_mutex_lock(&patch_lock);
+    int rc = -1;
+    uint8_t *s = make_stub(entry, fn, why);
+    if (!s) goto out;
+    if (stub) *stub = (uint64_t)(uintptr_t)s;
     // The entry: jmp rel32. Its page is the image's code (read + execute while not being patched).
     uint8_t jmp[5] = { 0xe9 };
     int32_t rel = (int32_t)((uint64_t)(uintptr_t)s - (entry + 5));

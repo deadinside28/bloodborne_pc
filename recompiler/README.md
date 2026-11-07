@@ -167,6 +167,11 @@ output, which must equal the x86-64 run's.
   unmodified, 165,383 of 165,771 functions.
   Dispatch is a hash lookup, MXCSR is loaded only when it changed, counts are per thread (a
   shared atomic counter was a cache-line fight between cores).
+- **The runtime's calls into the game** (`runtime_guest_entry`, `GUEST_FN` in src/runtime.h):
+  the recompiled function's stub, so bbport's own calls (the game's entry, module inits, thread
+  starts, atexit, once, key destructors, callbacks) run no original code; on AArch64 this is
+  where the bridge goes. `BB_AOT_STRICT=1` takes execute permission from the game's code pages
+  and counts any native call that still reaches them (sent on to the stub).
 - **Known limits:** C++ exceptions cannot unwind through the thunks (a native callee's return
   address is the thunk's label; recompiled frames have no unwind info), so functions with handlers
   and their callers stay original; patching a running function's entry is not atomic yet (install

@@ -179,6 +179,9 @@ def load_ps4(path):
     r = _load_into(img, path, 0)
     img.link_base = r["link_base"]
     img.entry = r["entry"]
+    # where the runtime enters the code itself: the entry points and (modules) the exports; no
+    # FDE describes some of them and nothing in the image calls them (game.py lifts them too)
+    img.entries = {r["entry"]}
     img.relocations_applied = r["applied"]
     img.noreturn_funcs = _noreturn_by_shape(img)
     return img
@@ -239,6 +242,8 @@ def load_ps4_linked(eboot, modules):
     img.setjmp_funcs, img.longjmp_funcs = set(), set()
     for path, base in modules:
         r = _load_into(img, path, base)
+        img.entries.add(r["entry"])
+        img.entries.update(a for a in r["functions"] if img.is_code(a))
         for name, addr in r["exports"].items():
             nid = name.split("#")[0]
             if nid in noreturn:
@@ -314,17 +319,20 @@ def _load_into(img, path, base):
                         break
     img.segments[first_new:] = [(v, bytes(d), x) for v, d, x in new]
     exports = {}  # defined symbols: name -> address
+    functions = set()  # of those, the functions (STT_FUNC; data sits in libc's code segment too)
     for i in range(len(syms) // 24):
-        name_off, _info, _other, shndx, value, _size = struct.unpack_from("<IBBHQQ", syms, i * 24)
+        name_off, info, _other, shndx, value, _size = struct.unpack_from("<IBBHQQ", syms, i * 24)
         if shndx and value:
             exports[strings[name_off:strings.index(0, name_off)].decode("ascii")] = base + value
+            if info & 0xF == 2:
+                functions.add(base + value)
     eh = next((p for p in ph if p["type"] == PT_GNU_EH_FRAME), None)
     if eh is None:
         raise ValueError("no PT_GNU_EH_FRAME: no function ranges")
     for fn in fde_functions(img, base + eh["vaddr"]):
         img.functions.setdefault(fn.start, fn)
     return dict(entry=base + header[4], link_base=base + min(p["vaddr"] for p in loads), applied=applied,
-                exports=exports)
+                exports=exports, functions=functions)
 
 
 def is_ps4(path):

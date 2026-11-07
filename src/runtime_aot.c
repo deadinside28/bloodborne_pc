@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/mman.h>
 #include <ucontext.h>
 #include <unistd.h>
 #include <x86intrin.h>
@@ -80,6 +81,46 @@ static RecompFn lookup(uint64_t link) {
         if (hash[s].guest == link && hash[s].fn) return hash[s].fn;
         if (!hash[s].fn) return NULL;
     }
+}
+
+/* The slot of `link` in the hash, or -1. */
+static int64_t slot_find(uint64_t link) {
+    for (uint64_t s = slot_of(link);; s = (s + 1) & hash_mask) {
+        if (hash[s].guest == link && hash[s].fn) return (int64_t)s;
+        if (!hash[s].fn) return -1;
+    }
+}
+
+/* A function the library does not have, called through the dispatcher by its own handler (libc's
+ * longjmp: recomp_hybrid_longjmp): no call into the original code for it. */
+static void hash_insert(uint64_t link, RecompFn fn) {
+    uint64_t s = slot_of(link);
+    while (hash[s].fn && hash[s].guest != link) s = (s + 1) & hash_mask;
+    hash[s] = (RecompEntry){ link, fn };
+}
+
+/* Per hash slot: the function's stub (recomp_hybrid_patch / recomp_hybrid_stub), which enters the
+ * recompiled function as a call of the original would: runtime_guest_entry hands it to the
+ * runtime's own calls into the game (thread entries, callbacks), which then run none of the
+ * original code. Made when the entry is patched, or on first use. */
+static uint64_t *stubs;
+static pthread_mutex_t stub_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static uint64_t stub_for(uint64_t link) {
+    const int64_t s = slot_find(link);
+    if (s < 0) return 0;
+    uint64_t stub = __atomic_load_n(&stubs[s], __ATOMIC_ACQUIRE);
+    if (stub) return stub;
+    pthread_mutex_lock(&stub_lock);
+    stub = stubs[s];
+    if (!stub) {
+        char why[160];
+        stub = recomp_hybrid_stub(__recomp_slide + link, hash[s].fn, why);
+        if (!stub) printf("AOT: guest 0x%" PRIx64 ": %s\n", link, why);
+        __atomic_store_n(&stubs[s], stub, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&stub_lock);
+    return stub;
 }
 
 /* The thread's last dispatches into the original code (fault reports): target, the guest rsp and
@@ -174,6 +215,92 @@ static void report_targets(void) {
                sorted[i].jump ? "jump to" : "call to", sorted[i].target - __recomp_slide, n);
     }
     fflush(stdout);
+}
+
+uintptr_t runtime_guest_entry(uintptr_t address) {
+    if (!enabled || address - __recomp_slide >= image_size) return address;
+    const uint64_t stub = stub_for(address - __recomp_slide);
+    return stub ? (uintptr_t)stub : address;
+}
+
+/* BB_AOT_STRICT=1: the game's code pages lose execute permission once the library is installed,
+ * so nothing can run the original code unnoticed. An attempt to (a native call of a game
+ * function by the runtime) faults; at a recompiled function's start the call goes on in its stub
+ * and the caller is counted (strict_report); anywhere else the fault stays fatal. */
+static int strict;
+typedef struct { uint64_t target, caller, count, via; } StrictEntry;
+static StrictEntry strict_seen[256];
+
+int runtime_aot_strict_fault(void *context, void *address) {
+    if (!strict) return 0;
+    ucontext_t *uc = context;
+    const uint64_t rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+    if (rip != (uint64_t)(uintptr_t)address || rip - __recomp_slide >= image_size) return 0;
+    const int64_t s = slot_find(rip - __recomp_slide);
+    if (s < 0 || !stubs[s]) return 0;  /* no stub made yet: not from a signal handler */
+    const uint64_t caller = *(const uint64_t *)(uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+    for (unsigned n = 0, i = (unsigned)((rip ^ caller) * 0x9e3779b97f4a7c15ull >> 56); n < 256; ++n, i = (i + 1) & 255) {
+        StrictEntry *e = &strict_seen[i];
+        uint64_t t = __atomic_load_n(&e->target, __ATOMIC_ACQUIRE);
+        if (!t && __atomic_compare_exchange_n(&e->target, &t, rip, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            /* a host function that tail-called the game: the thread's last call into bbport */
+            e->via = events[(event_head - 1) & 63].target;
+            __atomic_store_n(&e->caller, caller, __ATOMIC_RELEASE);
+        }
+        else if (t != rip || __atomic_load_n(&e->caller, __ATOMIC_ACQUIRE) != caller) continue;
+        __atomic_add_fetch(&e->count, 1, __ATOMIC_RELAXED);
+        break;
+    }
+    uc->uc_mcontext.gregs[REG_RIP] = (greg_t)stubs[s];
+    return 1;
+}
+
+static void strict_report(void) {
+    if (!strict) return;
+    unsigned shown = 0;
+    for (unsigned i = 0; i < 256; ++i) {
+        const StrictEntry *e = &strict_seen[i];
+        if (!e->target || !e->count) continue;
+        Dl_info where;
+        const char *n = dladdr((void *)(uintptr_t)e->caller, &where) && where.dli_sname ? where.dli_sname : "?";
+        const char *f = where.dli_fname ? strrchr(where.dli_fname, '/') : NULL;
+        char via[160] = "";
+        Dl_info vw;
+        if (e->via && dladdr((void *)(uintptr_t)e->via, &vw))
+            snprintf(via, sizeof(via), "; last call into bbport: %s at %#" PRIx64, vw.dli_sname ? vw.dli_sname : "?", e->via);
+        /* no symbol: the offset in its file (addr2line -e <file> <offset>; bb-probe is not PIE) */
+        const uint64_t off = n[0] != '?' ? e->caller - (uint64_t)(uintptr_t)where.dli_saddr
+                           : where.dli_fbase && e->caller >= 0x1000000 ? e->caller - (uint64_t)(uintptr_t)where.dli_fbase
+                           : e->caller;
+        printf("AOT strict: %8" PRIu64 " native calls of guest 0x%" PRIx64 " from %s+%#" PRIx64 " (%s%s)\n", e->count,
+               e->target - __recomp_slide, n, off, f ? f + 1 : "?", via);
+        ++shown;
+    }
+    if (!shown) printf("AOT strict: no native call of the game's code\n");
+}
+
+/* The image's executable mappings, without execute permission (/proc/self/maps: each keeps its
+ * other permissions). */
+static int strict_protect(const unsigned char *image, uint64_t size) {
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (!maps) return -1;
+    const uint64_t lo = (uint64_t)(uintptr_t)image, hi = lo + size;
+    char line[512];
+    uint64_t pages = 0;
+    while (fgets(line, sizeof(line), maps)) {
+        uint64_t a, b;
+        char perm[5];
+        if (sscanf(line, "%" SCNx64 "-%" SCNx64 " %4s", &a, &b, perm) != 3 || perm[2] != 'x') continue;
+        if (b <= lo || a >= hi) continue;
+        if (a < lo) a = lo;
+        if (b > hi) b = hi;
+        const int prot = (perm[0] == 'r' ? PROT_READ : 0) | (perm[1] == 'w' ? PROT_WRITE : 0);
+        if (mprotect((void *)(uintptr_t)a, b - a, prot)) { fclose(maps); return -1; }
+        pages += (b - a) >> 12;
+    }
+    fclose(maps);
+    printf("AOT strict: %" PRIu64 " pages of the game's code no longer executable\n", pages);
+    return 0;
 }
 
 /* Calls of recompiled code (direct ones to functions it does not have, indirect ones), and its
@@ -323,7 +450,17 @@ static uint64_t native_guest_call(BbGuestCallArgs *c) {
 
 static uint64_t aot_guest_call(BbGuestCallArgs *c) {
     RecompState *const cur = site_state;
-    if (!cur) return native_guest_call(c);
+    if (!cur) {
+        /* outside recompiled code: the native call, through the recompiled function's stub */
+        const uint64_t stub = runtime_guest_entry(c->address);
+        if (stub == c->address) return native_guest_call(c);
+        BbGuestCallArgs d = *c;
+        d.address = stub;
+        if (c->original) { d.original = 0; site_bypass = c->address; }
+        const uint64_t r = native_guest_call(&d);
+        c->xmm0_result = d.xmm0_result;
+        return r;
+    }
     RecompState s = *cur;
     uint64_t sp = (cur->gpr[G_RSP] - 256) & ~(uint64_t)15;  /* past the red zone */
     sp -= 8 * BB_GUEST_CALL_STACK;                          /* the stack arguments (16-byte aligned) */
@@ -346,7 +483,16 @@ static uint64_t aot_guest_call(BbGuestCallArgs *c) {
      * site skipped once for `original` (site_bypass). */
     const uint64_t target = c->original ? c->original : c->address;
     site_state = NULL;
-    recomp_dispatch_fallback(&s, target);
+    const RecompFn fn = lookup(c->address - __recomp_slide);
+    if (fn) {
+        /* the recompiled function, called as recompiled code calls it (its `ret` pops the slot
+         * above); a replaced function's own entry site is skipped once (the original behaviour
+         * its trampoline gave) */
+        if (c->original) site_bypass = c->address;
+        fn(&s);
+    } else {
+        recomp_dispatch_fallback(&s, target);
+    }
     site_state = cur;
     memcpy(&c->xmm0_result, &s.xmm[0], 8);
     return s.gpr[G_RAX];
@@ -448,7 +594,7 @@ static void *report_loop(void *arg) {
     for (unsigned n = 1;; ++n) {
         sleep(30);
         report();
-        if (!(n & 1)) report_targets();
+        if (!(n & 1)) { report_targets(); strict_report(); }
     }
     return NULL;
 }
@@ -472,6 +618,8 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     }
     table_size = *count;
     if (hash_build()) { printf("AOT: no memory for the lookup table\n"); return -1; }
+    stubs = calloc(hash_mask + 1, sizeof(*stubs));
+    if (!stubs) { printf("AOT: no memory for the stub table\n"); return -1; }
     __recomp_slide = (uint64_t)(uintptr_t)image;
     image_size = size;
     if (host_map_build()) { printf("AOT: no memory for the host code map\n"); return -1; }
@@ -522,10 +670,12 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
         for (unsigned j = 0; j < n_skip; ++j) skipped |= skip[j] == table[i].guest;
         if (skipped) continue;
         char why[160];
-        if (recomp_hybrid_patch(__recomp_slide + table[i].guest, table[i].fn, why)) {
+        uint64_t stub = 0;
+        if (recomp_hybrid_patch(__recomp_slide + table[i].guest, table[i].fn, why, &stub)) {
             printf("AOT: guest 0x%" PRIx64 ": %s\n", table[i].guest, why);
             return -1;
         }
+        stubs[slot_find(table[i].guest)] = stub;
         ++patched;
     }
     /* The linked libc's longjmp, replaced: a longjmp to a recompiled setjmp (__recomp_setjmp)
@@ -534,13 +684,22 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     const uint64_t *longjmp_count = dlsym(lib, "__recomp_longjmp_size");
     for (uint64_t i = 0; longjmps && longjmp_count && i < *longjmp_count; ++i) {
         char why[160];
-        if (recomp_hybrid_patch(__recomp_slide + longjmps[i], recomp_hybrid_longjmp, why)) {
+        uint64_t stub = 0;
+        if (recomp_hybrid_patch(__recomp_slide + longjmps[i], recomp_hybrid_longjmp, why, &stub)) {
             printf("AOT: longjmp at guest 0x%" PRIx64 ": %s\n", longjmps[i], why);
             return -1;
         }
+        /* recompiled callers reach it through the dispatcher: straight to the replacement */
+        hash_insert(longjmps[i], recomp_hybrid_longjmp);
+        stubs[slot_find(longjmps[i])] = stub;
     }
     if (&bbport_guest_call_hook) bbport_guest_call_hook = aot_guest_call;
     enabled = 1;
+    strict = bb_env_on("BB_AOT_STRICT");
+    if (strict && strict_protect(image, size)) {
+        printf("AOT strict: cannot change the code's permissions (%s)\n", strerror(errno));
+        return -1;
+    }
     pthread_t reporter;
     if (!pthread_create(&reporter, NULL, report_loop, NULL)) pthread_detach(reporter);
     printf("AOT: %" PRIu64 " of the library's %" PRIu64 " recompiled functions swapped in, %" PRIu64
@@ -562,5 +721,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
 void runtime_aot_thread_detach(void) {}
 void runtime_aot_describe_fault(void *context) { (void)context; }
 uint64_t runtime_aot_guest_pc(uint64_t host_pc) { (void)host_pc; return 0; }
+uintptr_t runtime_guest_entry(uintptr_t address) { return address; }
+int runtime_aot_strict_fault(void *context, void *address) { (void)context; (void)address; return 0; }
 
 #endif

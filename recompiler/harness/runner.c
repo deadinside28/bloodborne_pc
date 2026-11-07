@@ -165,7 +165,7 @@ int main(int argc, char **argv) {
         recomp_hybrid_enable();  // the thread's state comes with its first entry (the thunk's slow path)
         for (uint64_t k = 0; k < __recomp_table_size; k++) {
             char why[160];
-            if (recomp_hybrid_patch(__recomp_slide + __recomp_table[k].guest, __recomp_table[k].fn, why)) {
+            if (recomp_hybrid_patch(__recomp_slide + __recomp_table[k].guest, __recomp_table[k].fn, why, NULL)) {
                 fprintf(stderr, "patch %#" PRIx64 ": %s\n", __recomp_table[k].guest, why);
                 return 2;
             }

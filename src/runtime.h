@@ -69,6 +69,14 @@ void runtime_aot_describe_fault(void *ucontext);
 /* The game function (image address) a host code address was recompiled from, or 0: for the GPU
  * library's checks that know game code by an instruction address. */
 uint64_t runtime_aot_guest_pc(uint64_t host_pc);
+/* What the runtime calls to run the game's function at `address` (thread entries, callbacks,
+ * initialisers): with hybrid execution the recompiled function's stub (none of the original code
+ * runs), else `address`. Call it with the guest's ABI as the function itself. */
+uintptr_t runtime_guest_entry(uintptr_t address);
+/* A game function pointer as the runtime calls it: GUEST_FN(type, pointer)(arguments). */
+#define GUEST_FN(type, pointer) ((type)runtime_guest_entry((uintptr_t)(pointer)))
+/* BB_AOT_STRICT: a fault from running the game's (non-executable) code; 1 when handled. */
+int runtime_aot_strict_fault(void *context, void *address);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
