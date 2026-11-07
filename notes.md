@@ -258,9 +258,13 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    patches stay x86's; __recomp_setjmp / recomp_hybrid_longjmp_resume in AArch64 asm, x19-x28,
    x29, d8-d15 in HybridJmp.saved); an entry made from C code already on the host stack starts
    below it. harness/portable_test.c (setjmp, longjmp from the same and from a nested entry made
-   from C): passes on x86-64 and on AArch64 under QEMU, in run.sh. Next: runtime_aot.c's AOT
-   mode for AArch64 (no stubs, no patching; dispatch, host calls and entries the portable ones),
-   then the game library built for AArch64 and linked. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   from C): passes on x86-64 and on AArch64 under QEMU, in run.sh. Then runtime_aot.c's AOT mode
+   for AArch64: no stubs, patches or strict redirect; host calls and entries always portable; a
+   guest target without recompiled code stops the game (aot_miss); rdtsc is runtime_cycles;
+   cpuid answers a fixed Jaguar table (AuthenticAMD, family 16h, SSE-SSE4.2, AVX, F16C, POPCNT,
+   MOVBE, BMI1, LZCNT); the thread pointer is runtime_guest_thread_pointer; x87 through the
+   emulator. Compiles for aarch64 with -Werror (the whole runtime, x87 emulator included). Next:
+   the game library built for AArch64 against it, then a first run (CPU-only, QEMU). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

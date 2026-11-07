@@ -22,7 +22,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+/* AArch64: the recompiled game alone (no original code to run beside it): no stubs or entry
+ * patches; dispatch, calls into the runtime and its calls into the game take the portable C
+ * paths (BB_AOT_HOST_CALLS=portable and BB_AOT_ENTRY=portable on x86-64). */
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -30,8 +33,11 @@
 #include <sys/mman.h>
 #include <ucontext.h>
 #include <unistd.h>
+#include "host_context.h"
+#if defined(__x86_64__)
 #include <x86intrin.h>
 #include <cpuid.h>
+#endif
 #include "../recompiler/harness/recomp_hybrid.h"
 #include "../recompiler/harness/recomp_x87.h"  /* __recomp_x87 (defined there) */
 #include "../gpu/shim/bbport_guest_sites.h"
@@ -139,7 +145,11 @@ static uint64_t stub_for(uint64_t link) {
     stub = stubs[s];
     if (!stub) {
         char why[160];
+#if defined(__x86_64__)
         stub = recomp_hybrid_stub(__recomp_slide + link, hash[s].fn, why);
+#else
+        snprintf(why, sizeof(why), "no stubs on this host");
+#endif
         if (!stub) printf("AOT: guest 0x%" PRIx64 ": %s\n", link, why);
         __atomic_store_n(&stubs[s], stub, __ATOMIC_RELEASE);
     }
@@ -246,10 +256,14 @@ static void report_targets(void) {
 static int portable_entry;
 
 static uint64_t guest_thread_pointer(void) {
+#if defined(__aarch64__)
+    return (uint64_t)(uintptr_t)runtime_guest_thread_pointer();
+#else
     uint64_t v;
     if (recomp_hybrid_fs_from_gs) __asm__ volatile("rdgsbase %0" : "=r"(v));
     else __asm__ volatile("rdfsbase %0" : "=r"(v));
     return v;
+#endif
 }
 
 uintptr_t runtime_guest_entry(uintptr_t address);
@@ -282,13 +296,17 @@ typedef struct { uint64_t target, caller, count, via; } StrictEntry;
 static StrictEntry strict_seen[256];
 
 int runtime_aot_strict_fault(void *context, void *address) {
+#if !defined(__x86_64__)
+    (void)context; (void)address;
+    return 0;  /* no x86 code to keep from running */
+#endif
     if (!strict) return 0;
     ucontext_t *uc = context;
-    const uint64_t rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+    const uint64_t rip = (uint64_t)host_context_pc(uc);
     if (rip != (uint64_t)(uintptr_t)address || rip - __recomp_slide >= image_size) return 0;
     const int64_t s = slot_find(rip - __recomp_slide);
     if (s < 0 || !stubs[s]) return 0;  /* no stub made yet: not from a signal handler */
-    const uint64_t caller = *(const uint64_t *)(uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+    const uint64_t caller = *(const uint64_t *)(uintptr_t)host_context_sp(uc);
     for (unsigned n = 0, i = (unsigned)((rip ^ caller) * 0x9e3779b97f4a7c15ull >> 56); n < 256; ++n, i = (i + 1) & 255) {
         StrictEntry *e = &strict_seen[i];
         uint64_t t = __atomic_load_n(&e->target, __ATOMIC_ACQUIRE);
@@ -301,7 +319,9 @@ int runtime_aot_strict_fault(void *context, void *address) {
         __atomic_add_fetch(&e->count, 1, __ATOMIC_RELAXED);
         break;
     }
+#if defined(__x86_64__)
     uc->uc_mcontext.gregs[REG_RIP] = (greg_t)stubs[s];
+#endif
     return 1;
 }
 
@@ -332,6 +352,10 @@ static void strict_report(void) {
 /* The image's executable mappings, without execute permission (/proc/self/maps: each keeps its
  * other permissions). */
 static int strict_protect(const unsigned char *image, uint64_t size) {
+#if !defined(__x86_64__)
+    (void)image; (void)size;
+    return 0;
+#endif
     FILE *maps = fopen("/proc/self/maps", "r");
     if (!maps) return -1;
     const uint64_t lo = (uint64_t)(uintptr_t)image, hi = lo + size;
@@ -353,6 +377,21 @@ static int strict_protect(const unsigned char *image, uint64_t size) {
     return 0;
 }
 
+#if !defined(__x86_64__)
+/* A guest target the library has no recompiled function for, on a host that cannot run the
+ * original: the library's gap (a function the lifter left out, a jump into the middle of one). */
+static void aot_miss(RecompState *st, uint64_t target) {
+    fprintf(stderr, "STOP: the recompiled game has no function at guest 0x%" PRIx64 " (called, rsp %#" PRIx64 ")\n",
+            target - __recomp_slide, st->gpr[G_RSP]);
+    abort();
+}
+static void aot_miss_jump(RecompState *st, uint64_t target) {
+    fprintf(stderr, "STOP: the recompiled game has no function at guest 0x%" PRIx64 " (jumped to, rsp %#" PRIx64 ")\n",
+            target - __recomp_slide, st->gpr[G_RSP]);
+    abort();
+}
+#endif
+
 /* Calls of recompiled code (direct ones to functions it does not have, indirect ones), and its
  * tail calls to known function starts: the recompiled function when there is one (even when
  * BB_AOT_BISECT left its entry original), else the original code, which returns here. */
@@ -367,11 +406,13 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
             if (e->target == target) e->done_rsp = st->gpr[G_RSP];
             return;
         }
+#if defined(__x86_64__)
         if (host_calls_light) {
             recomp_hybrid_call_host(st, target);
             if (e->target == target) e->done_rsp = st->gpr[G_RSP];
             return;
         }
+#endif
     } else if (runtime_libc_base && target >= runtime_libc_base) recomp_hybrid_self->module_calls++;  /* libc.prx... */
     if (target - __recomp_slide < image_size) sample(target, e->caller, 0);
     recomp_dispatch_fallback(st, target);
@@ -387,7 +428,9 @@ void __recomp_dispatch_jump(RecompState *st, uint64_t target) {
     if (target - __recomp_slide >= image_size && (host_calls_light || host_calls_portable)) {
         recomp_hybrid_self->host_calls++;
         if (host_calls_portable) portable_call_host(st, target);
+#if defined(__x86_64__)
         else recomp_hybrid_call_host(st, target);
+#endif
         return;
     }
     note(st, target, (uint64_t)(uintptr_t)__builtin_return_address(0), EV_JUMP);
@@ -405,7 +448,7 @@ void runtime_aot_describe_fault(void *context) {
     snprintf(line, sizeof(line), "AOT: this thread: %" PRIu64 " recompiled entries open\n", t->depth);
     ssize_t written = write(2, line, strlen(line));
     const ucontext_t *uc = context;
-    const uint64_t rsp = (uint64_t)uc->uc_mcontext.gregs[REG_RSP];
+    const uint64_t rsp = (uint64_t)host_context_sp(uc);
     const uint64_t *s = (const uint64_t *)(uintptr_t)rsp;
     snprintf(line, sizeof(line), "AOT: fault rsp %#" PRIx64 " [-16] %#" PRIx64 " [-8] %#" PRIx64 " [0] %#" PRIx64
              " [8] %#" PRIx64 "; host_sp %#" PRIx64 " native_frame %#" PRIx64 "\n",
@@ -466,7 +509,11 @@ RecompSiteResult __recomp_guest_site(RecompState *st, uint64_t link, uint64_t fl
     uint64_t *g = &r.rax;
     for (int i = 0; i < 16; ++i) g[i] = st->gpr[order[i]];
     r.rflags = flags;
+#if defined(__x86_64__)
     r.mxcsr = _mm_getcsr();  /* the hardware's: recompiled x86-64 code keeps MXCSR there */
+#else
+    r.mxcsr = st->mxcsr;
+#endif
     for (int i = 0; i < 16; ++i) {
         memcpy(r.ymm[i], &st->xmm[i], 16);
         memcpy(r.ymm[i] + 16, &st->ymmh[i], 16);
@@ -563,10 +610,29 @@ static uint64_t aot_guest_call(BbGuestCallArgs *c) {
     return s.gpr[G_RAX];
 }
 
-uint64_t __recomp_rdtsc(void) { return __rdtsc(); }  /* as the original's rdtsc reads it */
+uint64_t __recomp_rdtsc(void) { return runtime_cycles(); }  /* sceKernelReadTsc's counter */
 
 void __recomp_cpuid(uint32_t leaf, uint32_t sub, uint32_t out[4]) {
+#if defined(__x86_64__)
     __cpuid_count(leaf, sub, out[0], out[1], out[2], out[3]);
+#else
+    /* No x86 CPU to ask: the PS4's (AMD Jaguar, family 16h): the vendor, and the features its
+     * code was compiled for (SSE to SSE4.2, AVX, F16C, POPCNT, MOVBE, BMI1, LZCNT). */
+    (void)sub;
+    static const uint32_t table[][5] = {
+        { 0x00000000u, 0x0000000du, 0x68747541u, 0x444d4163u, 0x69746e65u },  /* "AuthenticAMD" */
+        { 0x00000001u, 0x00700f01u, 0x00000800u, 0x3ed82203u, 0x178bfbffu },
+        { 0x00000007u, 0x00000000u, 0x00000008u, 0x00000000u, 0x00000000u },
+        { 0x80000000u, 0x8000001eu, 0x68747541u, 0x444d4163u, 0x69746e65u },
+        { 0x80000001u, 0x00700f01u, 0x00000000u, 0x000001e1u, 0x2fdbfbffu },
+    };
+    out[0] = out[1] = out[2] = out[3] = 0;
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i)
+        if (table[i][0] == leaf) {
+            out[0] = table[i][1]; out[1] = table[i][2];
+            out[2] = table[i][3]; out[3] = table[i][4];  /* eax ebx ecx edx (the vendor: ebx edx ecx) */
+        }
+#endif
 }
 
 /* recompiler/recomp/game.py code_hash: FNV-1a, 0x65 (gs:) read as 0x64 (fs:). */
@@ -717,8 +783,16 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     host_calls_portable = host_calls && !strcmp(host_calls, "portable");
     const char *targets = bb_env("BB_AOT_TARGETS");
     sample_targets = targets && !strcmp(targets, "all") ? 2 : bb_env_on("BB_AOT_TARGETS");
+#if defined(__x86_64__)
     recomp_hybrid_fs_from_gs = 1;
     recomp_hybrid_enable();
+#else
+    /* the recompiled game alone: every path the portable one, a guest target without recompiled
+     * code is the library's gap (no original code to run instead) */
+    host_calls_portable = 1;
+    recomp_dispatch_fallback = aot_miss;
+    recomp_dispatch_jump_fallback = aot_miss_jump;
+#endif
     /* BB_AOT_SKIP=addr,addr...: these functions' entries stay original (bisecting one function:
      * native callers run the original; recompiled callers still call the recompiled one). */
     uint64_t skip[64];
@@ -729,6 +803,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
         at = end && *end ? end + 1 : "";
     }
     uint64_t patched = 0, k = 0;
+#if defined(__x86_64__)
     for (uint64_t i = lo; i < hi; ++i) {
         while (k < n_nopatch && nopatch[k] < table[i].guest) ++k;
         if (k < n_nopatch && nopatch[k] == table[i].guest) continue;  /* recompiled callers only */
@@ -744,17 +819,23 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
         stubs[slot_find(table[i].guest)] = stub;
         ++patched;
     }
+#else
+    (void)lo; (void)hi; (void)k; (void)nopatch; (void)skip; (void)n_skip;
+    patched = table_size;  /* every one is entered from C */
+#endif
     /* The linked libc's longjmp, replaced: a longjmp to a recompiled setjmp (__recomp_setjmp)
      * resumes that recompiled code (recomp_hybrid.c). */
     const uint64_t *longjmps = dlsym(lib, "__recomp_longjmp");
     const uint64_t *longjmp_count = dlsym(lib, "__recomp_longjmp_size");
     for (uint64_t i = 0; longjmps && longjmp_count && i < *longjmp_count; ++i) {
-        char why[160];
         uint64_t stub = 0;
+#if defined(__x86_64__)
+        char why[160];
         if (recomp_hybrid_patch(__recomp_slide + longjmps[i], recomp_hybrid_longjmp, why, &stub)) {
             printf("AOT: longjmp at guest 0x%" PRIx64 ": %s\n", longjmps[i], why);
             return -1;
         }
+#endif
         /* recompiled callers reach it through the dispatcher: straight to the replacement */
         hash_insert(longjmps[i], recomp_hybrid_longjmp);
         stubs[slot_find(longjmps[i])] = stub;
@@ -765,6 +846,9 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     {
         const char *entry = bb_env("BB_AOT_ENTRY");
         portable_entry = entry && !strcmp(entry, "portable");
+#if !defined(__x86_64__)
+        portable_entry = 1;
+#endif
     }
     if (strict && strict_protect(image, size)) {
         printf("AOT strict: cannot change the code's permissions (%s)\n", strerror(errno));
