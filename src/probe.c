@@ -860,7 +860,11 @@ int main(int argc, char **argv) {
                    ok ? "mapped" : "NOT mapped",prot,ok ? end-(uintptr_t)image : 0);
         }
     }
+#if defined(__aarch64__)
+    printf("Entering the recompiled game at guest offset 0x%" PRIx64 "\n", entry);
+#else
     printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);
+#endif
     entered_game=1;
     struct { uint64_t argc; const char *argv[2]; } params = {1, {"/app0/eboot.bin", NULL}};
 #ifdef _WIN32

@@ -271,7 +271,20 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    _setjmp, _x87, _x87_insn, _cpuid, _rdtsc, __recomp_slide). Next: a first run. No AArch64
    machine here: an AArch64 bb-probe in CPU-only mode (the GPU library and SDL stubbed) under
    qemu-aarch64 with an AArch64 glibc sysroot; it would run the game's startup up to its first
-   graphics call. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   graphics call.
+   **Done (2026-11-07): the recompiled game runs on AArch64** (under qemu-aarch64 on this PC):
+   `tools/a64_cpu_only.sh SYSROOT` builds bb-probe for aarch64-linux-gnu.2.38 with
+   tools/a64_cpu_only_stubs.c (the GPU library, SDL3, Vulkan as no-ops) and runs it with
+   --cpu-only, BB_AOT=sites10-aarch64 and BB_AOT_ACCEPT_CHANGED=1 (29 functions differ: no GPU
+   library to patch the code). SYSROOT: Fedora 44's glibc and libgcc aarch64 RPMs (`dnf download
+   --forcearch=aarch64 --arch=aarch64 glibc libgcc`, rpm -K OK, `rpm2archive - < x.rpm | tar -xzf -`,
+   plus lib/ld-linux-aarch64.so.1 -> ../usr/lib/ld-linux-aarch64.so.1). Both module inits, the
+   entry, libc, 16 guest threads (FMOD's mixer/output/stream, GXRenderThread, work pools), 283
+   atexit registrations, 3,623 static guards, 1,683 mutexes / 10,986 locks, 4.3 GB of direct
+   memory, files, 60 audio buffers out; it stops at the first graphics call
+   (sceGnmGetTheTessellationFactorRingBufferBaseAddress: unresolved without the GPU library), as
+   CPU-only must. Next: the GPU library for AArch64 (it compiles; needs AArch64 Vulkan, SDL3,
+   boost... to link) and a machine with a GPU to run it on. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

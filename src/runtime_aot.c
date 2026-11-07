@@ -763,6 +763,13 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
         if (function_hash(image, check[i][0], check[i][1]) != check[i][2] && changed++ < 5)
             printf("AOT: guest 0x%" PRIx64 " differs from the code the library was built from\n", check[i][0]);
     }
+    if (changed && bb_env_on("BB_AOT_ACCEPT_CHANGED")) {
+        /* a test without the port's patches (tools/a64_cpu_only.sh: no GPU library to patch the
+         * code): the recompiled code is the patched game's */
+        printf("AOT: %" PRIu64 " of %" PRIu64 " functions differ; used anyway (BB_AOT_ACCEPT_CHANGED)\n", changed,
+               table_size);
+        changed = 0;
+    }
     if (changed) {
         printf("AOT: %" PRIu64 " of %" PRIu64 " functions differ: rebuild the library from a BB_AOT_DUMP of this "
                "configuration\n", changed, table_size);
