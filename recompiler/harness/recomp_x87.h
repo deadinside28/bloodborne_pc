@@ -2,7 +2,8 @@
 // The x87 environment for recompiled code (recomp/lift.py X87_OPS): control and status words,
 // no register stack. uint64_t __recomp_x87(RecompState *st, int32_t op, uint64_t addr), op:
 // 0 fnstenv m28, 1 fldenv m28, 2 fnstcw m16, 3 fldcw m16, 4 fnstsw m16, 5 fnstsw ax, 6 fnclex,
-// 7 fninit; returns the status word. Include in exactly one translation unit of a runtime.
+// 7 fninit, 8 fxsave's x87 part (FCW, FSW, abridged tags, ST0-7, MXCSR_MASK; FOP/FIP/FDP as 0;
+// the caller stores MXCSR and the XMM registers); returns the status word. Include in exactly one translation unit of a runtime.
 //
 // x86-64 hosts run the instruction itself, so original code still running next to the recompiled
 // code (x87 in libc) sees the same FPU. Other hosts (or -DRECOMP_X87_EMU) emulate the x87 per
@@ -107,6 +108,14 @@ uint64_t __recomp_x87(RecompState *st, int32_t op, uint64_t addr) {
     case 4: __asm__ volatile("fnstsw (%0)" ::"r"(p) : "memory"); break;
     case 6: __asm__ volatile("fnclex" ::: "memory"); break;
     case 7: __asm__ volatile("fninit" ::: "memory"); break;
+    case 8: {
+        uint8_t area[512] __attribute__((aligned(16)));
+        __asm__ volatile("fxsave64 %0" : "=m"(area));
+        memset(area + 6, 0, 18);  // FOP, FIP, FDP: they would name host code
+        memcpy(p, area, 24);
+        memcpy((char *)p + 28, area + 28, 160 - 28);
+        break;
+    }
     default: break;
     }
     __asm__ volatile("fnstsw %0" : "=a"(sw));

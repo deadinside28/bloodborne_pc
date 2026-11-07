@@ -72,6 +72,7 @@ class FunctionLifter:
         self.cfg = cfg
         self.out = []
         self.n = 0
+        self.variant_labels = None  # inside a variant's path: its labels (see variant)
         self.exits = []  # (label, kind, value)
         self.cur_ins = None
         self.frame_pointer = False
@@ -609,12 +610,30 @@ class FunctionLifter:
         self.exit_dynamic(nxt)
         self.label(on)
 
-    def variant(self, ins, b, after_site):
+    def variant_at(self, ins):
+        """The replacement of a variant at ins, as bytes from ins.ip: one starting there, or one
+        inside the instruction (BBSC patches immediates: CoopMaskSearch's 0x7ffff7ff), which makes
+        the whole instruction its variant (the instruction's bytes with the patch over them)."""
+        variants = self.mod.variants
+        if not variants:
+            return None
+        if ins.ip in variants:
+            return variants[ins.ip]
+        inside = [v for v in range(ins.ip + 1, ins.next_ip) if v in variants]
+        if not inside:
+            return None
+        if len(inside) > 1:
+            raise Unsupported("variant: two inside one instruction")
+        v = inside[0]
+        code = bytearray(self.mod.image.read(ins.ip, max(ins.next_ip, v + len(variants[v])) - ins.ip) or b"")
+        code[v - ins.ip:v - ins.ip + len(variants[v])] = variants[v]
+        return bytes(code)
+
+    def variant(self, ins, b, after_site, repl):
         """A byte patch the port switches (bbport_guest_variant_register): the code's bytes there
         tell which form runs. The patched form's instructions (the replacement over the original
         bytes) are lifted on their own path, which rejoins the original at the first instruction
         boundary past the patch."""
-        repl = self.mod.variants[ins.ip]
         n = self.site_count = getattr(self, "site_count", 0) + 1
         tag = f"{n}_{ins.ip:x}"
         same = "true"
@@ -629,18 +648,35 @@ class FunctionLifter:
             raise Unsupported("variant past the image")
         code[:len(repl)] = repl
         boundaries = {i.ip for i in b.insns if i.ip > ins.ip}
-        saved = self.cur_ins
-        terminated = False
+        end = ins.ip + len(repl)
+        # the replacement as a small graph of its own: each of its instructions has a label, and
+        # branches to them (a jcc's fall-through, BBSC's `jge +4` over its own `mov`) stay on this
+        # path; a branch to a later instruction of this block rejoins it there. (Ending the path
+        # at the first branch sent the fall-through to the original code: 7,681 jumps back per
+        # few minutes with BBSC.)
+        insns = []
         for i in X.Decoder(64, bytes(code), ip=ins.ip):
             if i.code == X.Code.INVALID:
                 raise Unsupported("variant: undecodable")
+            insns.append(i)
+            if i.next_ip >= end:
+                break
+        saved, saved_labels = self.cur_ins, self.variant_labels
+        self.variant_labels = {i.ip: f"v_{tag}_{i.ip:x}" for i in insns}
+        for at in boundaries:
+            if at >= end:
+                self.variant_labels.setdefault(at, None)  # after_site, made when first used
+        self.variant_after_site, self.variant_tag = after_site, tag
+        terminated = False
+        for i in insns:
+            if not terminated:
+                self.e(f"br label %{self.variant_labels[i.ip]}")
+            self.label(self.variant_labels[i.ip])
             self.cur_ins = i
             terminated = self.lift_insn(i, b)
-            if terminated or i.next_ip >= ins.ip + len(repl):
-                break
-        self.cur_ins = saved
+        self.cur_ins, self.variant_labels = saved, saved_labels
         if not terminated:
-            at = i.next_ip
+            at = insns[-1].next_ip
             if at in boundaries:
                 self.e(f"br label %{after_site.setdefault(at, f'variant_past_{tag}')}")
             elif at == b.insns[-1].next_ip:
@@ -690,6 +726,11 @@ class FunctionLifter:
         return "\n".join(self.out)
 
     def target_label(self, addr):
+        if self.variant_labels and addr in self.variant_labels:  # inside a variant's own path
+            lbl = self.variant_labels[addr]
+            if lbl is None:  # an instruction of the block past the patch: rejoin there
+                lbl = self.variant_after_site.setdefault(addr, f"variant_past_{self.variant_tag}_{addr:x}")
+            return f"%{lbl}"
         if addr in self.cfg.blocks:
             return f"%b_{addr:x}"
         lbl = f"x_{len(self.exits)}_{addr:x}"
@@ -707,8 +748,9 @@ class FunctionLifter:
                 self.label(after_site.pop(ins.ip))
             if ins.ip in self.mod.sites:
                 self.guest_site(ins, b, after_site)
-            if ins.ip in self.mod.variants:
-                self.variant(ins, b, after_site)
+            repl = self.variant_at(ins)
+            if repl is not None:
+                self.variant(ins, b, after_site, repl)
             try:
                 terminated = self.lift_insn(ins, b)
             except Unsupported as ex:
@@ -777,6 +819,20 @@ def _x87_env(L, ins, b):
     sw = L.op(f"call i64 @__recomp_x87(ptr %st, i32 {op}, i64 {addr})")
     if op == 5:
         L.write_reg(R.AX, L.op(f"trunc i64 {sw} to i16"), 16)
+
+
+@sem(M.FXSAVE, M.FXSAVE64)
+def _fxsave(L, ins, b):
+    """The x87 part (FCW, FSW, abridged tags, the registers ST0-7, MXCSR_MASK) from the runtime
+    (__recomp_x87 op 8: the x87 state is the FPU's or the emulator's); MXCSR and XMM0-15 from the
+    state. FOP, FIP and FDP are stored as 0 (they would name host code). libc's unwinder
+    (unw_getcontext) saves the context this way."""
+    a = L.ea(ins)
+    L.op(f"call i64 @__recomp_x87(ptr %st, i32 8, i64 {a})")
+    mx = L.op(f"load i32, ptr {L.op(f'getelementptr inbounds %State, ptr %st, i32 0, i32 {ST_MXCSR}')}")
+    L.store(L.op(f"add i64 {a}, 24"), mx, 32)
+    for i in range(16):
+        L.store(L.op(f"add i64 {a}, {160 + 16 * i}"), L.read_vec(i, 128), 128)
 
 
 @sem(M.WAIT)
@@ -853,7 +909,13 @@ def _mov(L, ins, b):
     if ins.op_kind(0) == OK.REGISTER and ins.op_register(0) in (R.FS, R.GS, R.ES, R.DS, R.SS, R.CS):
         raise Unsupported("segment register write")
     if ins.op_kind(1) == OK.REGISTER and ins.op_register(1) in (R.FS, R.GS, R.ES, R.DS, R.SS, R.CS):
-        raise Unsupported("segment register read")
+        if ins.op_register(1) in (R.FS, R.GS):
+            raise Unsupported("segment register read")
+        # the selectors of 64-bit user code on Linux (and FreeBSD, the PS4's: the same GDT
+        # layout for user code and stack); only recorded (libc's unwinder saves cs and ss)
+        sel = {R.CS: 0x33, R.SS: 0x2b}.get(ins.op_register(1), 0)
+        L.write(ins, 0, str(sel), bits)  # 16 bits to memory, zero-extended into a register
+        return
     L.write(ins, 0, L.read(ins, 1, bits), bits)
 
 
@@ -1416,8 +1478,9 @@ def _push(L, ins, b):
 
 @sem(M.POP)
 def _pop(L, ins, b):
-    if ins.op_kind(0) == OK.MEMORY:
-        raise Unsupported("pop mem")
+    if ins.stack_pointer_increment != 8:
+        raise Unsupported("16-bit pop")
+    # to memory: the address is computed after rsp moves (an rsp-based operand sees the new rsp)
     L.write(ins, 0, L.pop(), 64)
 
 

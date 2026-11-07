@@ -135,7 +135,9 @@ output, which must equal the x86-64 run's.
   replacement bytes are registered; the lifter lifts the replacement's instructions (decoded
   over the original bytes) on a path of their own and takes it when the code holds the
   replacement (`lift.py variant`: the code bytes are the switch), so one library serves BBSC on
-  and off; a function with a variant in its first 5 bytes keeps its entry (BBSC's one-byte
+  and off. The replacement is a small graph of its own (a branch inside it stays on its path;
+  one to a later instruction of the block rejoins there), and a variant inside an instruction
+  (an immediate) makes that whole instruction the variant; a function with a variant in its first 5 bytes keeps its entry (BBSC's one-byte
   `ret` would land in the entry jump). `corpus/sites.S` tests each kind.
 - **Configurations:** settings install hooks of their own (`BB_FRAME_STATS`: one at 0x26aa860), so
   a library is built against one dump per configuration it must run in
@@ -219,8 +221,9 @@ output, which must equal the x86-64 run's.
 4. Fallback for dispatch misses; host-PC → guest-address map for fault reporting.
 5. Code size: libz is 3.4× its original `.text` on AArch64 with `--abi` (flags and general
    register traffic are the next targets); `--tso` adds 43% for its inline alignment checks.
-6. Instruction gaps: x87 transcendentals and BCD (unused by the game), 16-bit
-   `shld/shrd`, BMI2 (not needed for Jaguar), segment register moves, `lahf/sahf`.
+6. Instruction gaps: x87 transcendentals and BCD (unused by the game), BMI2 (not needed for
+   Jaguar), segment register writes and fs/gs reads, `lahf/sahf`, `fxrstor`. (`fxsave` goes
+   through `__recomp_x87` op 8 on both hosts; cs/ss/ds/es reads give Linux's user selectors.)
 7. LLVM 23.1.4's AArch64 backend crashes ("Cannot select") on an unaligned 16-bit store it builds
    itself by merging two byte stores of a big-endian value
    (`harness/llvm-bug-store-merge-bswap16.ll`, 31 lines); report it upstream. Until it is fixed,

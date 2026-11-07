@@ -127,6 +127,17 @@ static int run_hybrid(uint64_t link, int fp, uint64_t a, uint64_t b, uint64_t c,
 
 static void die(const char *m) { perror(m); exit(2); }
 
+static void patch_code(const char *name, const uint8_t *bytes, size_t n) {
+    if (!recomp_symbol(name)) return;
+    uint8_t *at = (uint8_t *)(uintptr_t)(__recomp_slide + recomp_symbol(name));
+    const long page = sysconf(_SC_PAGESIZE);
+    uint8_t *first = (uint8_t *)((uintptr_t)at & ~(uintptr_t)(page - 1));
+    if (mprotect(first, (size_t)(at + n - first), PROT_READ | PROT_WRITE | PROT_EXEC) == 0) {
+        memcpy(at, bytes, n);
+        mprotect(first, (size_t)(at + n - first), PROT_READ | PROT_EXEC);
+    }
+}
+
 int main(int argc, char **argv) {
     const char *image = NULL, *filter = NULL, *rec = NULL, *chk = NULL;
     int n = 300, verbose = 0, hybrid = 0;
@@ -141,17 +152,12 @@ int main(int argc, char **argv) {
     }
     if (!image) { fprintf(stderr, "usage: runner IMAGE [-n N] [-f FILTER] [-r REC | -c REC] [-v] [-H]\n"); return 2; }
     recomp_load(image);
-    // corpus/sites.S's variant: its replacement written into the code (as the port switches its
-    // patches on), before anything runs: the original code runs it, the recompiled code finds it.
-    if (recomp_symbol("gvariant_sub_1")) {
-        uint8_t *at = (uint8_t *)(uintptr_t)(__recomp_slide + recomp_symbol("gvariant_sub_1"));
-        const long page = sysconf(_SC_PAGESIZE);
-        uint8_t *first = (uint8_t *)((uintptr_t)at & ~(uintptr_t)(page - 1));
-        if (mprotect(first, (size_t)(at + 3 - first), PROT_READ | PROT_WRITE | PROT_EXEC) == 0) {
-            at[1] = 0x29;  // add rax, rdi -> sub rax, rdi
-            mprotect(first, (size_t)(at + 3 - first), PROT_READ | PROT_EXEC);
-        }
-    }
+    // corpus/sites.S's variants: their replacements written into the code (as the port switches
+    // its patches on), before anything runs: the original code runs them, the recompiled code
+    // finds them.
+    patch_code("gvariant_sub_1", (const uint8_t[]){ 0x48, 0x29, 0xf8 }, 3);  // add rax, rdi -> sub
+    patch_code("gvariant_imm_1", (const uint8_t[]){ 0xff, 0xff, 0xff, 0xff }, 4);  // and eax, 0x7ffff7ff -> 0xffffffff
+    patch_code("gvariant_jcc_1", (const uint8_t[]){ 0x7d, 0x04, 0x88, 0xc1, 0xeb, 0x02 }, 6);  // jge +4; mov cl, al; jmp
     find_exports();
 #if defined(RECOMP_HYBRID)
     if (hybrid) {

@@ -7,7 +7,8 @@
 //       recomp/lift.py x87_encoding packs it (opcode, ModRM with any memory operand at [addr]);
 //       flags: the guest's EFLAGS (fcmovcc); returns them updated (fcomi/fucomi set ZF PF CF).
 //   uint64_t x87emu_env(int op, uint64_t addr): the environment ops of recomp_x87.h's
-//       __recomp_x87 (fnstenv, fldenv, fnstcw, fldcw, fnstsw, fnclex, fninit); returns the status word.
+//       __recomp_x87 (fnstenv, fldenv, fnstcw, fldcw, fnstsw, fnclex, fninit, fxsave's x87 part);
+//       returns the status word.
 //
 // Per thread, as the FPU is. Exceptions are taken as masked whatever the control word says (an
 // unmasked one would trap at the next x87 instruction: the status word still shows it pending).
@@ -859,6 +860,23 @@ static inline uint64_t x87emu_env(int op, uint64_t addr) {
     case 4: memcpy(p, &x87e.sw, 2); break;
     case 6: x87e.sw &= 0x7f00; break;  // fnclex: exception flags, SF, ES, B
     case 7: x87e.cw = 0x037f; x87e.sw = 0; x87e.tag = 0xffff; break;  // fninit
+    case 8: {  // fxsave's x87 part: MXCSR (bytes 24-27) and the XMM registers are the caller's
+        uint8_t a[160] = { 0 };
+        memcpy(a, &x87e.cw, 2);
+        memcpy(a + 2, &x87e.sw, 2);
+        for (int r = 0; r < 8; ++r)  // abridged: bit r set when physical register r is not empty
+            if (((x87e.tag >> (2 * r)) & 3) != 3) a[4] |= (uint8_t)(1u << r);
+        const uint32_t mask = 0xffff;  // MXCSR_MASK: every MXCSR bit up to DAZ
+        memcpy(a + 28, &mask, 4);
+        for (int i = 0; i < 8; ++i) {  // ST(i), from the top of the stack
+            const X87Reg v = x87e.r[x87_phys(i)];
+            memcpy(a + 32 + 16 * i, &v.m, 8);
+            memcpy(a + 40 + 16 * i, &v.se, 2);
+        }
+        memcpy(p, a, 24);
+        memcpy((char *)p + 28, a + 28, 160 - 28);
+        break;
+    }
     default: break;
     }
     return x87e.sw;

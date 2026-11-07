@@ -90,6 +90,44 @@ gvariant_sub_1:
     ret
     .size t_site_variant, . - t_site_variant
 
+// A variant whose replacement branches within itself (BBSC's ResponderSearchSignedAreaRangeResult:
+// `sbb cl, cl; and cl, al; jmp` becomes `jge +4; mov cl, al; jmp`): the jcc's fall-through is on
+// the replacement's own path, its target a block of the original (also reached from the test).
+    .globl t_site_variant_jcc
+    .type t_site_variant_jcc, @function
+    .p2align 4
+t_site_variant_jcc:
+    mov eax, edx                    // al: c's low byte
+    xor ecx, ecx
+    test dl, 1
+    jnz 2f                          // the odd c: straight to the block the replacement jumps to
+    cmp rdi, rsi
+    .globl gvariant_jcc_1
+gvariant_jcc_1:
+    sbb cl, cl                      // 18 c9 20 c1 eb 02 -> 7d 04 88 c1 eb 02
+    and cl, al
+    jmp 1f
+2:  mov cl, 0x5a
+1:  movzx eax, cl
+    ret
+    .size t_site_variant_jcc, . - t_site_variant_jcc
+
+// A variant inside an instruction (BBSC's Hunters.CoopMaskSearch patches an immediate): the
+// and's mask 0x7ffff7ff becomes 0xffffffff; the whole instruction is lifted both ways.
+    .globl t_site_variant_imm
+    .type t_site_variant_imm, @function
+    .p2align 4
+t_site_variant_imm:
+    mov rax, rsi
+    xor ecx, ecx                    // past the first 5 bytes (the hybrid entry jump)
+gvariant_imm_insn:
+    and eax, 0x7ffff7ff             // 25 ff f7 ff 7f: the immediate at +1
+    add rax, rdi
+    ret
+    .size t_site_variant_imm, . - t_site_variant_imm
+    .globl gvariant_imm_1
+    .set gvariant_imm_1, gvariant_imm_insn + 1
+
 // A handler that returns from the function (as a hook at a function's entry that replaces it):
 // at gsite_ret_1 it does the function's work (rax ^= 0x55) and returns to the caller.
     .globl t_site_ret
