@@ -189,12 +189,16 @@ __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
         " mov %rbp,%rsp\n pop %rbp\n ret\n");
 #endif
 static ABI void guest_exit(void) { puts("Runtime: process finalizer callback reached"); }
+/* The game's entry, called on its main stack (enter_on_stack): through runtime_guest_call. */
+static unsigned char *game_entry;
+static void enter_game_entry(void *params, void *exit_callback) {
+    GUEST_CALL(game_entry, params, exit_callback);
+}
 #ifdef _WIN32
 /* The game's entry on the main thread's low stack (bb_run_on_stack). */
 static void enter_game(void *p) {
     struct { void *entry, *params; } *start=p;
-    typedef void (ABI *Entry)(void *, void (ABI *)(void));
-    GUEST_FN(Entry, start->entry)(start->params, guest_exit);
+    GUEST_CALL(start->entry, start->params, guest_exit);
 }
 /* The linker rewrote the game's `mov r64, fs:[0]` (its thread pointer) to `mov r64, gs:[0]`
  * (link_modules.py). GS is the TEB on Windows: the load reads a TEB TLS slot instead
@@ -810,8 +814,7 @@ int main(int argc, char **argv) {
         /* Dependencies start in link order (libc first), as the PS4 dynamic linker does. */
         for (uint64_t m=0;m<module_count;++m) {
             printf("Starting linked module %" PRIu64 " at image offset 0x%" PRIx64 "; native bindings=%" PRIu64 "\n",m,modules[m].init,nb);
-            typedef int (ABI *ModuleInit)(uint64_t,void *,void *);
-            int result=GUEST_FN(ModuleInit, image+modules[m].init)(0,NULL,NULL);
+            int result=(int)(int32_t)GUEST_CALL(image+modules[m].init,0,0,0);
             printf("Module %" PRIu64 " initializer returned %d\n",m,result);
             if (result) fail("module initializer failed");
         }
@@ -843,7 +846,8 @@ int main(int argc, char **argv) {
     enum { MAIN_STACK=8*1024*1024 };
     unsigned char *stack=runtime_low_map(MAIN_STACK,PROT_READ|PROT_WRITE);
     if (!stack) fail("cannot allocate guest main stack");
-    enter_on_stack((void *)runtime_guest_entry((uintptr_t)(image+entry)),&params,(void *)guest_exit,stack+MAIN_STACK-64);
+    game_entry=image+entry;
+    enter_on_stack((void *)enter_game_entry,&params,(void *)guest_exit,stack+MAIN_STACK-64);
 #endif
     fail("entry unexpectedly returned");
 }

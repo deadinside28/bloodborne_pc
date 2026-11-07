@@ -75,6 +75,16 @@ uint64_t runtime_aot_guest_pc(uint64_t host_pc);
 uintptr_t runtime_guest_entry(uintptr_t address);
 /* A game function pointer as the runtime calls it: GUEST_FN(type, pointer)(arguments). */
 #define GUEST_FN(type, pointer) ((type)runtime_guest_entry((uintptr_t)(pointer)))
+/* The game's function at `address` called with up to six integer arguments; its rax. With
+ * hybrid execution and BB_AOT_ENTRY=portable: entered from C (recomp_hybrid_call_recompiled),
+ * the way a host without the x86 code calls the recompiled game; else through
+ * runtime_guest_entry. GUEST_CALL(pointer, a0, ...) pads the arguments to six. */
+uint64_t runtime_guest_call(uintptr_t address, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                            uint64_t a4, uint64_t a5);
+#define GUEST_CALL_(p, a0, a1, a2, a3, a4, a5, ...) \
+    runtime_guest_call((uintptr_t)(p), (uint64_t)(a0), (uint64_t)(a1), (uint64_t)(a2), (uint64_t)(a3), \
+                       (uint64_t)(a4), (uint64_t)(a5))
+#define GUEST_CALL(...) GUEST_CALL_(__VA_ARGS__, 0, 0, 0, 0, 0, 0, 0)
 /* BB_AOT_STRICT: a fault from running the game's (non-executable) code; 1 when handled. */
 int runtime_aot_strict_fault(void *context, void *address);
 int32_t *runtime_errno(void);

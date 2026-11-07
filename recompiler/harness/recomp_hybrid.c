@@ -78,6 +78,64 @@ int recomp_hybrid_thread_init(void) {
     return 0;
 }
 
+// ---- Entering recompiled code from C (no stub: what a host without the x86 code does) ----
+
+// fn(st) with the stack pointer at `top` (16-byte aligned): the recompiled function's LLVM frames
+// go on the thread's host stack, not on the guest's, which the lifted code addresses itself.
+void recomp_call_on_stack(RecompFn fn, RecompState *st, uint64_t top);
+#if defined(__x86_64__)
+__asm__(".text\n.globl recomp_call_on_stack\n.type recomp_call_on_stack,@function\nrecomp_call_on_stack:\n"
+        "  push %rbp\n  mov %rsp, %rbp\n  mov %rdx, %rsp\n  and $-16, %rsp\n"
+        "  mov %rdi, %rax\n  mov %rsi, %rdi\n  call *%rax\n"
+        "  mov %rbp, %rsp\n  pop %rbp\n  ret\n.size recomp_call_on_stack, .-recomp_call_on_stack\n");
+#elif defined(__aarch64__)
+__asm__(".text\n.globl recomp_call_on_stack\n.type recomp_call_on_stack,%function\nrecomp_call_on_stack:\n"
+        "  stp x29, x30, [sp, #-16]!\n  mov x29, sp\n  and x2, x2, #~15\n  mov sp, x2\n"
+        "  mov x16, x0\n  mov x0, x1\n  blr x16\n"
+        "  mov sp, x29\n  ldp x29, x30, [sp], #16\n  ret\n.size recomp_call_on_stack, .-recomp_call_on_stack\n");
+#endif
+
+uint64_t recomp_hybrid_call_recompiled(RecompFn fn, const uint64_t args[6], const uint64_t *xmm,
+                                       const uint64_t *stack, unsigned stack_words, uint64_t fs_base,
+                                       uint64_t *xmm0_out) {
+    if (!recomp_hybrid_self && recomp_hybrid_thread_init()) {
+        fprintf(stderr, "STOP: no hybrid state for this thread\n");
+        abort();
+    }
+    HybridThread *const t = recomp_hybrid_self;
+    if (t->depth >= t->max_depth) {
+        fprintf(stderr, "STOP: recompiled entries nested too deep\n");
+        abort();
+    }
+    // The guest's stack: below the innermost entry's (a callback from a host function called
+    // by recompiled code), else below this C frame (a thread entry, the game's entry: their
+    // stacks are the guest's).
+    uint64_t sp = t->depth ? t->states[t->depth - 1].gpr[G_RSP] - 256
+                           : (uint64_t)(uintptr_t)__builtin_frame_address(0) - 1024;
+    sp -= 8 * (uint64_t)stack_words;
+    sp &= ~(uint64_t)15;
+    for (unsigned i = 0; i < stack_words; ++i) ((uint64_t *)(uintptr_t)sp)[i] = stack[i];
+    sp -= 8;
+    *(uint64_t *)(uintptr_t)sp = 0;  // the return slot (stack arguments past it): the lifted `ret` pops it
+    RecompState *const st = &t->states[t->depth];
+    memset(st, 0, sizeof *st);
+    static const unsigned regs[6] = { G_RDI, G_RSI, G_RDX, G_RCX, G_R8, G_R9 };
+    for (int i = 0; i < 6; ++i) st->gpr[regs[i]] = args[i];
+    for (int i = 0; xmm && i < 8; ++i) st->xmm[i] = xmm[i];
+    st->gpr[G_RSP] = sp;
+    st->fs_base = fs_base;
+    st->gs_base = fs_base;  // as the stub path: code lifted from bbport's patched bytes reads gs:
+    st->mxcsr = 0x1f80;
+    t->depth++;
+    t->entries++;
+    const uint64_t outer_sp = t->host_sp;
+    recomp_call_on_stack(fn, st, t->host_sp);
+    t->host_sp = outer_sp;
+    t->depth--;
+    if (xmm0_out) *xmm0_out = (uint64_t)st->xmm[0];
+    return st->gpr[G_RAX];
+}
+
 void recomp_hybrid_thread_fini(void) {
     // When the thread ends: entries may still be open (a guest thread left through longjmp).
     HybridThread *t = recomp_hybrid_self;

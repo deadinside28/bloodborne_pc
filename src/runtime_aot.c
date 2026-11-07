@@ -241,6 +241,32 @@ static void report_targets(void) {
     fflush(stdout);
 }
 
+/* BB_AOT_ENTRY=portable: the runtime's calls into the game enter the recompiled function from C
+ * (recomp_hybrid_call_recompiled), as on a host without the x86 stubs; default: its stub. */
+static int portable_entry;
+
+static uint64_t guest_thread_pointer(void) {
+    uint64_t v;
+    if (recomp_hybrid_fs_from_gs) __asm__ volatile("rdgsbase %0" : "=r"(v));
+    else __asm__ volatile("rdfsbase %0" : "=r"(v));
+    return v;
+}
+
+uintptr_t runtime_guest_entry(uintptr_t address);
+
+uint64_t runtime_guest_call(uintptr_t address, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                            uint64_t a4, uint64_t a5) {
+    if (enabled && portable_entry && address - __recomp_slide < image_size) {
+        const RecompFn fn = lookup(address - __recomp_slide);
+        if (fn) {
+            const uint64_t args[6] = { a0, a1, a2, a3, a4, a5 };
+            return recomp_hybrid_call_recompiled(fn, args, NULL, NULL, 0, guest_thread_pointer(), NULL);
+        }
+    }
+    typedef uint64_t (ABI *Six)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    return ((Six)runtime_guest_entry(address))(a0, a1, a2, a3, a4, a5);
+}
+
 uintptr_t runtime_guest_entry(uintptr_t address) {
     if (!enabled || address - __recomp_slide >= image_size) return address;
     const uint64_t stub = stub_for(address - __recomp_slide);
@@ -480,6 +506,15 @@ static uint64_t native_guest_call(BbGuestCallArgs *c) {
 
 static uint64_t aot_guest_call(BbGuestCallArgs *c) {
     RecompState *const cur = site_state;
+    if (!cur && portable_entry) {
+        /* outside recompiled code, entered from C (as without the x86 stubs) */
+        const RecompFn fn = lookup(c->address - __recomp_slide);
+        if (fn) {
+            if (c->original) site_bypass = c->address;
+            return recomp_hybrid_call_recompiled(fn, c->args, c->xmm, c->stack, BB_GUEST_CALL_STACK,
+                                                 guest_thread_pointer(), &c->xmm0_result);
+        }
+    }
     if (!cur) {
         /* outside recompiled code: the native call, through the recompiled function's stub */
         const uint64_t stub = runtime_guest_entry(c->address);
@@ -727,6 +762,10 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     if (&bbport_guest_call_hook) bbport_guest_call_hook = aot_guest_call;
     enabled = 1;
     strict = bb_env_on("BB_AOT_STRICT");
+    {
+        const char *entry = bb_env("BB_AOT_ENTRY");
+        portable_entry = entry && !strcmp(entry, "portable");
+    }
     if (strict && strict_protect(image, size)) {
         printf("AOT strict: cannot change the code's permissions (%s)\n", strerror(errno));
         return -1;
@@ -753,6 +792,11 @@ void runtime_aot_thread_detach(void) {}
 void runtime_aot_describe_fault(void *context) { (void)context; }
 uint64_t runtime_aot_guest_pc(uint64_t host_pc) { (void)host_pc; return 0; }
 uintptr_t runtime_guest_entry(uintptr_t address) { return address; }
+uint64_t runtime_guest_call(uintptr_t address, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                            uint64_t a4, uint64_t a5) {
+    typedef uint64_t (ABI *Six)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    return ((Six)address)(a0, a1, a2, a3, a4, a5);
+}
 int runtime_aot_strict_fault(void *context, void *address) { (void)context; (void)address; return 0; }
 
 #endif

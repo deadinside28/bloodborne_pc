@@ -267,7 +267,7 @@ static ABI int32_t thread_once(int32_t *once,void (ABI *routine)(void)) {
         int32_t state=__atomic_load_n(once,__ATOMIC_ACQUIRE);
         if (state==1) return 0;
         if (state==0 && __atomic_compare_exchange_n(once,&state,2,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {
-            GUEST_FN(void (ABI *)(void), routine)();
+            GUEST_CALL(routine);
             __atomic_store_n(once,1,__ATOMIC_RELEASE);
             return 0;
         }
@@ -311,7 +311,7 @@ void runtime_thread_keys_cleanup(void) {
             void *value=key_values[i];
             if (!value || !keys[i].used || !keys[i].destructor) continue;
             key_values[i]=NULL; any=1;
-            GUEST_FN(KeyDestructor, keys[i].destructor)(value);
+            GUEST_CALL(keys[i].destructor, value);
         }
         if (!any) break;
     }

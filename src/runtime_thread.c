@@ -261,7 +261,7 @@ static void set_host_name(const char *name) {
 }
 static void run_guest(void *p) {
     GuestThread *t=p;
-    if (!setjmp(t->exit_jump)) t->result=GUEST_FN(GuestEntry, t->entry)(t->argument);
+    if (!setjmp(t->exit_jump)) t->result=(void *)(uintptr_t)GUEST_CALL(t->entry, t->argument);
 }
 void runtime_re_watch_thread(void);
 static void *host_start(void *p) {

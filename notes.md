@@ -236,7 +236,17 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    of ten integers (rdi..r9, then the four stack words past the return address), on the host
    stack, as an AArch64 runtime will; host_sp is lowered across the call (a callback into the
    game, e.g. a once routine, entered at the stack top over the live frames: RIP 0 at start).
-   Gameplay with it and BB_AOT_STRICT, sites10: ~1.05G host calls, no fault, same FPS. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   Gameplay with it and BB_AOT_STRICT, sites10: ~1.05G host calls, no fault, same FPS.
+   And the other direction: `runtime_guest_call` / `GUEST_CALL` (src/runtime.h) for every call
+   of the game by the runtime (entry, module inits, threads, atexit, once, key destructors, the
+   malloc counters, bbport_guest_call outside recompiled code); `BB_AOT_ENTRY=portable` enters the
+   recompiled function from C (`recomp_hybrid_call_recompiled`: state filled, guest stack below
+   the innermost entry's or the C frame, frames on the thread's host stack through
+   `recomp_call_on_stack`, x86-64 and AArch64 asm), no stub. fs_base and gs_base both the guest
+   thread pointer (code lifted from bbport's patched bytes reads gs:; only fs_base: a crash
+   loading into gameplay). Both portable and BB_AOT_STRICT: title to gameplay, ~2 min, ~760M
+   host calls, no fault. Desktop driving: drive the game only when the active window is the game
+   (bbkeys' KWin check gets no answer here; keys once went into the terminal). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

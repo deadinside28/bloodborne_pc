@@ -21,7 +21,10 @@
 
 
 // src/runtime_aot.c (bb-probe): weak, the GPU library also loads without it.
-extern "C" __attribute__((weak)) uintptr_t runtime_guest_entry(uintptr_t address);
+extern "C" __attribute__((weak)) std::uint64_t runtime_guest_call(std::uintptr_t address, std::uint64_t a0,
+                                                                  std::uint64_t a1, std::uint64_t a2,
+                                                                  std::uint64_t a3, std::uint64_t a4,
+                                                                  std::uint64_t a5);
 namespace BbHeapSites {
 namespace {
 using u32 = std::uint32_t;
@@ -34,19 +37,18 @@ constexpr u64 LibcBase = ImageBase + 0x56e0000ull;
 constexpr u64 SlotMalloc = 0xba190, SlotFree = 0xba198, SlotCalloc = 0xba1a0,
               SlotRealloc = 0xba1a8, SlotMemalign = 0xba1b0, SlotPosixMemalign = 0xba1b8;
 
-using MallocFn = void* (PS4_SYSV_ABI*)(std::size_t);
-using FreeFn = void (PS4_SYSV_ABI*)(void*);
-using CallocFn = void* (PS4_SYSV_ABI*)(std::size_t, std::size_t);
-using ReallocFn = void* (PS4_SYSV_ABI*)(void*, std::size_t);
-using MemalignFn = void* (PS4_SYSV_ABI*)(std::size_t, std::size_t);
-using PosixMemalignFn = int (PS4_SYSV_ABI*)(void**, std::size_t, std::size_t);
 
-MallocFn orig_malloc;
-FreeFn orig_free;
-CallocFn orig_calloc;
-ReallocFn orig_realloc;
-MemalignFn orig_memalign;
-PosixMemalignFn orig_posix_memalign;
+/// The game's malloc, free, calloc, realloc, memalign and posix_memalign (libc.prx's table), called
+/// as the runtime calls the game (runtime_guest_call: the recompiled code with hybrid execution).
+enum { OrigMalloc, OrigFree, OrigCalloc, OrigRealloc, OrigMemalign, OrigPosixMemalign };
+u64 orig[6]{};
+u64 CallOrig(int which, u64 a, u64 b = 0, u64 c = 0) {
+    if (runtime_guest_call) {
+        return runtime_guest_call(orig[which], a, b, c, 0, 0, 0);
+    }
+    using Fn = u64(PS4_SYSV_ABI*)(u64, u64, u64);
+    return reinterpret_cast<Fn>(orig[which])(a, b, c);
+}
 
 struct Site {
     u64 a = 0, b = 0; ///< return addresses into the game (image offsets); a == 0: empty slot
@@ -165,7 +167,7 @@ void Remove(void* ptr, const u64* frame) {
 }
 
 void* PS4_SYSV_ABI WrapMalloc(std::size_t size) {
-    void* p = orig_malloc(size);
+    void* p = reinterpret_cast<void*>(CallOrig(OrigMalloc, size));
     if (p && (count_allocs.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Add(p, size, static_cast<const u64*>(__builtin_frame_address(0)));
     }
@@ -175,17 +177,17 @@ void PS4_SYSV_ABI WrapFree(void* p) {
     if (p && (count_frees.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Remove(p, static_cast<const u64*>(__builtin_frame_address(0)));
     }
-    orig_free(p);
+    CallOrig(OrigFree, reinterpret_cast<u64>(p));
 }
 void* PS4_SYSV_ABI WrapCalloc(std::size_t count, std::size_t size) {
-    void* p = orig_calloc(count, size);
+    void* p = reinterpret_cast<void*>(CallOrig(OrigCalloc, count, size));
     if (p && (count_allocs.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Add(p, count * size, static_cast<const u64*>(__builtin_frame_address(0)));
     }
     return p;
 }
 void* PS4_SYSV_ABI WrapRealloc(void* old, std::size_t size) {
-    void* p = orig_realloc(old, size);
+    void* p = reinterpret_cast<void*>(CallOrig(OrigRealloc, reinterpret_cast<u64>(old), size));
     if (!old && p) {
         count_allocs.fetch_add(1, std::memory_order_relaxed);
     } else if (old && !p && size == 0) {
@@ -202,14 +204,14 @@ void* PS4_SYSV_ABI WrapRealloc(void* old, std::size_t size) {
     return p;
 }
 void* PS4_SYSV_ABI WrapMemalign(std::size_t alignment, std::size_t size) {
-    void* p = orig_memalign(alignment, size);
+    void* p = reinterpret_cast<void*>(CallOrig(OrigMemalign, alignment, size));
     if (p && (count_allocs.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Add(p, size, static_cast<const u64*>(__builtin_frame_address(0)));
     }
     return p;
 }
 int PS4_SYSV_ABI WrapPosixMemalign(void** out, std::size_t alignment, std::size_t size) {
-    const int result = orig_posix_memalign(out, alignment, size);
+    const int result = int(CallOrig(OrigPosixMemalign, reinterpret_cast<u64>(out), alignment, size));
     if (result == 0 && out && *out &&
         (count_allocs.fetch_add(1, std::memory_order_relaxed), tracking)) {
         Add(*out, size, static_cast<const u64*>(__builtin_frame_address(0)));
@@ -250,16 +252,7 @@ void InstallWrappers(bool counters) {
         allocs.resize(1ull << AllocBits);
         tracking = true;
     }
-    // the game's functions as the runtime enters them (hybrid execution: their recompiled code)
-    const auto entry = [](u64 address) {
-        return runtime_guest_entry ? u64(runtime_guest_entry(address)) : address;
-    };
-    orig_malloc = reinterpret_cast<MallocFn>(entry(targets[0]));
-    orig_free = reinterpret_cast<FreeFn>(entry(targets[1]));
-    orig_calloc = reinterpret_cast<CallocFn>(entry(targets[2]));
-    orig_realloc = reinterpret_cast<ReallocFn>(entry(targets[3]));
-    orig_memalign = reinterpret_cast<MemalignFn>(entry(targets[4]));
-    orig_posix_memalign = reinterpret_cast<PosixMemalignFn>(entry(targets[5]));
+    std::copy(targets, targets + 6, orig);
     __atomic_store_n(&slots[SlotMalloc / 8], reinterpret_cast<u64>(&WrapMalloc), __ATOMIC_SEQ_CST);
     __atomic_store_n(&slots[SlotFree / 8], reinterpret_cast<u64>(&WrapFree), __ATOMIC_SEQ_CST);
     __atomic_store_n(&slots[SlotCalloc / 8], reinterpret_cast<u64>(&WrapCalloc), __ATOMIC_SEQ_CST);
@@ -283,7 +276,7 @@ void InstallCounters() {
 }
 
 bool Counting() {
-    return orig_malloc != nullptr;
+    return orig[OrigMalloc] != 0;
 }
 
 long long LiveAllocations() {

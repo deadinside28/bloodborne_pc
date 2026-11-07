@@ -140,8 +140,8 @@ void runtime_finalize(void *dso) {
         if (!i) { pthread_mutex_unlock(&handler_lock); return; }
         ExitHandler handler = handlers[i-1]; handlers[i-1].active = 0;
         pthread_mutex_unlock(&handler_lock);
-        if (handler.with_arg) GUEST_FN(void (ABI *)(void *), handler.callback.with_arg)(handler.argument);
-        else GUEST_FN(GuestCallback, handler.callback.plain)();
+        if (handler.with_arg) GUEST_CALL(handler.callback.with_arg, handler.argument);
+        else GUEST_CALL(handler.callback.plain);
     }
 }
 static ABI void guest_finalize(void *dso) { runtime_finalize(dso); }

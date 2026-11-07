@@ -84,6 +84,14 @@ int recomp_hybrid_patch(uint64_t entry, RecompFn fn, char *why, uint64_t *stub);
 // `fn` as a call of the original function would, without running any of the original code.
 // The stub's address, or 0 with `why` filled in.
 uint64_t recomp_hybrid_stub(uint64_t near, RecompFn fn, char *why);
+// Calls the recompiled function `fn` from C as a call of the original function would (no stub,
+// no x86 code: the entry a host without it makes): integer arguments rdi..r9, xmm0-7's low 64
+// bits (NULL: zero), `stack_words` stack arguments, the guest's thread pointer; returns rax and
+// (xmm0_out, when given) xmm0's low 64 bits. The guest's stack is below the innermost entry's or
+// this C frame; the function's own frames go on the thread's host stack.
+uint64_t recomp_hybrid_call_recompiled(RecompFn fn, const uint64_t args[6], const uint64_t *xmm,
+                                       const uint64_t *stack, unsigned stack_words, uint64_t fs_base,
+                                       uint64_t *xmm0_out);
 // The dispatcher's fallback for targets that have no recompiled function.
 void recomp_hybrid_call_native(RecompState *st, uint64_t target);
 // A call to a host function (SysV ABI, not guest code): argument and result registers only.
