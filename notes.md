@@ -2,7 +2,7 @@
 
 Handoff for continuing on another machine (next: a gaming PC with an NVIDIA GPU). Branch
 `recompiler` of `gitlab.com/NumNums01/bloodborne_pc` (private), on top of upstream bbport 0.7
-(`github.com/deadinside28/bloodborne_pc`, commit `0fc2921`). Last updated 2026-11-04.
+(`github.com/deadinside28/bloodborne_pc`, commit `0fc2921`). Last updated 2026-11-07.
 
 Longer documents: [docs/ANDROID_ARM64_PORT_PLAN.md](docs/ANDROID_ARM64_PORT_PLAN.md) (the plan,
 with status per phase) and [recompiler/README.md](recompiler/README.md) (the recompiler: status
@@ -175,9 +175,19 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    lifted. Library `recompiler/out/aot/sites6`: 178,934 functions recompiled; gameplay OK, 61
    FPS, no traps. In 2 min of gameplay the only calls into original code are libc's longjmp
    (entry replaced by the runtime: no game code runs) and one call per constructor still
-   original at startup. Left for item 1: the 2,837 constructors without a CFG extent and 69
-   flagged "changed in bbport" (not different in the default dump's first bytes: check the
-   stats/BBSC dumps), getcontext/setcontext (fxsave, segment reads, returns twice), and the
+   original at startup. **2026-11-07:** those 2,837 (no extent) and the 69 "changed in bbport"
+   were both wrong extents of functions with no FDE: a tail jump to an import stub (`jmp
+   [GOT]`, after the game's code) counted as a block, stretching the extent over tens of MB of
+   code bbport does patch (the 69), and the path ran past `__stack_chk_fail`'s stub into the
+   padding (the 2,837: the extent pass had no noreturn test). Fixed in `game.py`
+   `_extra_functions`; all 16,070 now have extents, none overlapping another function. Library
+   `sites7` (`BB_RECOMP_MODE=abi bash recompiler/harness/build_aot.sh EBOOT
+   recompiler/out/aot/sites6/list.txt out/aot/live-plain.bin,out/aot/live-stats.bin,out/aot/live-bbsc.bin
+   sites7`, 582 MiB): **181,840 recompiled, 3 original** (libc's setjmp/longjmp, 1 unsupported
+   instruction at 0x5733cd0). Gameplay OK with BB_FRAME_STATS: in ~3 min the only call into
+   original code is libc's longjmp (1,350, entry replaced); same FPS as unmodified on the same
+   walk (62 outside, ~45 in the first house: the scene, measured both ways). Left for item 1:
+   getcontext/setcontext (fxsave, segment reads, returns twice), 0x5733cd0, and the
    runtime's entries into game code (thread starts, callbacks) made direct calls of recompiled
    code instead of the x86 entry jumps (the step that the AArch64 runtime needs anyway). Not
    yet run with this library: BB_ONLINE=1 BB_BBSC=1. Diagnostics: BB_AOT_SKIP=addr,...,

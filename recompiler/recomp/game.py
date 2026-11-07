@@ -362,6 +362,16 @@ def _startup_tables(img):
     return {v for v in found if v not in img.functions}
 
 
+def _is_import_stub(img, addr):
+    """addr starts with `jmp qword [rip+slot]` (ModuleLifter.import_stub's test)."""
+    data = img.code_window(addr, 16)
+    if not data:
+        return False
+    i = X.Decoder(64, data, ip=addr).decode()
+    return i.mnemonic == X.Mnemonic.JMP and i.op_count == 1 and i.op0_kind == X.OpKind.MEMORY \
+        and i.is_ip_rel_memory_operand and X.MemorySizeInfo(i.memory_size).size == 8
+
+
 def _extra_functions(img, starts, workers, shard_size):
     """Phase 1: direct call targets that have no FDE and are not import stubs (real code the
     unwind table does not describe). They are lifted as functions of unknown extent."""
@@ -376,11 +386,21 @@ def _extra_functions(img, starts, workers, shard_size):
         extra.update(t for t in r["extra_calls"] if img.is_code(t))
     extra |= _startup_tables(img)
     every = frozenset(starts) | frozenset(extra)
+    # calls that never return end a path (__stack_chk_fail's import stub after the epilogue):
+    # without this the path ran on into the padding and 2,837 functions had no extent
+    noreturn = ModuleLifter(img).is_noreturn
     for t in extra:
         # its extent from its control flow (no FDE gives one): the end of its last instruction
         fn = Function(t, 0, f"sub_{t:x}")
         try:
-            c = cfgmod.recover(img, fn, every)
+            c = cfgmod.recover(img, fn, every, noreturn)
+            # a tail jump to an import stub (`jmp [rip+slot]`, after the game's code) is no block
+            # of the function: the lifter jumps through the GOT slot. As a block it stretched the
+            # extent to the stubs (tens of MB, over code bbport patches: 69 such functions)
+            stubs = {b for b in c.blocks if b != t and _is_import_stub(img, b)}
+            if stubs:
+                every = every | stubs
+                c = cfgmod.recover(img, fn, every, noreturn)
             ends = [i.next_ip for b in c.blocks.values() for i in b.insns]
             if ends and not c.errors:
                 fn = Function(t, max(ends), fn.name)
