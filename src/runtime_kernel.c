@@ -5,6 +5,7 @@
  * use FreeBSD numbering; host errno values never reach the guest directly. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "host_context.h"
 #include "../gpu/shim/bb_env.h"
 #include <stdatomic.h>
 #include <stdio.h>
@@ -24,7 +25,6 @@
 #include <sys/random.h>
 #include <sys/resource.h>
 #include <sys/time.h>
-#include <x86intrin.h>
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define PAGE 16384
 
@@ -93,14 +93,17 @@ static ABI uint64_t process_time_counter(void) {
     return (uint64_t)(t.tv_sec-process_start.tv_sec)*1000000000+(uint64_t)(t.tv_nsec-process_start.tv_nsec);
 }
 static ABI uint64_t process_time_frequency(void) { return 1000000000; }
-static ABI uint64_t read_tsc(void) { return __rdtsc(); }
+static ABI uint64_t read_tsc(void) { return runtime_cycles(); }
 static uint64_t tsc_hz;
 static ABI uint64_t tsc_frequency(void) {
+#if defined(__aarch64__)
+    if (!tsc_hz) __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(tsc_hz)); /* the counter's own rate */
+#endif
     if (!tsc_hz) {
         struct timespec a,b,nap={0,20000000};
-        clock_gettime(CLOCK_MONOTONIC,&a); uint64_t t0=__rdtsc();
+        clock_gettime(CLOCK_MONOTONIC,&a); uint64_t t0=runtime_cycles();
         nanosleep(&nap,NULL);
-        clock_gettime(CLOCK_MONOTONIC,&b); uint64_t t1=__rdtsc();
+        clock_gettime(CLOCK_MONOTONIC,&b); uint64_t t1=runtime_cycles();
         uint64_t ns=(uint64_t)(b.tv_sec-a.tv_sec)*1000000000+(uint64_t)(b.tv_nsec-a.tv_nsec);
         tsc_hz=(t1-t0)*1000000000/(ns ? ns : 1);
     }
@@ -434,7 +437,7 @@ static uint64_t gpu_text_lo, gpu_text_hi;
 static void sample_handler(int sig, siginfo_t *info, void *context) {
     (void)sig; (void)info;
     const ucontext_t *uc=(const ucontext_t *)context;
-    uint64_t rip=(uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+    uint64_t rip=(uint64_t)host_context_pc(uc);
     const uint64_t text_lo=0x800000000ull, text_hi=0x800000000ull+0x50d96dcull;
     /* Host code: keyed with its guest caller, the first return address into the game on the stack. */
     uint64_t caller=0;
@@ -442,13 +445,13 @@ static void sample_handler(int sig, siginfo_t *info, void *context) {
         /* Game code: keyed with its caller too, the return address of a frame-pointer frame (a
          * polling loop's wait function is one place; who waits is what matters). */
         uint64_t frame[2]={0};
-        struct iovec local={frame,sizeof(frame)}, remote={(void *)uc->uc_mcontext.gregs[REG_RBP],sizeof(frame)};
+        struct iovec local={frame,sizeof(frame)}, remote={(void *)host_context_fp(uc),sizeof(frame)};
         if (process_vm_readv(getpid(),&local,1,&remote,1,0)==(ssize_t)sizeof(frame) &&
             frame[1]>=text_lo && frame[1]<text_hi)
             caller=frame[1]-text_lo;
     } else {
         uint64_t stack[256]={0};
-        struct iovec local={stack,sizeof(stack)}, remote={(void *)uc->uc_mcontext.gregs[REG_RSP],sizeof(stack)};
+        struct iovec local={stack,sizeof(stack)}, remote={(void *)host_context_sp(uc),sizeof(stack)};
         const ssize_t got=process_vm_readv(getpid(),&local,1,&remote,1,0);
         for (ssize_t i=0;i<got/8;++i) if (stack[i]>=text_lo && stack[i]<text_hi) { caller=stack[i]-text_lo; break; }
         if (!caller && gpu_text_hi && (rip<gpu_text_lo || rip>=gpu_text_hi))

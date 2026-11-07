@@ -11,7 +11,26 @@
 extern __thread sigjmp_buf *runtime_fault_recover;
 /* Restarts the game (in-game settings menu, render resolution change). */
 void runtime_restart(void);
+#if defined(__aarch64__)
+#define ABI /* the host's own convention: recompiled code calls the runtime through C bridges */
+#else
 #define ABI __attribute__((sysv_abi))
+#endif
+/* The CPU's cycle counter (x86-64: the TSC; AArch64: CNTVCT_EL0, at runtime_tsc_frequency). */
+static inline uint64_t runtime_cycles(void) {
+#if defined(__aarch64__)
+    uint64_t v;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+#else
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+#endif
+}
+/* The calling guest thread's thread pointer (its TCB): on AArch64 kept by the runtime for the
+ * recompiled code (x86-64: the GS base, set by arch_prctl). */
+void *runtime_guest_thread_pointer(void);
 /* The clock of the runtime's condition variable deadlines: monotonic on Linux; winpthreads'
  * conditions take only CLOCK_REALTIME deadlines. */
 #ifdef _WIN32

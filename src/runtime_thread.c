@@ -63,8 +63,13 @@ void runtime_set_main_tls(const void *data,uint64_t filesz,uint64_t memsz,uint64
     tls_template=data; tls_filesz=filesz; tls_memsz=memsz; tls_align=align ? align : 16;
 }
 static uint64_t tls_offset(void) { return (tls_memsz+tls_align-1)&~(tls_align-1); }
+static _Thread_local void *guest_thread_pointer;
+void *runtime_guest_thread_pointer(void) { return guest_thread_pointer; }
 static void set_gs(void *base) {
-#ifdef _WIN32
+    guest_thread_pointer=base;
+#if defined(__aarch64__)
+    /* no GS: the recompiled code's fs base is runtime_guest_thread_pointer */
+#elif defined(_WIN32)
     bb_guest_tls_set(base); /* GS is the TEB: the game reads its TLS slot (bbport_posix_c.h) */
 #else
     if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* Minimal x86-64 native loader experiment. Not a PS4 emulator or game port. */
+/* Minimal x86-64 native loader experiment. Not a PS4 emulator or game port. On AArch64 (the
+ * recompiled game, BB_AOT) the same loader maps the image and binds its imports; no x86 code of
+ * the game runs there. */
 #define _GNU_SOURCE
 #include <stdint.h>
 #include "../gpu/shim/bb_env.h"
@@ -8,17 +10,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#if defined(__x86_64__)
 #include <cpuid.h>
+#endif
 #include "runtime.h"
 #include "runtime_trophy.h"
 #include "gpu/bbgpu.h"
-#if !defined(__x86_64__) || !defined(__GNUC__)
-#error This prototype requires x86-64 GCC or Clang (including MinGW).
+#if !(defined(__x86_64__) || defined(__aarch64__)) || !defined(__GNUC__)
+#error This prototype requires x86-64 or AArch64 GCC or Clang (including MinGW).
 #endif
 #include <sys/mman.h>
 #include <unistd.h>
 #include <signal.h>
 #include <ucontext.h>
+#include "host_context.h"
 #include <fcntl.h>
 #include <dlfcn.h>
 #include <execinfo.h>
@@ -100,6 +105,9 @@ static void print_environment(void) {
 static void check_cpu(void) {
     const char *skip = bb_env("BB_SKIP_CPU_CHECK");
     if (skip && !strcmp(skip, "1")) return;
+#if defined(__aarch64__)
+    return; /* the recompiled game's own requirements (LSE, LRCPC) are the library's */
+#else
     unsigned a, b, c, d, leaf1_c = 0, leaf7_b = 0, ext1_c = 0;
     if (__get_cpuid(1, &a, &b, &c, &d)) leaf1_c = c;
     if (__get_cpuid_count(7, 0, &a, &b, &c, &d)) leaf7_b = b;
@@ -127,6 +135,7 @@ static void check_cpu(void) {
             "these instructions directly: it needs an Intel Haswell (4th generation Core, 2013) or "
             "newer, or an AMD Ryzen. BB_SKIP_CPU_CHECK=1 starts anyway.\n", missing);
     exit(1);
+#endif
 }
 static uint64_t read64(FILE *f) {
     unsigned char b[8];
@@ -183,10 +192,17 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
 #ifndef _WIN32
 /* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */
 void enter_on_stack(void *entry, void *arg0, void *arg1, void *top);
+#if defined(__aarch64__)
+__asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
+        " stp x29, x30, [sp, #-16]!\n mov x29, sp\n and x3, x3, #~15\n mov sp, x3\n"
+        " mov x16, x0\n mov x0, x1\n mov x1, x2\n blr x16\n"
+        " mov sp, x29\n ldp x29, x30, [sp], #16\n ret\n");
+#else
 __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
         " push %rbp\n mov %rsp,%rbp\n and $-16,%rcx\n mov %rcx,%rsp\n"
         " mov %rdi,%rax\n mov %rsi,%rdi\n mov %rdx,%rsi\n call *%rax\n"
         " mov %rbp,%rsp\n pop %rbp\n ret\n");
+#endif
 #endif
 static ABI void guest_exit(void) { puts("Runtime: process finalizer callback reached"); }
 /* The game's entry, called on its main stack (enter_on_stack): through runtime_guest_call. */
@@ -238,7 +254,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
     }
     /* The process is terminating: dladdr/snprintf are acceptable here. */
     ucontext_t *uc = context;
-    uintptr_t rip = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+    uintptr_t rip = host_context_pc(uc);
     char line[512];
     Dl_info where;
     if (rip - (uintptr_t)image < 0x10000000)
@@ -272,7 +288,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
         char thread[32] = "?";
         pthread_getname_np(pthread_self(), thread, sizeof(thread));
         int at = snprintf(line, sizeof(line), "  thread %s; calls:", thread);
-        uintptr_t rbp = (uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+        uintptr_t rbp = host_context_fp(uc);
         for (int i = 0; i < 12 && rbp && at < (int)sizeof(line) - 24; ++i) {
             uintptr_t frame[2] = {0, 0};
             struct iovec local = {frame, sizeof(frame)}, remote = {(void *)rbp, sizeof(frame)};
@@ -330,14 +346,15 @@ static void write_hex(char *out, uint64_t v) {
 }
 static void dump_frames(ucontext_t *uc) {
     char line[] = "  tid=0000000000000000 rip=0000000000000000 image-relative=0000000000000000 host-relative=0000000000000000\n";
-    uintptr_t rip=(uintptr_t)uc->uc_mcontext.gregs[REG_RIP], rbp=(uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+    uintptr_t rip=host_context_pc(uc), rbp=host_context_fp(uc);
     uint64_t tid=(uint64_t)gettid();
     /* First argument register: the lock address when a thread waits on a futex. */
     char arg[]="  tid=0000000000000000 rdi=0000000000000000\n";
-    write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)uc->uc_mcontext.gregs[REG_RDI]);
+    write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)host_context_arg0(uc));
     { ssize_t written_=write(2,arg,sizeof(arg)-1); (void)written_; }
     /* All the registers and the top of the stack: what a thread waits for (a lock, a job, an event)
      * is in them; the hang of a game thread is read from here afterwards. */
+#if defined(__x86_64__)
     {
         static const struct { const char *name; int reg; } regs[]={
             {"rax",REG_RAX},{"rbx",REG_RBX},{"rcx",REG_RCX},{"rdx",REG_RDX},{"rsi",REG_RSI},{"rdi",REG_RDI},
@@ -368,7 +385,10 @@ static void dump_frames(ucontext_t *uc) {
                 { ssize_t written_=write(2,m,sizeof(m)-1); (void)written_; }
             }
         }
-        uintptr_t sp=(uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+    }
+#endif
+    {
+        uintptr_t sp=host_context_sp(uc);
         for (int i=0;i<24;++i) {
             uint64_t word=0;
             struct iovec local={&word,sizeof(word)}, remote={(void *)(sp+8*(uintptr_t)i),sizeof(word)};
@@ -721,14 +741,23 @@ int main(int argc, char **argv) {
     protect(data_traps, (import_count + 1) * page_size, 0);
     for (uint64_t i = 0; i < import_count; ++i) {
         unsigned char *t = traps + i * 32;
-        /* SysV: mov edi, index; movabs rax, handler; jmp rax. No fake return values. */
         uint32_t index = (uint32_t)i;
         uintptr_t handler = (uintptr_t)unresolved;
+#if defined(__aarch64__)
+        /* mov x1, x0; movz w0, #lo; movk w0, #hi, lsl 16; ldr x16, handler; br x16; brk; handler */
+        const uint32_t code[6] = { 0xaa0003e1u, 0x52800000u | ((index & 0xffffu) << 5),
+                                   0x72a00000u | ((index >> 16) << 5), 0x58000070u, 0xd61f0200u, 0xd4200000u };
+        memcpy(t, code, sizeof(code));
+        memcpy(t + 24, &handler, 8);
+#else
+        /* SysV: mov edi, index; movabs rax, handler; jmp rax. No fake return values. */
         t[0] = 0x48; t[1] = 0x89; t[2] = 0xfe; /* mov rsi,rdi: preserve arg0 */
         t[3] = 0xbf; memcpy(t + 4, &index, 4);
         t[8] = 0x48; t[9] = 0xb8; memcpy(t + 10, &handler, 8);
         t[18] = 0xff; t[19] = 0xe0;
+#endif
     }
+    __builtin___clear_cache((char *)traps, (char *)traps + import_count * 32);
     /* BB_LIST_UNRESOLVED=1 (porting another game): every import neither the runtime nor a
      * native module provides, once each, before the game runs. */
     unsigned char *listed = bb_env_on("BB_LIST_UNRESOLVED") ? calloc(import_count + 1, 1) : NULL;

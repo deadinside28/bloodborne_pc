@@ -246,7 +246,14 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    thread pointer (code lifted from bbport's patched bytes reads gs:; only fs_base: a crash
    loading into gameplay). Both portable and BB_AOT_STRICT: title to gameplay, ~2 min, ~760M
    host calls, no fault. Desktop driving: drive the game only when the active window is the game
-   (bbkeys' KWin check gets no answer here; keys once went into the terminal). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   (bbkeys' KWin check gets no answer here; keys once went into the terminal).
+   Then `src/` for AArch64: **every runtime file compiles for aarch64-linux-gnu with -Werror**
+   (ABI is empty there; runtime_cycles: CNTVCT_EL0, the TSC frequency CNTFRQ_EL0; the guest
+   thread pointer kept per thread, runtime_guest_thread_pointer, instead of arch_prctl; fault and
+   watchdog reports through src/host_context.h; the unresolved-import trampolines in AArch64
+   code; enter_on_stack in AArch64 asm). Left: recompiler/harness/recomp_hybrid.c is x86-only
+   (it runs original code); AArch64 needs its recompiled-only part (thread state, entries from
+   C, setjmp/longjmp for recompiled code) and runtime_aot.c's AOT mode without the stubs. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
