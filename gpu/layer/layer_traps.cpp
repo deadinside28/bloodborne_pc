@@ -74,8 +74,7 @@ bool LayerTrapHandler(void* context, void* fault_address) {
         // writes there went unseen, its VRAM copy stale for good (another game: exploding vertices
         // everywhere, 2026-10-14).
         LayerUnprotect(block); // the write runs again, now through
-        const auto* g = static_cast<const ucontext_t*>(context)->uc_mcontext.gregs;
-        layer_trap_hits.emplace_back(block, u64(g[REG_RIP]));
+        layer_trap_hits.emplace_back(block, reinterpret_cast<u64>(Common::GetRip(context)));
     }
     layer_trap_faults.fetch_add(1, std::memory_order_relaxed);
     layer_trap_pending.store(true, std::memory_order_release);

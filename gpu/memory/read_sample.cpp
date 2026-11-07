@@ -5,6 +5,7 @@
 // 200 ms, 16 random 64 KiB windows of the ranges that are plain read-write (no trap of another
 // module on them) lose all access for 200 ms; the first access to each is counted as a read or a
 // write, with the code that made it (game offset or host). Each 10 s: the counts and top readers.
+#include "common/signal_context.h"
 #include "shim/bb_env.h"
 #ifndef _WIN32
 
@@ -48,11 +49,10 @@ bool OnFault(void* context, void* fault_address) {
         if (base == 0 || address < base || address >= base + Window) {
             continue;
         }
-        const auto* uc = static_cast<const ucontext_t*>(context);
-        const bool write = (uc->uc_mcontext.gregs[REG_ERR] & 2) != 0;
+        const bool write = Common::IsWriteError(context);
         u32 expected = 0;
         if (slot.result.compare_exchange_strong(expected, write ? 2 : 1)) {
-            slot.rip.store(u64(uc->uc_mcontext.gregs[REG_RIP]), std::memory_order_relaxed);
+            slot.rip.store(reinterpret_cast<u64>(Common::GetRip(context)), std::memory_order_relaxed);
         }
         mprotect(reinterpret_cast<void*>(base), Window, PROT_READ | PROT_WRITE);
         return true;

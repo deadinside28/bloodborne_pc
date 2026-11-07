@@ -219,7 +219,15 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    spin hints only: `common/cpu.h` (Tsc, CpuPause, TscTicks(seconds): fixed cycle counts became
    times). Left in gpu/ for AArch64: code that reads the game's x86 registers from a fault
    context (shim/bbport_write_log.cpp, buffers/buffer_maintain.cpp, hooks.cpp, free_check,
-   fault_sites: §1b, the recompiler's state holds them there) and the Xbyak hook trampolines. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   fault_sites: §1b, the recompiler's state holds them there) and the Xbyak hook trampolines.
+   Then those too: fault code reads pc / sp / fp through `common/signal_context.h`; on AArch64
+   InstallGuestCodeHook and hooks.cpp's Patch only register the guest sites (no trampoline, no
+   int3: the recompiled game runs the handlers), the free check's label trap and the write
+   log's register dump are x86-only. **The GPU library compiles for aarch64-linux-gnu: 291 of
+   296 sources** (the other 5: this PC's OpenSSL headers are configured for x86; a target
+   OpenSSL fixes them). Check: each source's own ninja command through `zig c++ -target
+   aarch64-linux-gnu -fexperimental-library -c` (std::jthread is experimental in zig 0.13's
+   libc++). Not linked or run on AArch64 yet. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

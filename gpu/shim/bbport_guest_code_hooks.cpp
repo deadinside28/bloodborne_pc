@@ -21,7 +21,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "common/arch.h"
+#ifdef ARCH_X86_64
 #include <xbyak/xbyak.h>
+#endif
 #include <Zydis/Zydis.h>
 
 #include "common/decoder.h"
@@ -29,7 +32,9 @@
 namespace Core {
 namespace {
 
+#ifdef ARCH_X86_64
 using namespace Xbyak::util;
+#endif
 
 constexpr std::size_t NearJumpBytes = 5;
 constexpr std::size_t GuestRedZoneBytes = 128;
@@ -39,6 +44,7 @@ constexpr std::int64_t JumpReach = 0x7000'0000; // inside a rel32 jump's 2 GiB
 std::mutex hook_mutex;
 std::set<std::uintptr_t> hooked_sites; // first bytes of installed hooks
 
+#ifdef ARCH_X86_64
 /// An executable area within reach of its code, mapped on first use.
 struct Area {
     std::uintptr_t start = 0;
@@ -69,6 +75,7 @@ Xbyak::CodeGenerator* AreaFor(std::uintptr_t code) {
     areas.push_back({start, std::move(gen)});
     return areas.back().gen.get();
 }
+#endif
 
 bool WholeAndAbsolute(const std::uint8_t* code, std::size_t size) {
     std::size_t offset = 0;
@@ -175,6 +182,21 @@ bool InstallGuestCodeHook(void* address, std::span<const std::uint8_t> expected,
         std::fprintf(stderr, "Guest code hook at %p overlaps another one\n", address);
         return false;
     }
+#ifndef ARCH_X86_64
+    // No x86 code runs here: the recompiled game calls the site's handler (no trampoline, no
+    // patch; the code's bytes stay the original ones the recompiler lifted).
+    if (site_hook_count >= MaxSiteHooks) {
+        return false;
+    }
+    site_hooks[site_hook_count] = {hook, tag, const_cast<std::uint8_t*>(skip_flag)};
+    if (bbport_guest_site_register(begin, expected.data(), std::uint32_t(expected.size()), SiteHandler,
+                                   site_hook_count, "guest code hook") != 0) {
+        return false;
+    }
+    ++site_hook_count;
+    hooked_sites.insert(begin);
+    return true;
+#else
     Xbyak::CodeGenerator* t = AreaFor(begin);
     if (!t) {
         std::fprintf(stderr, "Guest code hook at %p: no trampoline memory in reach\n", address);
@@ -286,6 +308,7 @@ bool InstallGuestCodeHook(void* address, std::span<const std::uint8_t> expected,
     WriteCode(code, patch.data(), patch.size());
     hooked_sites.insert(begin);
     return true;
+#endif
 }
 
 } // namespace Core

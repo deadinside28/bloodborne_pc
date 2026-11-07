@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_free_check.h"
 #include "shim/bb_env.h"
+#include "common/arch.h"
 
 #include <algorithm>
 #include <array>
@@ -689,6 +690,13 @@ int TrapMode() {
     static const int mode = [] {
         const char* env = bb_env("BB_LABEL_TRAP");
         const int m = Enabled() && env && (env[0] == '1' || env[0] == '2') ? env[0] - '0' : 0;
+#ifndef ARCH_X86_64
+        if (m != 0) {
+            // single-stepping a write (the trap flag) and the int3 breakpoints are x86's
+            std::fprintf(stderr, "Free check: BB_LABEL_TRAP needs an x86-64 host\n");
+            return 0;
+        }
+#endif
         if (m != 0) {
             InstallStepTrap();
             if (m == 2 && !InstallFreeHook()) {
@@ -771,6 +779,7 @@ void NoteFenceWritten(u64 label, u64 write_ns) {
     }
 }
 
+#ifdef ARCH_X86_64
 namespace {
 /// Threads single-stepping the write that faulted on a trapped page (TF set): the page is
 /// writable for that one instruction, then read-only again (OnStepTrap). A table instead of
@@ -1095,6 +1104,19 @@ bool OnTrapFault(void* ucontext, u64 address) {
     Emit(line, n, sizeof(line));
     return true;
 }
+
+#else
+// Other hosts: no label trap (TrapMode stays 0).
+namespace {
+void InstallStepTrap() {}
+bool InstallFreeHook() {
+    return false;
+}
+} // namespace
+bool OnTrapFault(void*, u64) {
+    return false;
+}
+#endif
 
 bool OnStaleTrapFault(u64 address) {
     if (TrapMode() != 1) {

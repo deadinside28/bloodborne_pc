@@ -67,6 +67,11 @@ The port changes the game's behaviour by **patching its x86 bytes at runtime**:
   the faulting `REG_RIP` and walk the guest stack through `RBP`/`RSP`.
 
 None of these survive recompilation as written: the bytes they patch are not executed.
+
+**Done (2026-11-07):** hooks are guest sites (`gpu/shim/bbport_guest_sites.h`) with C++ handlers
+that the recompiled code calls; on non-x86 hosts only the sites are registered (no int3, no
+trampolines), the fault statistics read pc/sp/fp through `common/signal_context.h`, and the
+Trap Flag tool (free_check's label trap) is x86-only. The GPU library compiles for aarch64.
 Replacement: **hooks become a recompiler input.** A table (guest address → host function,
 mode: replace / before / after) is applied while lifting, so the hook is a direct call in the
 generated code: no traps, no trampolines, and faster than today. The `int3` handlers that

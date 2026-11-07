@@ -5,6 +5,7 @@
 // heap and the resource loaders' copies. Split out of gpu/shim/bbport_guest_hooks.cpp
 // (2026-10-26); the detour helpers and shared state are in hooks_internal.h.
 
+#include "common/arch.h"
 #include "bbport_map_near.h"
 #include "shim/bb_env.h"
 #include "common/types.h"
@@ -247,6 +248,7 @@ bool InstallCallDetour(u64 offset) {
 struct sigaction previous_action {};
 
 void OnTrap(int sig, siginfo_t* info, void* context) {
+#ifdef ARCH_X86_64
     auto* g = static_cast<ucontext_t*>(context)->uc_mcontext.gregs;
     const u64 rip = u64(g[REG_RIP]) - 1; // past the int3
     // The GX node guard (#162): its site while the detour goes in, and its null case.
@@ -337,6 +339,7 @@ void OnTrap(int sig, siginfo_t* info, void* context) {
         g[REG_RIP] = greg_t(reinterpret_cast<u64>(&LoaderCopy));
         return;
     }
+#endif // other hosts: no int3 in the game's code (Patch writes none), the handlers are sites
     if (previous_action.sa_flags & SA_SIGINFO) {
         if (previous_action.sa_sigaction) {
             previous_action.sa_sigaction(sig, info, context);
@@ -358,6 +361,9 @@ bool Patch(u64 address, const unsigned char* expected, std::size_t size) {
         std::memcmp(bytes, expected, size) != 0) {
         return false;
     }
+#ifndef ARCH_X86_64
+    return true; // the code as it is: the recompiled game runs the site's handler there
+#endif
     const long page_size = sysconf(_SC_PAGESIZE);
     void* page = reinterpret_cast<void*>(address & ~u64(page_size - 1));
     const std::size_t span = (address + size) - reinterpret_cast<u64>(page);

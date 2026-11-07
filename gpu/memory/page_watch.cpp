@@ -280,7 +280,7 @@ struct SignalWatch final : PageWatch::Impl {
 
 bool PageWatch::Impl::OnFault(void* context, void* fault_address) {
     const auto address = reinterpret_cast<VAddr>(fault_address);
-    const u64 rip = u64(static_cast<const ucontext_t*>(context)->uc_mcontext.gregs[REG_RIP]);
+    const u64 rip = reinterpret_cast<u64>(Common::GetRip(context));
     FaultSites::Note(context, address);
     // The draw recording thread handles its faults inline too.
     const bool gpu_thread = rasterizer->IsGpuSideThread();

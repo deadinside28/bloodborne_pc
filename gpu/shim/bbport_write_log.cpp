@@ -114,6 +114,10 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
 
 extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     using namespace BbWriteLog;
+#if !defined(__x86_64__)
+    (void)ucontext; // the game's x86 registers are the recompiled code's state there
+    return;
+#else
     const auto* uc = static_cast<const ucontext_t*>(ucontext);
     const auto* g = uc->uc_mcontext.gregs;
     BbFreeCheck::DumpAtFault(std::uint64_t(g[REG_RAX]), std::uint64_t(g[REG_R14]));
@@ -185,4 +189,5 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
         }
     }
     std::fprintf(stderr, "Write log: %llu writes logged\n", (unsigned long long)n);
+#endif
 }

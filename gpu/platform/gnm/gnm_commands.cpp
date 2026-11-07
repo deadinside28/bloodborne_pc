@@ -6,6 +6,7 @@
 // left as they are). The port is a base PS4: no PS4 Pro (Neo) layouts.
 
 #include <cstring>
+#include <span>
 
 #include "bbport_gnm_hooks.h"
 #include "common/assert.h"

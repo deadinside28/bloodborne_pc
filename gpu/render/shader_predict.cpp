@@ -5,6 +5,7 @@
 // shader input prediction (PredictTest), another player's cache metadata merged into a recipe
 // pack (MergeMetas), packs merged (MergePacks) and the metadata reconstruction test. Split out of
 // shader_rebuild.cpp (2026-10-26); the helpers it shares with it are in shader_rebuild_internal.h.
+#include "common/signal_context.h"
 #include "render/shader_rebuild.h"
 #include "shim/bb_env.h"
 
@@ -65,7 +66,7 @@ sigjmp_buf* predict_recover = nullptr;
 u64 predict_fault_addr = 0, predict_fault_rip = 0;
 void PredictSigaction(int sig, siginfo_t* info, void* context) {
     predict_fault_addr = reinterpret_cast<u64>(info->si_addr);
-    predict_fault_rip = u64(static_cast<ucontext_t*>(context)->uc_mcontext.gregs[REG_RIP]);
+    predict_fault_rip = reinterpret_cast<u64>(Common::GetRip(context));
     if (predict_recover) {
         siglongjmp(*predict_recover, sig);
     }

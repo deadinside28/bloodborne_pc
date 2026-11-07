@@ -19,6 +19,24 @@ inline void* GetRip(void* context) {
 #endif
 }
 
+/// The stack pointer.
+inline u64 GetSp(void* context) {
+#if defined(__aarch64__)
+    return static_cast<ucontext_t*>(context)->uc_mcontext.sp;
+#else
+    return u64(static_cast<ucontext_t*>(context)->uc_mcontext.gregs[REG_RSP]);
+#endif
+}
+
+/// The frame pointer (x29 / rbp).
+inline u64 GetFramePointer(void* context) {
+#if defined(__aarch64__)
+    return static_cast<ucontext_t*>(context)->uc_mcontext.regs[29];
+#else
+    return u64(static_cast<ucontext_t*>(context)->uc_mcontext.gregs[REG_RBP]);
+#endif
+}
+
 /// The fault was a write.
 inline bool IsWriteError(void* context) {
 #if defined(__aarch64__)

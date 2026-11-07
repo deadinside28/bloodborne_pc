@@ -116,22 +116,21 @@ void ReportImages() {
 } // namespace
 
 void Note(void* context, VAddr address) {
-    const auto* regs = static_cast<const ucontext_t*>(context)->uc_mcontext.gregs;
     current_key = 0;
-    const u64 rip = u64(regs[REG_RIP]);
+    const u64 rip = reinterpret_cast<u64>(Common::GetRip(context));
     const bool guest = InGuestImage(rip);
     u64 caller = 0;
     if (guest) {
         // [rbp + 8] when the guest code keeps frames (its memcpy-like leaves do not).
         u64 frame[2] = {};
-        if (ReadOwn(frame, u64(regs[REG_RBP]), sizeof(frame)) && InGuestImage(frame[1])) {
+        if (ReadOwn(frame, Common::GetFramePointer(context), sizeof(frame)) && InGuestImage(frame[1])) {
             caller = frame[1];
         }
     } else {
         // Host code (a libc import run natively, the runtime): the first guest return address on
         // the stack is its guest caller.
         std::array<u64, 64> stack{};
-        if (ReadOwn(stack.data(), u64(regs[REG_RSP]), sizeof(stack))) {
+        if (ReadOwn(stack.data(), Common::GetSp(context), sizeof(stack))) {
             const auto it = std::find_if(stack.begin(), stack.end(), InGuestImage);
             caller = it != stack.end() ? *it : 0;
         }
