@@ -263,8 +263,15 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    guest target without recompiled code stops the game (aot_miss); rdtsc is runtime_cycles;
    cpuid answers a fixed Jaguar table (AuthenticAMD, family 16h, SSE-SSE4.2, AVX, F16C, POPCNT,
    MOVBE, BMI1, LZCNT); the thread pointer is runtime_guest_thread_pointer; x87 through the
-   emulator. Compiles for aarch64 with -Werror (the whole runtime, x87 emulator included). Next:
-   the game library built for AArch64 against it, then a first run (CPU-only, QEMU). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   emulator. Compiles for aarch64 with -Werror (the whole runtime, x87 emulator included). Then
+   the game library for AArch64: `BB_AOT_TARGET=aarch64 BB_RECOMP_MODE=abi BB_RECOMP_JOBS=8 bash
+   recompiler/harness/build_aot.sh EBOOT recompiler/out/aot/sites6/list.txt <3 dumps> sites10`
+   -> `recompiler/out/aot/sites10-aarch64/libbbaot.so`: 181,843 functions, 352 MiB, ~20 min; it
+   imports only the AArch64 runtime's entry points (__recomp_dispatch, _jump, _guest_site, _trap,
+   _setjmp, _x87, _x87_insn, _cpuid, _rdtsc, __recomp_slide). Next: a first run. No AArch64
+   machine here: an AArch64 bb-probe in CPU-only mode (the GPU library and SDL stubbed) under
+   qemu-aarch64 with an AArch64 glibc sysroot; it would run the game's startup up to its first
+   graphics call. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

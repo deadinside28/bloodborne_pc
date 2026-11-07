@@ -7,7 +7,9 @@
 #     of their own (BB_FRAME_STATS: the GPU range collector, 0x26aa860), and bbport refuses a
 #     library when any of its functions differs from the code it was lifted from.
 #   -> recompiler/out/aot/NAME/libbbaot.so; run with BB_AOT=<that path> bash run.sh
-# Env: BB_RECOMP_MODE=default (whole register file at calls, the default) | abi; BB_RECOMP_VOLATILE=0.
+# Env: BB_RECOMP_MODE=default (whole register file at calls, the default) | abi; BB_RECOMP_VOLATILE=0;
+# BB_AOT_TARGET=aarch64: the library for an AArch64 host (the recompiled game alone: x86 memory
+# ordering, --tso, instead of --volatile; linked with zig cc), in NAME-aarch64.
 # Derived from your game dump: it stays under recompiler/out, never commit it.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "$0")" && pwd)
@@ -16,12 +18,18 @@ py=${BB_RECOMP_PY:-$(cd "$root/.." && pwd)/.venv-recomp/bin/python}
 eboot=$(readlink -f "$1"); list=$(readlink -f "$2"); name=${4:-$(basename "$2" .txt)}
 live=(); IFS=, read -r -a dumps <<< "$3"
 for d in "${dumps[@]}"; do live+=(--live "$(readlink -f "$d")"); done
+target=${BB_AOT_TARGET:-x86_64}
+[[ $target == aarch64 ]] && name=$name-aarch64
 dir=${BB_RECOMP_OUT:-$root/out}/aot/$name
 lf=(); [[ ${BB_RECOMP_MODE:-default} == abi ]] && lf=(--abi)
 # Guest memory accesses are volatile: the x86 hardware keeps their order, and LLVM can no longer
 # drop or hoist them (a loop waiting on a flag another thread sets must keep reading it; without
 # this the game hung at its first frames with the 200 hottest functions). BB_RECOMP_VOLATILE=0: off.
-[[ ${BB_RECOMP_VOLATILE:-1} == 1 ]] && lf+=(--volatile)
+if [[ $target == aarch64 ]]; then
+    lf+=(--tso)  # nothing original runs beside it; ordering for the weaker memory model
+elif [[ ${BB_RECOMP_VOLATILE:-1} == 1 ]]; then
+    lf+=(--volatile)
+fi
 # The game's system modules (libc.prx, libSceFios2.prx) as run.sh links them (out/link.json):
 # their functions can be listed too. BB_AOT_LINK=none: the executable alone.
 link=${BB_AOT_LINK:-$(cd "$root/.." && pwd)/out/link.json}
@@ -39,8 +47,25 @@ jobs=${BB_RECOMP_JOBS:-$(( $(nproc) < 8 ? $(nproc) : 8 ))}
 # The IR goes once compiled and the objects once linked (the whole game: ~10 GB of IR, ~3 GB of
 # objects); BB_AOT_KEEP_IR=1 keeps both.
 keep=${BB_AOT_KEEP_IR:-0}
-ls "$dir"/part-*.ll "$dir"/table.ll | xargs -P "$jobs" -I{} sh -c \
-    'clang -O2 -fPIC --target=x86_64-linux-gnu -march=x86-64-v2 -c -Wno-override-module "$1" -o "${1%.ll}.o" && { [ "$2" = 1 ] || rm -f "$1"; }' _ {} "$keep"
-clang -shared -o "$dir/libbbaot.so" "$dir"/*.o
+if [[ $target == aarch64 ]]; then
+    zig=${BB_ZIG:-$HOME/.local/opt/zig/zig}
+    # LLVM 23.1's AArch64 SelectionDAG crashes on a store it merges itself (build_game.sh): such a
+    # shard is retried with GlobalISel, then -mstrict-align.
+    compile_a64() {
+        ll=$1; o=${ll%.ll}.o; f=(-O2 -fPIC --target=aarch64-linux-gnu -march=armv8.4-a+rcpc -c -Wno-override-module)
+        clang "${f[@]}" "$ll" -o "$o" 2> "$o.err" ||
+            { grep -q 'Cannot select' "$o.err" && clang "${f[@]}" -fglobal-isel -mllvm -global-isel-abort=1 "$ll" -o "$o" 2> "$o.err"; } ||
+            { grep -q 'Cannot select' "$o.err" && clang "${f[@]}" -mstrict-align "$ll" -o "$o" 2> "$o.err"; } ||
+            { echo "FAILED $(basename "$ll")"; return 1; }
+        rm -f "$o.err"; [ "$2" = 1 ] || rm -f "$ll"
+    }
+    export -f compile_a64
+    ls "$dir"/part-*.ll "$dir"/table.ll | xargs -P "$jobs" -I{} bash -c 'compile_a64 "$@"' _ {} "$keep"
+    "$zig" cc -target aarch64-linux-gnu -shared -o "$dir/libbbaot.so" "$dir"/*.o
+else
+    ls "$dir"/part-*.ll "$dir"/table.ll | xargs -P "$jobs" -I{} sh -c \
+        'clang -O2 -fPIC --target=x86_64-linux-gnu -march=x86-64-v2 -c -Wno-override-module "$1" -o "${1%.ll}.o" && { [ "$2" = 1 ] || rm -f "$1"; }' _ {} "$keep"
+    clang -shared -o "$dir/libbbaot.so" "$dir"/*.o
+fi
 [[ $keep == 1 ]] || rm -f "$dir"/*.o
 echo "$dir/libbbaot.so: $(( $(stat -c %s "$dir/libbbaot.so") / 1024 )) KiB"
