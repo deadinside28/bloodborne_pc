@@ -49,8 +49,32 @@ static const RecompEntry *table;
 static uint64_t table_size;
 static uint64_t image_size;  /* the game's image: [__recomp_slide, +image_size) is guest code and data */
 /* Calls into the runtime take recomp_hybrid_call_host (argument and result registers only);
- * BB_AOT_HOST_CALLS=full: the whole register file, as calls into the game's own code. */
+ * BB_AOT_HOST_CALLS=full: the whole register file, as calls into the game's own code;
+ * =portable: portable_call_host, the C call an AArch64 runtime makes. */
 static int host_calls_light = 1;
+static int host_calls_portable;
+
+/* A call of the runtime's function `target` with the game's arguments, as a C call: every
+ * import takes integers and pointers only, at most 10, and returns one or nothing
+ * (scripts/import_signatures.py lists them from the debug info), so the six argument registers
+ * and the four words past the return address on the guest's stack are passed as ten integers:
+ * the host's own calling convention places them (on AArch64 the first eight in x0-x7), and a
+ * callee taking fewer ignores the rest. It runs on this host stack, not the guest's. */
+static void portable_call_host(RecompState *st, uint64_t target) {
+    typedef uint64_t (*Ten)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                            uint64_t, uint64_t);
+    const uint64_t *sp = (const uint64_t *)(uintptr_t)st->gpr[G_RSP];  /* [0]: the return address */
+    /* The function may enter the game again (once routines, callbacks: runtime_guest_entry's
+     * stub), and an entry starts its frames at the thread's host_sp: below this frame meanwhile,
+     * not over it (the host stack top, where this call itself runs). */
+    HybridThread *const t = recomp_hybrid_self;
+    const uint64_t outer = t->host_sp;
+    t->host_sp = ((uint64_t)(uintptr_t)__builtin_frame_address(0) - 512) & ~(uint64_t)15;
+    st->gpr[G_RAX] = ((Ten)(uintptr_t)target)(st->gpr[G_RDI], st->gpr[G_RSI], st->gpr[G_RDX], st->gpr[G_RCX],
+                                              st->gpr[G_R8], st->gpr[G_R9], sp[1], sp[2], sp[3], sp[4]);
+    t->host_sp = outer;
+    st->gpr[G_RSP] += 8;  /* the return address popped, as the callee's `ret` would */
+}
 static int enabled;
 
 /* Link address -> recompiled function: open addressing, at most half full (every call of
@@ -312,6 +336,11 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
     DispatchEvent *e = note(st, target, (uint64_t)(uintptr_t)__builtin_return_address(0), EV_CALL);
     if (target - __recomp_slide >= image_size) {  /* bbport's runtime (an import), not the game */
         recomp_hybrid_self->host_calls++;
+        if (host_calls_portable) {
+            portable_call_host(st, target);
+            if (e->target == target) e->done_rsp = st->gpr[G_RSP];
+            return;
+        }
         if (host_calls_light) {
             recomp_hybrid_call_host(st, target);
             if (e->target == target) e->done_rsp = st->gpr[G_RSP];
@@ -329,9 +358,10 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
 void __recomp_dispatch_jump(RecompState *st, uint64_t target) {
     const RecompFn fn = lookup(target - __recomp_slide);
     if (fn) { fn(st); return; }
-    if (target - __recomp_slide >= image_size && host_calls_light) {
+    if (target - __recomp_slide >= image_size && (host_calls_light || host_calls_portable)) {
         recomp_hybrid_self->host_calls++;
-        recomp_hybrid_call_host(st, target);
+        if (host_calls_portable) portable_call_host(st, target);
+        else recomp_hybrid_call_host(st, target);
         return;
     }
     note(st, target, (uint64_t)(uintptr_t)__builtin_return_address(0), EV_JUMP);
@@ -649,6 +679,7 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     const uint64_t n_nopatch = nopatch && nopatch_count ? *nopatch_count : 0;
     const char *host_calls = bb_env("BB_AOT_HOST_CALLS");
     host_calls_light = !(host_calls && !strcmp(host_calls, "full"));
+    host_calls_portable = host_calls && !strcmp(host_calls, "portable");
     const char *targets = bb_env("BB_AOT_TARGETS");
     sample_targets = targets && !strcmp(targets, "all") ? 2 : bb_env_on("BB_AOT_TARGETS");
     recomp_hybrid_fs_from_gs = 1;

@@ -729,12 +729,28 @@ int main(int argc, char **argv) {
      * native module provides, once each, before the game runs. */
     unsigned char *listed = bb_env_on("BB_LIST_UNRESOLVED") ? calloc(import_count + 1, 1) : NULL;
     uint64_t unresolved_count = 0;
+    /* BB_IMPORT_DUMP=path: each function import the runtime provides (name, host address, once):
+     * scripts/import_signatures.py finds their C signatures in the debug info (the bridges an
+     * AArch64 runtime calls them through). */
+    FILE *import_dump = NULL;
+    unsigned char *dumped = NULL;
+    if (bb_env("BB_IMPORT_DUMP") && *bb_env("BB_IMPORT_DUMP")) {
+        import_dump = fopen(bb_env("BB_IMPORT_DUMP"), "w");
+        dumped = calloc(import_count + 1, 1);
+    }
     for (uint64_t i = 0; i < nr; ++i) {
         uintptr_t value = relocs[i].kind == 2 ? (uintptr_t)(data_traps + page_size * relocs[i].value + relocs[i].addend)
                         : relocs[i].kind == 1 ? (uintptr_t)(traps + 32 * relocs[i].value)
                         : (uintptr_t)image + relocs[i].value;
         if (relocs[i].kind) {
             uintptr_t resolved = runtime_resolve(names[relocs[i].value], relocs[i].kind == 2);
+            if (resolved && import_dump && dumped && relocs[i].kind == 1 && !dumped[relocs[i].value]) {
+                dumped[relocs[i].value] = 1;
+                Dl_info where;
+                const int known = dladdr((void *)resolved, &where) && where.dli_fname;
+                fprintf(import_dump, "%s %#" PRIxPTR " %s %#" PRIxPTR "\n", names[relocs[i].value], resolved,
+                        known ? where.dli_fname : "?", known ? resolved - (uintptr_t)where.dli_fbase : resolved);
+            }
             if (resolved) value = resolved + relocs[i].addend;
             else if (native_libc && bindings[relocs[i].value]) {
                 uint64_t address=bindings[relocs[i].value];
@@ -753,6 +769,11 @@ int main(int argc, char **argv) {
         printf("Unresolved imports: %" PRIu64 "\n", unresolved_count);
         free(listed);
     }
+    if (import_dump) {
+        fclose(import_dump);
+        printf("Imports: the runtime's functions written to %s\n", bb_env("BB_IMPORT_DUMP"));
+    }
+    free(dumped);
     runtime_net_image_mapped(image, size); /* online modules that read the original code */
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
     if (!cpu_only) bbgpu_patch_image(image, size);

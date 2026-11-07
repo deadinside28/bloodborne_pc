@@ -227,7 +227,16 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    296 sources** (the other 5: this PC's OpenSSL headers are configured for x86; a target
    OpenSSL fixes them). Check: each source's own ninja command through `zig c++ -target
    aarch64-linux-gnu -fexperimental-library -c` (std::jthread is experimental in zig 0.13's
-   libc++). Not linked or run on AArch64 yet. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   libc++). Not linked or run on AArch64 yet.
+   Then the host-call bridge: `BB_IMPORT_DUMP` lists the 532 function imports the runtime
+   provides; `scripts/import_signatures.py` reads their C signatures from the debug info (symbol
+   at the address, then the DIE by name: GCC folds identical stubs, anonymous-namespace C++
+   functions have only DW_AT_name): **all integers/pointers, none variadic, none with floats, at
+   most 10 arguments** (job_run). So `BB_AOT_HOST_CALLS=portable` calls each one as a C function
+   of ten integers (rdi..r9, then the four stack words past the return address), on the host
+   stack, as an AArch64 runtime will; host_sp is lowered across the call (a callback into the
+   game, e.g. a once routine, entered at the stack top over the live frames: RIP 0 at start).
+   Gameplay with it and BB_AOT_STRICT, sites10: ~1.05G host calls, no fault, same FPS. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
