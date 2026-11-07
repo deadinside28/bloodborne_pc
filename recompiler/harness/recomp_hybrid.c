@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Hybrid execution (see recomp_hybrid.h): per-thread state and entry patches. x86-64 only.
+// Hybrid execution (see recomp_hybrid.h): per-thread state and entry patches. The calls into
+// original code and the entry patches are x86-64's; the per-thread state, entries from C and
+// setjmp/longjmp for recompiled code also serve an AArch64 host (the recompiled game alone).
 #define _GNU_SOURCE
 #include "recomp_hybrid.h"
 
@@ -12,19 +14,37 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#if !defined(__x86_64__)
-#error "hybrid execution runs original x86-64 code: x86-64 hosts only"
+#if !defined(__x86_64__) && !defined(__aarch64__)
+#error "x86-64 or AArch64 hosts"
 #endif
 
 __thread HybridThread *recomp_hybrid_self __attribute__((tls_model("initial-exec")));
+int recomp_hybrid_fs_from_gs;
+extern void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
+extern void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);
+#if defined(__x86_64__)
 // recomp_hybrid_jump_native's target: addressed fs-relative by the thunk (local-exec: the
 // runtime is linked into the executable).
 __thread uint64_t recomp_hybrid_jump_target __attribute__((tls_model("local-exec"), used));
-extern void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
-int recomp_hybrid_fs_from_gs;
-
 void recomp_hybrid_enter(void);  // recomp_hybrid_x86.S
-extern void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);
+#endif
+
+// MXCSR as recompiled code sees it: the hardware's on x86-64; elsewhere the default (rounding
+// and exception masks are not applied to recompiled float code yet: recompiler/README.md).
+static uint32_t host_mxcsr(void) {
+#if defined(__x86_64__)
+    return __builtin_ia32_stmxcsr();
+#else
+    return 0x1f80;
+#endif
+}
+static void set_host_mxcsr(uint32_t v) {
+#if defined(__x86_64__)
+    __builtin_ia32_ldmxcsr(v);
+#else
+    (void)v;
+#endif
+}
 
 _Static_assert(sizeof(RecompState) == 672, "RecompState layout (recomp_hybrid_x86.S)");
 _Static_assert(__builtin_offsetof(HybridThread, native_frame) == 32, "HybridThread layout");
@@ -128,8 +148,17 @@ uint64_t recomp_hybrid_call_recompiled(RecompFn fn, const uint64_t args[6], cons
     st->mxcsr = 0x1f80;
     t->depth++;
     t->entries++;
+    // The function's frames: at the thread's host_sp, or below this C frame when it is itself on
+    // the host stack (a host function called by recompiled code entering the game again; the
+    // host-call bridge lowers host_sp too, but any C caller is covered here).
     const uint64_t outer_sp = t->host_sp;
-    recomp_call_on_stack(fn, st, t->host_sp);
+    uint64_t top = t->host_sp;
+    const uint64_t here = (uint64_t)(uintptr_t)__builtin_frame_address(0);
+    if (here > (uint64_t)(uintptr_t)t->stack && here <= (uint64_t)(uintptr_t)t->stack + t->stack_size &&
+        here - 512 < top)
+        top = (here - 512) & ~(uint64_t)15;
+    t->host_sp = top;
+    recomp_call_on_stack(fn, st, top);
     t->host_sp = outer_sp;
     t->depth--;
     if (xmm0_out) *xmm0_out = (uint64_t)st->xmm[0];
@@ -156,6 +185,7 @@ void recomp_hybrid_thread_fini(void) {
     free(t);
 }
 
+#if defined(__x86_64__)
 // Recompiled code runs only inside an entry, so the thread's state exists here.
 static void call_native(RecompState *st, uint64_t target) {
     recomp_hybrid_self->native_calls++;
@@ -166,6 +196,7 @@ static void jump_native(RecompState *st, uint64_t target) {
     recomp_hybrid_self->native_jumps++;
     recomp_hybrid_jump_native(st, target);
 }
+#endif
 
 // ---- setjmp / longjmp ------------------------------------------------------------------------
 
@@ -184,7 +215,7 @@ HybridJmp *recomp_hybrid_setjmp_record(RecompState *st) {
     env[6] = st->gpr[G_R14];
     env[7] = st->gpr[G_R15];
     ((uint32_t *)env)[16] = 0x037f;  // x87 control word: the default (only libc uses x87)
-    ((uint32_t *)env)[17] = __builtin_ia32_stmxcsr();
+    ((uint32_t *)env)[17] = host_mxcsr();
     st->gpr[G_RSP] = rsp + 8;  // setjmp's ret
     if (!t->jmps) t->jmps = calloc(JMP_RECORDS, sizeof(HybridJmp));
     HybridJmp *j = NULL;
@@ -202,7 +233,7 @@ void recomp_hybrid_longjmp(RecompState *st) {
     HybridThread *t = recomp_hybrid_self;
     const uint64_t *env = (const uint64_t *)(uintptr_t)st->gpr[G_RDI];
     const uint64_t val = st->gpr[G_RSI] ? st->gpr[G_RSI] : 1;
-    const uint32_t mxcsr = (((const uint32_t *)env)[17] & ~0x3fu) | (__builtin_ia32_stmxcsr() & 0x3fu);
+    const uint32_t mxcsr = (((const uint32_t *)env)[17] & ~0x3fu) | (host_mxcsr() & 0x3fu);
     for (int i = 0; t->jmps && i < JMP_RECORDS; ++i) {
         const HybridJmp *j = &t->jmps[i];
         if (j->env != (uint64_t)(uintptr_t)env || j->guest_rsp != env[2] || j->guest_ret != env[0]) continue;
@@ -218,7 +249,7 @@ void recomp_hybrid_longjmp(RecompState *st) {
         s->gpr[G_RSP] = env[2] + 8;
         s->gpr[G_RAX] = val;
         s->mxcsr = mxcsr;
-        __builtin_ia32_ldmxcsr(mxcsr);
+        set_host_mxcsr(mxcsr);
         t->depth = j->depth;
         t->native_frame = j->native_frame;
         t->host_sp = j->host_sp;
@@ -238,6 +269,31 @@ void recomp_hybrid_longjmp(RecompState *st) {
     st->gpr[G_RSP] = env[2] + 8;
 }
 
+#if defined(__aarch64__)
+// __recomp_setjmp (returns twice) and its resume: the host's callee-saved registers (x19-x28,
+// x29, d8-d15) in HybridJmp.saved, as recomp_hybrid_x86.S keeps rbx, rbp, r12-r15 there.
+__asm__(".text\n.globl __recomp_setjmp\n.type __recomp_setjmp,%function\n__recomp_setjmp:\n"
+        "  stp x29, x30, [sp, #-32]!\n  str x0, [sp, #16]\n  mov x29, sp\n"
+        "  bl recomp_hybrid_setjmp_record\n"
+        "  ldr x1, [sp, #16]\n  ldp x29, x30, [sp], #32\n"
+        "  str x30, [x0]\n  mov x2, sp\n  str x2, [x0, #8]\n"
+        "  stp x19, x20, [x0, #16]\n  stp x21, x22, [x0, #32]\n  stp x23, x24, [x0, #48]\n"
+        "  stp x25, x26, [x0, #64]\n  stp x27, x28, [x0, #80]\n  str x29, [x0, #96]\n"
+        "  stp d8, d9, [x0, #104]\n  stp d10, d11, [x0, #120]\n  stp d12, d13, [x0, #136]\n"
+        "  stp d14, d15, [x0, #152]\n"
+        "  str xzr, [x1]\n"  // the guest's rax: setjmp returns 0
+        "  ret\n.size __recomp_setjmp, .-__recomp_setjmp\n"
+        ".globl recomp_hybrid_longjmp_resume\n.type recomp_hybrid_longjmp_resume,%function\n"
+        "recomp_hybrid_longjmp_resume:\n"
+        "  ldp x19, x20, [x0, #16]\n  ldp x21, x22, [x0, #32]\n  ldp x23, x24, [x0, #48]\n"
+        "  ldp x25, x26, [x0, #64]\n  ldp x27, x28, [x0, #80]\n  ldr x29, [x0, #96]\n"
+        "  ldp d8, d9, [x0, #104]\n  ldp d10, d11, [x0, #120]\n  ldp d12, d13, [x0, #136]\n"
+        "  ldp d14, d15, [x0, #152]\n"
+        "  ldr x1, [x0, #8]\n  mov sp, x1\n  ldr x30, [x0]\n  ret\n"
+        ".size recomp_hybrid_longjmp_resume, .-recomp_hybrid_longjmp_resume\n");
+_Static_assert(__builtin_offsetof(HybridJmp, saved) == 16 && sizeof(((HybridJmp *)0)->saved) >= 160,
+               "HybridJmp layout (the asm above)");
+#else
 void recomp_hybrid_enable(void) {
     recomp_dispatch_fallback = call_native;
     recomp_dispatch_jump_fallback = jump_native;
@@ -336,3 +392,4 @@ out:
     pthread_mutex_unlock(&patch_lock);
     return rc;
 }
+#endif

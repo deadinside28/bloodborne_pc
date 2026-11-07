@@ -253,7 +253,14 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    watchdog reports through src/host_context.h; the unresolved-import trampolines in AArch64
    code; enter_on_stack in AArch64 asm). Left: recompiler/harness/recomp_hybrid.c is x86-only
    (it runs original code); AArch64 needs its recompiled-only part (thread state, entries from
-   C, setjmp/longjmp for recompiled code) and runtime_aot.c's AOT mode without the stubs. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   C, setjmp/longjmp for recompiled code) and runtime_aot.c's AOT mode without the stubs.
+   Then that part: recomp_hybrid.c builds for AArch64 too (calls into original code and the entry
+   patches stay x86's; __recomp_setjmp / recomp_hybrid_longjmp_resume in AArch64 asm, x19-x28,
+   x29, d8-d15 in HybridJmp.saved); an entry made from C code already on the host stack starts
+   below it. harness/portable_test.c (setjmp, longjmp from the same and from a nested entry made
+   from C): passes on x86-64 and on AArch64 under QEMU, in run.sh. Next: runtime_aot.c's AOT
+   mode for AArch64 (no stubs, no patching; dispatch, host calls and entries the portable ones),
+   then the game library built for AArch64 and linked. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

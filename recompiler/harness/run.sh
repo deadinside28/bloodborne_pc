@@ -32,6 +32,14 @@ if [[ $(uname -m) == x86_64 && -z ${1:-} ]]; then
     cc -O2 -o "$out/x87_fuzz" "$here/x87_fuzz.c"
     printf '%-18s ' "x87 emulator"
     "$out/x87_fuzz" ${BB_X87_FUZZ:-2000} | tail -1 || { status=1; grep '^FAIL' <("$out/x87_fuzz" 200) | head -10; }
+    # The runtime parts a host without the game's x86 code uses (entries from C, setjmp/longjmp
+    # for recompiled code): here, and as AArch64 under QEMU.
+    cc -O1 -I"$here" -o "$out/portable_test" "$here/portable_test.c" "$here/recomp_hybrid.c" "$out/hybrid_x86.o" -lpthread
+    printf '%-18s ' "portable (x86-64)"; "$out/portable_test" || status=1
+    if (( arm )); then
+        arm_cc -I"$here" -o "$out/portable_test.a64" "$here/portable_test.c" "$here/recomp_hybrid.c"
+        printf '%-18s ' "portable (aarch64)"; "$qemu" "$out/portable_test.a64" || status=1
+    fi
 fi
 for v in $variants; do
     march=btver2; [[ $v == *:* ]] && march=${v#*:}

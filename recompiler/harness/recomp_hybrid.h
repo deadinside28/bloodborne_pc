@@ -47,7 +47,8 @@ typedef struct HybridThread {
 typedef struct HybridJmp {
     uint64_t host_ret;      // 0: the return address into the recompiled code
     uint64_t host_rsp;      // 8: the host rsp after that return
-    uint64_t rbx, rbp, r12, r13, r14, r15;  // 16..56: the host's callee-saved registers
+    uint64_t saved[20];     // 16..: the host's callee-saved registers (x86-64: rbx rbp r12-r15;
+                            //   AArch64: x19-x28, x29, d8-d15)
     uint64_t env;           // the guest jmp_buf
     uint64_t guest_rsp, guest_ret;  // what the jmp_buf held then (a later setjmp may reuse it)
     RecompState *st;        // the state the recompiled code runs on
