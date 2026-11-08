@@ -4,11 +4,11 @@
 # (src/android_main.c); the GPU library (tools/android_gpu.sh) and the recompiled game library
 # (build_aot.sh, BB_AOT_TARGET=aarch64) come with it. The game's files go to the app's external
 # files folder (tools/android_push.sh).
-#   tools/android_apk.sh [LIBRARY]   (default recompiler/out/aot/sites10-aarch64/libbbaot.so)
+#   tools/android_apk.sh [LIBRARY]   (default recompiler/out/aot/sites11-aarch64/libbbaot.so)
 # Env: BB_NDK, BB_ANDROID_API (35), JAVA_HOME (default ~/.local/opt/jdk-*).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-lib=$(readlink -f "${1:-recompiler/out/aot/sites10-aarch64/libbbaot.so}")
+lib=$(readlink -f "${1:-recompiler/out/aot/sites11-aarch64/libbbaot.so}")
 sdk=$HOME/.local/opt/android-sdk
 ndk=${BB_NDK:-$(ls -d "$sdk"/ndk/* | sort -V | tail -1)}
 api=${BB_ANDROID_API:-35}
