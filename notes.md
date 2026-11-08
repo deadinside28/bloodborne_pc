@@ -311,7 +311,19 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    memory: memory_model.cpp). That is the next problem: Phase 4's memory model on Adreno (to look
    at: AHardwareBuffer-backed guest memory imported with
    VK_ANDROID_external_memory_android_hardware_buffer and mapped at the guest's addresses through
-   its dma-buf, or a copying model). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   its dma-buf, or a copying model).
+   `tools/android_memprobe.c` (NDK; push to /data/local/tmp and run over adb): on the S25 Ultra a
+   hardware buffer of 64-256 MiB is allocated, gives its dma-buf fd (sendHandleToUnixSocket),
+   maps at 0x1000000000 (MAP_FIXED_NOREPLACE), imports into Vulkan and is coherent both ways
+   (GPU fill seen by the CPU, CPU writes seen by the GPU); 512 MiB and up are refused (-129).
+   Adreno: AHB import, VK_KHR_external_memory_fd, buffer device address, descriptor buffer; no
+   external_memory_host, no dma_buf handle type, no memory_budget. The runtime's CHUNK is 256 MiB
+   already, but the layer memory module wants one chunk per direct allocation (up to 2.8 GB) and
+   only lazy mode splits (with overlapping imports, impossible with separate AHBs). Next check:
+   `memprobe opaque 512 1024 2048` (Vulkan memory exported as an opaque fd: mappable at the
+   game's address and at offsets? then the PC model works unchanged). CAUTION: an uncapped
+   allocation loop restarted the phone once; every mode is capped now (memory checked before
+   each step, 2 GiB margin). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
