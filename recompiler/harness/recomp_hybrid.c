@@ -18,7 +18,7 @@
 #error "x86-64 or AArch64 hosts"
 #endif
 
-__thread HybridThread *recomp_hybrid_self __attribute__((tls_model("initial-exec")));
+__thread HybridThread *recomp_hybrid_self RECOMP_HYBRID_TLS_MODEL;
 int recomp_hybrid_fs_from_gs;
 extern void (*recomp_dispatch_jump_fallback)(RecompState *st, uint64_t target);
 extern void (*recomp_dispatch_fallback)(RecompState *st, uint64_t target);

@@ -268,7 +268,9 @@ target_compile_options(bbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-f
 # Loaded with bb-probe at startup (DT_NEEDED, never dlopen): thread_local access without a
 # TLS descriptor call (_dl_tlsdesc_return was ~2% of the draw recording thread).
 if (NOT WIN32)
-    target_compile_options(bbgpu PRIVATE -ftls-model=initial-exec)
+    if (NOT ANDROID)  # Android: no static TLS in dlopened libraries (the app loads them so)
+        target_compile_options(bbgpu PRIVATE -ftls-model=initial-exec)
+    endif()
     # Runtime symbols (runtime_memory_*, runtime_process_*) resolve against bb-probe.
     target_link_options(bbgpu PRIVATE -Wl,--allow-shlib-undefined)
     if (ANDROID)  # the NDK links shared libraries with --no-undefined

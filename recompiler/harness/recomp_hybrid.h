@@ -66,7 +66,14 @@ HybridJmp *recomp_hybrid_setjmp_record(RecompState *st);  // its C half
 void recomp_hybrid_longjmp(RecompState *st);
 __attribute__((noreturn)) void recomp_hybrid_longjmp_resume(const HybridJmp *j);
 
-extern __thread HybridThread *recomp_hybrid_self __attribute__((tls_model("initial-exec")));
+// initial-exec where the thunks read it fs-relative (x86-64, linked into the executable); Android
+// refuses static TLS in libraries it dlopens (libmain.so).
+#if defined(__ANDROID__)
+#define RECOMP_HYBRID_TLS_MODEL
+#else
+#define RECOMP_HYBRID_TLS_MODEL __attribute__((tls_model("initial-exec")))
+#endif
+extern __thread HybridThread *recomp_hybrid_self RECOMP_HYBRID_TLS_MODEL;
 // The guest's thread pointer is GS (bbport rewrites the game's fs: accesses to gs:), while the
 // recompiled code, lifted from the unmodified executable, addresses FS: state.fs_base := GS base.
 extern int recomp_hybrid_fs_from_gs;

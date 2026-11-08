@@ -301,7 +301,17 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    SDL's ANativeWindow), -z undefs (the runtime's symbols come from the executable), <algorithm>
    in read_sample.cpp, fmt with -include cstdlib. To note: the movie player calls the game's
    allocator callbacks natively (GuestBuffer): through runtime_guest_call before FFmpeg returns
-   on AArch64. Next: an APK (SDL's activity; bb-probe as libmain.so's SDL_main). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   on AArch64. Then the APK: `tools/android_apk.sh` -> out/android/bbport.apk (android/: SDL's
+   activity, libmain.so = bb-probe with src/android_main.c; no Gradle). Game data: `adb push` to
+   /sdcard/Android/data/org.bbport/files/ (boot-linked.bin, content.bin, patches.bin, app0/ = the
+   dump, 29 GB in ~10 min over Wi-Fi). No static TLS on Android (dlopened libraries: the
+   initial-exec models are PC-only). **On the phone the app starts**: the Adreno 830 (Vulkan
+   1.3.284, driver 512.800.64), a 3120x1440 swapchain, staging buffers, then STOP: the GPU cannot
+   use the game's memory in place (no VK_EXT_external_memory_host, no dma-buf export of system
+   memory: memory_model.cpp). That is the next problem: Phase 4's memory model on Adreno (to look
+   at: AHardwareBuffer-backed guest memory imported with
+   VK_ANDROID_external_memory_android_hardware_buffer and mapped at the guest's addresses through
+   its dma-buf, or a copying model). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a
