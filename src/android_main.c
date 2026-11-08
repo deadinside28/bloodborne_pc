@@ -66,6 +66,10 @@ static void defaults(const char *data) {
      * display (3120x1440 on the S25 Ultra) and the game's camera and HUD its aspect ratio;
      * without it the output stayed 1920x1080 and the picture 16:9 between black bars. */
     setenv("BB_LIVE_HYBRID", "1", 0);
+    /* Adreno: with object motion vectors on, or render passes kept whole, the GPU is lost at the
+     * second 3D frame (the character creator). Both needed; why is not known yet. */
+    setenv("BB_OBJECT_MOTION", "0", 0);
+    setenv("BB_BREADCRUMB_SPLIT", "1", 0);
     /* The whole screen: SDL hides the status and navigation bars (immersive). */
     setenv("BB_FULLSCREEN", "1", 0);
     snprintf(path, sizeof(path), "%s/bbport.ini", data);
