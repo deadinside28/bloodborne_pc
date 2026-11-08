@@ -380,7 +380,7 @@ class FunctionLifter:
             # LSE2 CPUs accept misalignment within 16 bytes and fault across a 16-byte boundary
             # ("fault": the runtime's SIGBUS handler does those; "check": test inline and use a
             # plain load + barrier for the crossing ones)
-            if self.mod.rcpc == "check" and bits > 8:
+            if self.checks_crossing() and bits > 8:
                 return self._split_access(addr, bits // 8,
                                           lambda: self.op(f"load atomic i{bits}, ptr {p} acquire, align {bits // 8}"),
                                           lambda: self._plain_load_acquire(p, bits), bits)
@@ -398,7 +398,7 @@ class FunctionLifter:
             return
         if self.mod.tso and not local and self.mod.rcpc and bits <= 64:
             fast = lambda: self.e(f"store atomic i{bits} {v}, ptr {p} release, align {bits // 8}")  # stlr / stlur
-            if self.mod.rcpc == "check" and bits > 8:
+            if self.checks_crossing() and bits > 8:
                 def slow():
                     self.store_barrier()
                     self.e(f"store i{bits} {v}, ptr {p}, align 1")
@@ -409,6 +409,15 @@ class FunctionLifter:
         if self.mod.tso and not local:
             self.store_barrier()
         self.e(f"store i{bits} {v}, ptr {p}, align 1")
+
+    def checks_crossing(self):
+        """The inline test for an access across 16 bytes: everywhere (rcpc "check"), or (rcpc
+        "profile") only at the instructions a profile saw cross (BB_RECOMP_CROSS_SITES); the rest
+        leave such an access to the runtime's alignment fault handler."""
+        if self.mod.rcpc == "check":
+            return True
+        return self.mod.rcpc == "profile" and self.cur_ins is not None and \
+            (self.cur_ins.ip in self.mod.cross_sites or self.cfg.start in self.mod.cross_functions)
 
     def _plain_load_acquire(self, p, bits):
         v = self.op(f"load i{bits}, ptr {p}, align 1")
@@ -1816,6 +1825,25 @@ class ModuleLifter:
         self.volatile = volatile
         self.abi = abi
         self.count_cross = os.environ.get("BB_RECOMP_COUNT_CROSS") == "1"
+        # rcpc "profile": the instructions that keep the inline check (BB_AOT_CROSS_OUT's file:
+        # link address and count per line)
+        self.cross_sites = set()
+        self.cross_functions = set()
+        sites = os.environ.get("BB_RECOMP_CROSS_SITES")
+        if rcpc == "profile":
+            if not sites:
+                raise SystemExit("BB_RECOMP_RCPC=profile needs BB_RECOMP_CROSS_SITES")
+            # bit 63: a whole function (the runtime's alignment fault handler counts by function)
+            self.cross_functions = set()
+            with open(sites) as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    value = int(line.split()[0], 16)
+                    if value >> 63:
+                        self.cross_functions.add(value & ~(1 << 63))
+                    else:
+                        self.cross_sites.add(value)
         # Registers a function's own instructions never touch stay in the state across its calls
         # and exits (FunctionLifter.expand_markers). BB_RECOMP_PRUNE=0: all of them cross, as before.
         self.prune_registers = os.environ.get("BB_RECOMP_PRUNE", "1") != "0"

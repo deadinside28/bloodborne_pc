@@ -238,6 +238,8 @@ static void patch_guest_tls(const Segment *segments, uint64_t ns) {
 }
 #endif
 static void fault(int sig, siginfo_t *info, void *context) {
+    /* An acquire/release access of recompiled code across 16 bytes (AArch64): done, go on. */
+    if (sig == SIGBUS && runtime_aot_alignment_fault(context)) return;
     /* BB_AOT_STRICT: the runtime called the game's original code (no longer executable). */
     if (sig == SIGSEGV && runtime_aot_strict_fault(context, info->si_addr)) return;
     /* GPU page tracking (write-protected guest pages) is resolved first. */

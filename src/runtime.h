@@ -106,6 +106,9 @@ uint64_t runtime_guest_call(uintptr_t address, uint64_t a0, uint64_t a1, uint64_
 #define GUEST_CALL(...) GUEST_CALL_(__VA_ARGS__, 0, 0, 0, 0, 0, 0, 0)
 /* BB_AOT_STRICT: a fault from running the game's (non-executable) code; 1 when handled. */
 int runtime_aot_strict_fault(void *context, void *address);
+/* AArch64: an acquire load / release store across 16 bytes, done here (BB_RECOMP_RCPC=profile
+ * libraries); 1 when it was one. */
+int runtime_aot_alignment_fault(void *context);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);

@@ -735,6 +735,54 @@ void __recomp_cross(uint64_t ip, int32_t size) {
     __atomic_fetch_add(&cross_dropped, 1, __ATOMIC_RELAXED);
 }
 
+/* AArch64: an acquire load or release store (ldapr/stlr, ldapur/stlur) across a 16-byte
+ * boundary raises an alignment fault on LSE2 CPUs; a library lifted with BB_RECOMP_RCPC=profile
+ * leaves those to this handler outside the instructions its profile listed. The access is done
+ * byte-wise with the barrier it stands for, the program goes on after it, and its function is
+ * counted (bit 63: a function, the guest map has no finer grain) for the next profile. */
+int runtime_aot_alignment_fault(void *context) {
+#if defined(__aarch64__)
+    ucontext_t *uc = context;
+    uint64_t *x = (uint64_t *)uc->uc_mcontext.regs;
+    const uint32_t in = *(const uint32_t *)(uintptr_t)uc->uc_mcontext.pc;
+    const unsigned size = 1u << (in >> 30), rt = in & 31, rn = (in >> 5) & 31;
+    const uint64_t base = rn == 31 ? uc->uc_mcontext.sp : x[rn];
+    int load = -1, sign_to = 0;
+    int64_t off = 0;
+    if ((in & 0x3ffffc00) == 0x38bfc000) load = 1;                 /* ldapr{b,h,} */
+    else if ((in & 0x3ffffc00) == 0x089ffc00) load = 0;            /* stlr{b,h,} */
+    else if ((in & 0x3f200c00) == 0x19000000) {                     /* stlur / ldapur / ldapurs */
+        const unsigned opc = (in >> 22) & 3;
+        off = ((int64_t)(in << 11)) >> 23;                          /* imm9, bits 20..12 */
+        load = opc != 0;
+        sign_to = opc == 2 ? 64 : opc == 3 ? 32 : 0;
+    }
+    if (load < 0) return 0;  /* not one of these: the fault is someone else's */
+    uint8_t *p = (uint8_t *)(uintptr_t)(base + (uint64_t)off);
+    if (load) {
+        uint64_t v = 0;
+        memcpy(&v, p, size);
+        __asm__ volatile("dmb ishld" ::: "memory");
+        if (sign_to) {
+            const int64_t sv = (int64_t)(v << (64 - 8 * size)) >> (64 - 8 * size);
+            v = sign_to == 32 ? (uint32_t)sv : (uint64_t)sv;
+        }
+        if (rt != 31) x[rt] = v;
+    } else {
+        const uint64_t v = rt == 31 ? 0 : x[rt];
+        __asm__ volatile("dmb ish" ::: "memory");
+        memcpy(p, &v, size);
+    }
+    const uint64_t guest = runtime_aot_guest_pc(uc->uc_mcontext.pc);
+    if (guest) __recomp_cross((guest - __recomp_slide) | (1ull << 63), (int32_t)size);
+    uc->uc_mcontext.pc += 4;
+    return 1;
+#else
+    (void)context;
+    return 0;
+#endif
+}
+
 static void report_cross(void) {
     const uint64_t total = __atomic_load_n(&cross_total, __ATOMIC_RELAXED);
     if (!total) return;
@@ -754,6 +802,38 @@ static void report_cross(void) {
            total, sites, __atomic_load_n(&cross_dropped, __ATOMIC_RELAXED));
     for (int k = 0; k < 8 && top_n[k]; ++k) printf(" %#" PRIx64 " %" PRIu64, top_ip[k], top_n[k]);
     printf("\n");
+    /* BB_AOT_CROSS_OUT=path: every site with its count (link address, count per line), merged
+     * with what the file holds already (several runs, several routes): the lifter's list of
+     * instructions that keep their inline check (BB_RECOMP_CROSS_SITES). */
+    const char *out = bb_env("BB_AOT_CROSS_OUT");
+    if (out && *out) {
+        static uint64_t merged_ip[CROSS_SITES * 2], merged_n[CROSS_SITES * 2];
+        size_t m = 0;
+        FILE *f = fopen(out, "r");
+        if (f) {
+            unsigned long long ip, c;
+            while (m < CROSS_SITES * 2 && fscanf(f, "%llx %llu", &ip, &c) == 2) { merged_ip[m] = ip; merged_n[m++] = c; }
+            fclose(f);
+        }
+        static uint64_t written_n[CROSS_SITES]; /* counts already added from this run */
+        for (int i = 0; i < CROSS_SITES; ++i) {
+            const uint64_t ip = cross_sites[i].ip, c = cross_sites[i].count;
+            if (!ip || c == written_n[i]) continue;
+            size_t j = 0;
+            while (j < m && merged_ip[j] != ip) ++j;
+            if (j == m) { if (m == CROSS_SITES * 2) continue; merged_ip[m] = ip; merged_n[m++] = 0; }
+            merged_n[j] += c - written_n[i];
+            written_n[i] = c;
+        }
+        char tmp[4096];
+        snprintf(tmp, sizeof(tmp), "%s.tmp", out);
+        f = fopen(tmp, "w");
+        if (f) {
+            for (size_t j = 0; j < m; ++j) fprintf(f, "%#" PRIx64 " %" PRIu64 "\n", merged_ip[j], merged_n[j]);
+            fclose(f);
+            rename(tmp, out);
+        }
+    }
 }
 
 static void report(void) {
@@ -937,5 +1017,6 @@ uint64_t runtime_guest_call(uintptr_t address, uint64_t a0, uint64_t a1, uint64_
     return ((Six)address)(a0, a1, a2, a3, a4, a5);
 }
 int runtime_aot_strict_fault(void *context, void *address) { (void)context; (void)address; return 0; }
+int runtime_aot_alignment_fault(void *context) { (void)context; return 0; }
 
 #endif

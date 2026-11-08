@@ -341,6 +341,7 @@ BB_ENV(BB_SRT_INTERP, DEBUG, "=1: the shader resource table walk runs as its por
 BB_ENV(BB_IMPORT_DUMP, DEBUG, "=path: each function import the runtime provides (name, host address) written there, for scripts/import_signatures.py")
 BB_ENV(BB_AOT_HOST_CALLS, DEBUG, "=full: with BB_AOT, recompiled code calls the port's runtime with the whole register file, as calls into the game's own code; =portable: a plain C call with ten integer arguments (six registers, four stack words), the bridge an AArch64 runtime uses (default: argument and result registers only)")
 BB_ENV(BB_AOT_DUMP, DEBUG, "=path: the game's code as it runs (after the port's patches and hooks) written there at start, for building a BB_AOT library")
+BB_ENV(BB_AOT_CROSS_OUT, DEBUG, "=path: with a BB_RECOMP_COUNT_CROSS library, every instruction seen crossing 16 bytes and its count, merged into the file")
 BB_ENV(BB_ARENA_VRAM_ONLY, DEBUG, "=1 (tests): the arena in VRAM only, as NVIDIA's sparse buffers")
 BB_ENV(BB_AUDIO_DUMP, DEBUG, "=dir: raw converted PCM per audio port")
 BB_ENV(BB_AUDIO_STATS, DEBUG, "set: audio port statistics")

@@ -485,7 +485,15 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    qword [rbx+2BCh], 0) and one in a system module. At ~2-5 us a fault, faulting on all of them
    costs more than a core: not as is. Next: the check only at instructions a profile saw cross
    (a list for the lifter), the fault handler (recomp_loader.c's, into the runtime) for the
-   rest, with fault counts by site to grow the list.
+   rest, with fault counts by site to grow the list. **Done (2026-11-08), untested on the phone:**
+   BB_AOT_CROSS_OUT=path writes every crossing instruction with its count (merged across runs;
+   the profile in recompiler/out/aot/cross-sites.txt: 2,792 from the title and the drive.sh
+   route); BB_RECOMP_RCPC=profile BB_RECOMP_CROSS_SITES=<that file> keeps the inline check only
+   there (lift.py checks_crossing); runtime_aot_alignment_fault (AArch64, from probe.c's SIGBUS)
+   does the other crossing accesses byte-wise with their barrier and counts their function (bit
+   63 in the same file: the guest map is per function; the next lift checks all of its
+   accesses). `sites12-aarch64`: 210 -> 156 MiB. Next on the phone: the "AOT cross" lines show
+   how often the fault path runs; then tools/android_apk.sh with sites12.
 5. Report the LLVM 23.1.4 AArch64 crash (`recompiler/harness/llvm-bug-store-merge-bswap16.ll`);
    `build_game.sh` works around it with `-mstrict-align` for the one affected shard.
 
