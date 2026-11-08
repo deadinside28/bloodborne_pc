@@ -59,6 +59,7 @@ struct ArgsNote {
 std::array<ArgsNote, ArgSlots> args_notes{};
 
 const Instance* fault_instance = nullptr;
+bool fill_mode = false;
 
 void Init(const Instance& instance) {
     if (instance.IsDeviceFaultSupported()) {
@@ -68,9 +69,18 @@ void Init(const Instance& instance) {
         return;
     }
     if (!instance.IsBufferMarkerSupported()) {
-        std::printf("GPU breadcrumbs: VK_AMD_buffer_marker unavailable, GPU hangs will not be "
-                    "located\n");
-        return;
+#ifdef __ANDROID__
+        fill_mode = !bb_env_off("BB_BREADCRUMB_FILL");
+#else
+        fill_mode = bb_env_on("BB_BREADCRUMB_FILL");
+#endif
+        if (!fill_mode) {
+            std::printf("GPU breadcrumbs: VK_AMD_buffer_marker unavailable, GPU hangs will not be "
+                        "located\n");
+            return;
+        }
+        std::printf("GPU breadcrumbs: transfer writes between render passes "
+                    "(no VK_AMD_buffer_marker)\n");
     }
     const VkBufferCreateInfo buffer_ci = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -185,7 +195,8 @@ void PrintEntry(const Stream& stream, u64 id, const char* label) {
     }
     std::printf("\n");
     // What a stuck draw reads, and whether the runtime still has it mapped (prot, memory type).
-    if (std::strcmp(label, "STUCK") == 0 && c.reads[0]) {
+    // (Transfer-write markers bound a whole pass: any of its draws may be the one.)
+    if ((std::strcmp(label, "STUCK") == 0 || fill_mode) && c.reads[0]) {
         std::printf("      reads:");
         for (u32 i = 0; i < Crumb::MaxReads && c.reads[i]; ++i) {
             int prot = 0, type = 0;
@@ -276,12 +287,35 @@ u32 Note(u32 stream_index, const Crumb& crumb) {
     return u32(id);
 }
 
-void Mark(vk::CommandBuffer cmdbuf, u32 stream, u32 id, bool after) {
+void Mark(vk::CommandBuffer cmdbuf, u32 stream, u32 id, bool after, bool in_pass) {
     if (!enabled || stream >= MaxStreams) {
+        return;
+    }
+    if (fill_mode) {
+        if (in_pass) {
+            return;
+        }
+        // Written once all earlier work of the queue has finished, as the AMD marker is.
+        const vk::MemoryBarrier barrier{
+            .srcAccessMask = vk::AccessFlagBits::eMemoryWrite,
+            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+                               vk::PipelineStageFlagBits::eTransfer, {}, barrier, {}, {});
+        cmdbuf.fillBuffer(marker_buffer, stream * StreamStride, sizeof(u32),
+                          id * 2 + (after ? 1 : 0));
         return;
     }
     cmdbuf.writeBufferMarkerAMD(vk::PipelineStageFlagBits::eBottomOfPipe, marker_buffer,
                                 stream * StreamStride, id * 2 + (after ? 1 : 0));
+}
+
+bool FillMode() noexcept {
+    return fill_mode;
+}
+
+u32 LastNoted(u32 stream) noexcept {
+    return stream < MaxStreams ? u32(streams[stream].next.load(std::memory_order_relaxed) - 1) : 0;
 }
 
 u32 ArgsSlot() {
@@ -413,7 +447,8 @@ void Report(const char* title, const char* where) {
             std::fflush(stdout);
             DumpPrograms(stream, id);
         }
-        for (u64 next = id + 2; next <= std::min(last, id + 4); ++next) {
+        // Transfer-write markers bound a whole pass: what it held, as far as it is kept.
+        for (u64 next = id + 2; next <= std::min(last, id + (fill_mode ? 40 : 4)); ++next) {
             PrintEntry(stream, next, "later");
         }
     }

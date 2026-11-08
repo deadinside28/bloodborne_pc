@@ -748,7 +748,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // few T# and V# reads a draw. BB_BREADCRUMB_READS=1 / 0: on / off everywhere.
     static const bool crumb_reads = [&] {
         const char* env = bb_env("BB_BREADCRUMB_READS");
-        return env ? env[0] == '1' : instance.GetVendorID() == 0x10de;
+        return env ? env[0] == '1' : instance.GetVendorID() == 0x10de || Breadcrumbs::FillMode();
     }();
     if (crumb_reads && Breadcrumbs::Enabled()) {
         NoteCrumbReads(crumb, pipeline, regs, is_indexed, index_offset);

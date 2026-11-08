@@ -250,6 +250,11 @@ void Scheduler::EndRendering() {
     CarrySuspend(true);
     is_rendering = false;
     Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
+    if (Breadcrumbs::Enabled() && Breadcrumbs::FillMode()) {
+        Record([stream = crumb_stream, id = Breadcrumbs::LastNoted(crumb_stream)](vk::CommandBuffer cmdbuf) {
+            Breadcrumbs::Mark(cmdbuf, stream, id, true, false);
+        });
+    }
     CarryResume(false);
 }
 

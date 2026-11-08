@@ -353,6 +353,7 @@ BB_ENV(BB_BBSC_MEMSCAN, DEBUG, "set: BBSC finds its sites by scanning memory ins
 BB_ENV(BB_BBSC_PROBE, DEBUG, "=address: BBSC probe of that guest address")
 BB_ENV(BB_BDA_LOG, DEBUG, "set: GPU addresses of buffer sources, to place a GPUVM fault")
 BB_ENV(BB_BIG_ALLOC_STACKS, DEBUG, "=1: call stacks of device memory allocations of 64 MiB and more")
+BB_ENV(BB_BREADCRUMB_FILL, DEBUG, "=1 / 0: breadcrumbs as transfer writes between render passes where VK_AMD_buffer_marker is missing (Android: on)")
 BB_ENV(BB_BREADCRUMB_READS, DEBUG, "=1 / 0: breadcrumbs of T# and V# reads everywhere / nowhere (default: NVIDIA only)")
 BB_ENV(BB_BUFFER_STATS, DEBUG, "=1: how many frames behind the GPU is when a frame starts")
 BB_ENV(BB_CAMERA_FRAME_LOG, DEBUG, "set: projection of every G-buffer pass's camera with its GPU frame")

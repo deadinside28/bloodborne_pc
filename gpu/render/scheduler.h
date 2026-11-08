@@ -248,10 +248,10 @@ public:
         }
         const u32 id = Breadcrumbs::Note(crumb_stream, crumb);
         Record([func = std::forward<Func>(func), stream = crumb_stream,
-                id](vk::CommandBuffer cmdbuf) mutable {
-            Breadcrumbs::Mark(cmdbuf, stream, id, false);
+                id, in_pass = is_rendering](vk::CommandBuffer cmdbuf) mutable {
+            Breadcrumbs::Mark(cmdbuf, stream, id, false, in_pass);
             func(cmdbuf);
-            Breadcrumbs::Mark(cmdbuf, stream, id, true);
+            Breadcrumbs::Mark(cmdbuf, stream, id, true, in_pass);
         });
     }
 

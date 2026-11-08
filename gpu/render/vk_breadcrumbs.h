@@ -41,7 +41,13 @@ u32 NewStream(const Instance& instance, const char* name);
 /// Recording side, in command order: numbers the next command of `stream`.
 u32 Note(u32 stream, const Crumb& crumb);
 /// Recorded right before (`after` false) and right after the command numbered `id`.
-void Mark(vk::CommandBuffer cmdbuf, u32 stream, u32 id, bool after);
+/// `in_pass`: inside a render pass, or not known to be outside one.
+void Mark(vk::CommandBuffer cmdbuf, u32 stream, u32 id, bool after, bool in_pass = true);
+/// No VK_AMD_buffer_marker (Adreno): the markers are transfer writes, which a render pass cannot
+/// hold, so a pass is marked as a whole, at its end (BB_BREADCRUMB_FILL: Android's default).
+[[nodiscard]] bool FillMode() noexcept;
+/// The newest command noted in `stream`.
+[[nodiscard]] u32 LastNoted(u32 stream) noexcept;
 /// Indirect dispatches: a slot of a host-visible buffer for the arguments the GPU reads (the
 /// report and the statistics show them), ~0u when off. CopyArgs is recorded before the dispatch.
 u32 ArgsSlot();
