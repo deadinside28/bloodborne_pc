@@ -83,9 +83,9 @@ static void report_guest_heap(void) {
     if (!runtime_libc_base) return;
     const uint8_t *stub=(const uint8_t *)(runtime_libc_base+0x1f8c0);
     if (runtime_libc_base!=0x800000000ull+0x56e0000 || stub[0]!=0xff || stub[1]!=0x25) return;
-    ABI int (*stats)(MallocManagedSize *)=(ABI int (*)(MallocManagedSize *))(uintptr_t)stub;
     MallocManagedSize m={.size=sizeof(m),.version=1};
-    const int result=stats(&m);
+    /* through the runtime: the recompiled function where the game's code does not run natively */
+    const int result=(int)runtime_guest_call((uintptr_t)stub,(uint64_t)(uintptr_t)&m,0,0,0,0,0);
     if (result!=0) { static int told; if (!told++) printf("Guest heap: malloc_stats returned %#x\n",(unsigned)result); return; }
     {
         printf("Guest heap: %.1f MB in use (most %.1f), %.1f MB from the system (most %.1f)\n",

@@ -266,6 +266,21 @@ static void fault(int sig, siginfo_t *info, void *context) {
     else
         snprintf(line, sizeof(line), "Fault (signal %d) at RIP %p, address %p\n", sig, (void *)rip, info->si_addr);
     { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+#if defined(__aarch64__)
+    /* The caller: a guest address in pc is bbport code calling a game function natively (it
+     * must go through runtime_guest_call on AArch64); the link register names that code. */
+    {
+        const uintptr_t lr = (uintptr_t)uc->uc_mcontext.regs[30];
+        Dl_info caller;
+        if (dladdr((void *)lr, &caller) && caller.dli_fname)
+            snprintf(line, sizeof(line), "  called from %s+0x%lx (%s+0x%lx)\n", caller.dli_fname,
+                     (unsigned long)(lr - (uintptr_t)caller.dli_fbase), caller.dli_sname ? caller.dli_sname : "?",
+                     (unsigned long)(lr - (uintptr_t)(caller.dli_saddr ? caller.dli_saddr : caller.dli_fbase)));
+        else
+            snprintf(line, sizeof(line), "  called from %p\n", (void *)lr);
+        ssize_t written_=write(2, line, strlen(line)); (void)written_;
+    }
+#endif
     runtime_aot_describe_fault(context);
 #ifdef _WIN32
     {

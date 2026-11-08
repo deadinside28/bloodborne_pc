@@ -389,6 +389,13 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    than the PC) but its frames are not the PC's UI-only title frames and come out black. Next:
    Adreno rendering: dump render targets, check the depth format fallback (no D16S8 attachment),
    the window orientation (a 1440x810 frame once: the window flips to portrait at start).
+   A crash with BB_FRAME_STATS on the phone: the pad code's guest heap report called libc's
+   malloc_stats natively (fixed: runtime_guest_call); AArch64 fault reports now name the caller
+   (link register). Title stage on the phone: 18 draws a frame (PC: 22-24), 60 FPS, the presented
+   frame still all zero; the device is lost now and then (no fault info on Adreno). No API
+   errors under validation: next suspect is shader memory access through device addresses (the
+   layer's page table over the hardware buffer chunks); GPU-assisted validation or a page-table
+   check against the chunk buffers' addresses.
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
