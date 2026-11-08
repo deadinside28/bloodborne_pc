@@ -343,7 +343,15 @@ bool TemporalUpscaler::OnFrameStart() {
     // (their display buffer is shown as the game drew it, at its own size), and of one that had it.
     if (ui_trace_on) {
         static int bad = 0, good = 0;
-        if ((!ui_phase && Scaled() && good > 0 && bad < 12) || (ui_phase && good < 1)) {
+        // =all: frames without it before any with it too (a device where none has the UI)
+        static const bool all = [] {
+            const char* v = bb_env("BB_UI_TRACE");
+            return v && std::strcmp(v, "all") == 0;
+        }();
+        const u64 frame_now = BbStats::frame_number.load(std::memory_order_relaxed);
+        const bool bad_due = all ? (bad < 4 || frame_now % 300 == 0) && bad < 24 : bad < 12;
+        if ((!ui_phase && (Scaled() || all) && (good > 0 || all) && bad_due) ||
+            (ui_phase && good < 1)) {
             ++(ui_phase ? good : bad);
             std::printf("UI trace: frame %llu %s:%s\n",
                         (unsigned long long)BbStats::frame_number.load(std::memory_order_relaxed),

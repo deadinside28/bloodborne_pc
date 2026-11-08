@@ -396,6 +396,17 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    errors under validation: next suspect is shader memory access through device addresses (the
    layer's page table over the hardware buffer chunks); GPU-assisted validation or a page-table
    check against the chunk buffers' addresses.
+   Black screen, narrowed: not the hardware buffers (none at all: still black), not the copy path
+   (PC with BB_GUEST_MEMORY=copy: a full frame), not the settings as such (PC at 1280x720: full
+   frame). Found and fixed: the phone's BB_RENDER_RES (1280x720) did not match its patches.bin
+   (made by run.sh at 2560x1440) or the library: the UI targets (2560x1440) were not recognised
+   (BB_UI_TRACE=all: draws of frames without the UI before any had it); android_main now sets
+   2560x1440, and every frame is a UI-only frame as on the PC. SDL turned the window to portrait
+   (a resizable window overrides sensorLandscape): SDL_HINT_ORIENTATIONS landscape. Reserve
+   BB_AHB_RESERVE_MB 4000 on the phone (lowest ~2.9-3.2 GB available, was ~1.5). The presented
+   frame is still all zero: next, dump the UI target and the live host display buffer on the
+   phone, and look for AArch64-only paths in the GPU library (CPU texture conversion, the SRT
+   program) that the PC never takes.
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,

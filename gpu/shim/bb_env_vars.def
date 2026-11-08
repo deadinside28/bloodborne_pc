@@ -599,7 +599,7 @@ BB_ENV(BB_TROPHY_TEST, DEBUG, "=id: that trophy's announcement once, nothing rec
 BB_ENV(BB_UI_DRAWS, DEBUG, "=file: while it exists, one frame's UI draws (another aspect ratio, or the upscaler's UI phase) logged with their targets, stencil, blend, clip rects and redirection")
 BB_ENV(BB_UI_DRAWS_PS, DEBUG, "=hex pixel shader hash: BB_UI_DRAWS also dumps that shader's draws' vertex streams, first constant buffer and indices")
 BB_ENV(BB_UI_TEXTURE_LOG, DEBUG, "=file: when it appears, the textures the UI binds over the next 2 s")
-BB_ENV(BB_UI_TRACE, DEBUG, "set: draws of frames that ended without the output-size UI")
+BB_ENV(BB_UI_TRACE, DEBUG, "set: draws of frames that ended without the output-size UI (=all: also before any frame had it)")
 BB_ENV(BB_UI_TRIGGER_VS, DEBUG, "=hex hash: the vertex shader that starts the UI phase")
 BB_ENV(BB_UPSCALE_BEFORE_CS, DEBUG, "=hex hash: upscale before that compute shader")
 BB_ENV(BB_VK_MARKERS, DEBUG, "=1: the game's debug labels as Vulkan markers")

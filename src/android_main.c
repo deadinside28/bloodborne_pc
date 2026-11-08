@@ -55,7 +55,13 @@ static void defaults(const char *data) {
     setenv("BB_GPU_WRITE_TWINS", "1", 0);
     setenv("BB_GPU_WRITE_TWINS_MAX", "65536", 0);
     setenv("BB_VBLANK_HZ", "60", 0);
-    setenv("BB_RENDER_RES", "1280x720", 0);
+    /* The scene size must be the one patches.bin was made for (run.sh on the PC: scene and UI
+     * sizes are patches) and the recompiled library lifted with: a mismatch leaves the UI
+     * unrecognised and the frame black. */
+    setenv("BB_RENDER_RES", "2560x1440", 0);
+    /* Hardware buffers take their 256 MiB at once, ordinary memory as it is touched: keep more of
+     * the phone free (with 2 GiB the start dipped under 1.5 GB available). */
+    setenv("BB_AHB_RESERVE_MB", "4000", 0);
     snprintf(path, sizeof(path), "%s/bbport.ini", data);
     setenv("BB_CONFIG", path, 0);
     snprintf(path, sizeof(path), "%s/user", data);

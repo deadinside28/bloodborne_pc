@@ -172,6 +172,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     // The window thread keeps polling while the app is in the background (SDL would block it in
     // its event pump): it sees the surface go and come back (TrackAndroidSurface).
     SDL_SetHintWithPriority(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0", SDL_HINT_DEFAULT);
+    // Landscape only: SDL sets the activity's orientation from the window (a resizable one may
+    // turn), over the manifest's sensorLandscape; the frame went to a 1440x3120 portrait surface.
+    SDL_SetHintWithPriority(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight", SDL_HINT_DEFAULT);
 #endif
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
