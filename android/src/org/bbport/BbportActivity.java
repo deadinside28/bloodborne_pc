@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-License-Identifier: GPL-2.0-or-later
+package org.bbport;
+
+import java.io.File;
+
+import org.libsdl.app.SDLActivity;
+
+/**
+ * bbport on Android: SDL's activity running bb-probe (libmain.so, src/android_main.c).
+ *
+ * The game's files live in this app's external files folder (no permission needed; adb can push
+ * there): boot-linked.bin, content.bin and patches.bin as run.sh prepares them on a PC, the game
+ * dump in app0/, saves and caches in user/. The recompiled game (libbbaot.so) comes with the APK:
+ * Android loads code only from the app's own library folder.
+ */
+public class BbportActivity extends SDLActivity {
+    @Override
+    protected String[] getLibraries() {
+        return new String[] { "SDL3", "main" };  // libmain.so needs libbbgpu.so: loaded together
+    }
+
+    @Override
+    protected String[] getArguments() {
+        final File files = getExternalFilesDir(null);
+        final String dir = files.getAbsolutePath();
+        final String libs = getApplicationInfo().nativeLibraryDir;
+        new File(files, "user").mkdirs();
+        // KEY=VALUE before "--": the environment run.sh would set (src/android_main.c)
+        return new String[] {
+            "BB_AOT=" + libs + "/libbbaot.so",
+            "BB_DATA_DIR=" + dir,
+            "--",
+            dir + "/boot-linked.bin", "--content-profile", dir + "/content.bin",
+            "--patches", dir + "/patches.bin", "--app0", dir + "/app0", "--user", dir + "/user",
+            "--timeout", "0",
+        };
+    }
+}

@@ -50,7 +50,7 @@ static int entered_game;
 static int gpu_enabled;
 int vulkan_smoke(void);
 
-static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
+static __attribute__((noreturn)) void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
 
 /* The BB_* variables set (gpu/shim/bb_env_vars.def, docs/ENVIRONMENT.md), and any BB_* name the
  * port does not read: a typo leaves a setting off without a word. The internal ones (run.py and the
