@@ -354,7 +354,24 @@ class FunctionLifter:
             return True
         return ins.is_ip_rel_memory_operand and self.mod.image.is_readonly(ins.ip_rel_memory_address)
 
+    def count_cross(self, addr, bits, local):
+        """BB_RECOMP_COUNT_CROSS=1 (a measurement on x86-64): an access the AArch64 build would
+        check (shared, 2-8 bytes) that crosses a 16-byte boundary calls __recomp_cross with the
+        instruction's address. How often the game does them decides between the inline check and
+        a fault handler for them."""
+        if not self.mod.count_cross or local or not 8 < bits <= 64 or self.cur_ins is None:
+            return
+        self.mod.intrinsics.add("declare void @__recomp_cross(i64, i32)")
+        end = self.op(f"add i64 {self.op(f'and i64 {addr}, 15')}, {bits // 8}")
+        across, done = self.uniq("cross"), self.uniq("cross_done")
+        self.e(f"br i1 {self.op(f'icmp ugt i64 {end}, 16')}, label %{across}, label %{done}")
+        self.label(across)
+        self.e(f"call void @__recomp_cross(i64 {self.cur_ins.ip}, i32 {bits // 8})")
+        self.e(f"br label %{done}")
+        self.label(done)
+
     def load(self, addr, bits, local=False):
+        self.count_cross(addr, bits, local)
         p = self.op(f"inttoptr i64 {addr} to ptr")
         if self.mod.volatile and not local:
             return self.op(f"load volatile i{bits}, ptr {p}, align 1")
@@ -374,6 +391,7 @@ class FunctionLifter:
         return v
 
     def store(self, addr, v, bits, local=False):
+        self.count_cross(addr, bits, local)
         p = self.op(f"inttoptr i64 {addr} to ptr")
         if self.mod.volatile and not local:
             self.e(f"store volatile i{bits} {v}, ptr {p}, align 1")
@@ -1797,6 +1815,7 @@ class ModuleLifter:
         # flag another thread sets kept reading a stale register: the game hung).
         self.volatile = volatile
         self.abi = abi
+        self.count_cross = os.environ.get("BB_RECOMP_COUNT_CROSS") == "1"
         # Registers a function's own instructions never touch stay in the state across its calls
         # and exits (FunctionLifter.expand_markers). BB_RECOMP_PRUNE=0: all of them cross, as before.
         self.prune_registers = os.environ.get("BB_RECOMP_PRUNE", "1") != "0"

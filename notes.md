@@ -383,6 +383,15 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    rbx and r12-r15 kept in the caller across calls: -3.4% more on the same shard, but it breaks
    `corpus/nonabi.S` (hand-written helpers returning in callee-saved registers, which --abi
    supports by design) and would leave stale saves for the C++ unwinder: not done.
+   **`--tso`'s inline check (2026-11-07):** with the fault mode (`BB_RECOMP_RCPC=fault`: bare
+   ldapr/stlr, crossing accesses left to a SIGBUS handler) the shard is 2.70 -> 1.68 MB (-38%).
+   But measured (`BB_RECOMP_COUNT_CROSS=1` x86-64 build, `__recomp_cross` counts by instruction,
+   "AOT cross:" lines): in gameplay ~720k shared accesses a second cross 16 bytes, from ~2,800
+   instructions; the hottest are unaligned struct fields (vmovlps [rbx+0Ch], mov [rax+18h], mov
+   qword [rbx+2BCh], 0) and one in a system module. At ~2-5 us a fault, faulting on all of them
+   costs more than a core: not as is. Next: the check only at instructions a profile saw cross
+   (a list for the lifter), the fault handler (recomp_loader.c's, into the runtime) for the
+   rest, with fault counts by site to grow the list.
 5. Report the LLVM 23.1.4 AArch64 crash (`recompiler/harness/llvm-bug-store-merge-bswap16.ll`);
    `build_game.sh` works around it with `-mstrict-align` for the one affected shard.
 

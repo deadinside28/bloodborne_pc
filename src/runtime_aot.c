@@ -709,7 +709,47 @@ static void dump_image(const char *path, const unsigned char *image, uint64_t si
     if (fd >= 0) close(fd);
 }
 
+/* A library lifted with BB_RECOMP_COUNT_CROSS=1: its shared 2-8 byte accesses across a 16-byte
+ * boundary, by instruction (link address). AArch64's acquire loads and release stores fault on
+ * those; this says how often the game makes them (an inline check against a fault handler). */
+#define CROSS_SITES 8192
+static struct { uint64_t ip, count; } cross_sites[CROSS_SITES];
+static uint64_t cross_total, cross_dropped;
+void __recomp_cross(uint64_t ip, int32_t size) {
+    (void)size;
+    __atomic_fetch_add(&cross_total, 1, __ATOMIC_RELAXED);
+    for (uint64_t i = (ip * 0x9e3779b97f4a7c15ull) >> 51, n = 0; n < CROSS_SITES; ++n, i = (i + 1) % CROSS_SITES) {
+        uint64_t key = __atomic_load_n(&cross_sites[i].ip, __ATOMIC_RELAXED);
+        if (!key && __atomic_compare_exchange_n(&cross_sites[i].ip, &key, ip, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            key = ip;
+        if (key == ip) { __atomic_fetch_add(&cross_sites[i].count, 1, __ATOMIC_RELAXED); return; }
+    }
+    __atomic_fetch_add(&cross_dropped, 1, __ATOMIC_RELAXED);
+}
+
+static void report_cross(void) {
+    const uint64_t total = __atomic_load_n(&cross_total, __ATOMIC_RELAXED);
+    if (!total) return;
+    uint64_t top_ip[8] = {0}, top_n[8] = {0}, sites = 0;
+    for (int i = 0; i < CROSS_SITES; ++i) {
+        const uint64_t ip = cross_sites[i].ip, c = cross_sites[i].count;
+        if (!ip) continue;
+        ++sites;
+        for (int k = 0; k < 8; ++k) {
+            if (c <= top_n[k]) continue;
+            for (int m = 7; m > k; --m) { top_n[m] = top_n[m - 1]; top_ip[m] = top_ip[m - 1]; }
+            top_n[k] = c; top_ip[k] = ip;
+            break;
+        }
+    }
+    printf("AOT cross: %" PRIu64 " shared accesses across 16 bytes at %" PRIu64 " sites (%" PRIu64 " beyond the table); top:",
+           total, sites, __atomic_load_n(&cross_dropped, __ATOMIC_RELAXED));
+    for (int k = 0; k < 8 && top_n[k]; ++k) printf(" %#" PRIx64 " %" PRIu64, top_ip[k], top_n[k]);
+    printf("\n");
+}
+
 static void report(void) {
+    report_cross();
     const HybridTotals n = recomp_hybrid_totals();
     printf("AOT: recompiled code entered %" PRIu64 "x from the original code; %" PRIu64 " calls back (%" PRIu64
            " into bbport, %" PRIu64 " into the game's system modules), %" PRIu64 " jumps back for good; deepest open "

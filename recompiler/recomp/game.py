@@ -33,7 +33,7 @@ def _work(job):
     """Recover and lift one slice of functions. Returns statistics (and writes a shard)."""
     index, addrs = job
     img, starts = _IMG, _STARTS
-    mod = ModuleLifter(img, tso=_OPTS["tso"], abi=_OPTS["abi"], rcpc="check", volatile=_OPTS.get("volatile", False))
+    mod = ModuleLifter(img, tso=_OPTS["tso"], abi=_OPTS["abi"], rcpc=os.environ.get("BB_RECOMP_RCPC", "check"), volatile=_OPTS.get("volatile", False))
     mod.lifted_names = _OPTS.get("lifted") or starts
     mod.sites = _OPTS.get("sites") or {}
     mod.variants = _OPTS.get("variants") or {}
