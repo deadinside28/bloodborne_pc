@@ -213,6 +213,7 @@ endif()
 # FFmpeg decodes the game's movies (platform/avplayer). BB_FFMPEG=OFF (Android's first builds):
 # no movies, the player reports them as ended.
 if (ANDROID)
+    # on when tools/android_ffmpeg.sh built it (tools/android_gpu.sh passes it)
     option(BB_FFMPEG "Movies through FFmpeg" OFF)
 else()
     option(BB_FFMPEG "Movies through FFmpeg" ON)
@@ -289,7 +290,15 @@ else()
 endif()
 target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 miniz::miniz Zydis::Zydis sirit)
-if (BB_FFMPEG)
+if (BB_FFMPEG AND ANDROID)
+    # Static FFmpeg (tools/android_ffmpeg.sh) in one group: the archives refer to one another,
+    # and with -z undefs a symbol left out would only show at run time.
+    target_include_directories(bbgpu PRIVATE ${FFMPEG_INCLUDE_DIRS})
+    target_link_libraries(bbgpu PUBLIC -Wl,--start-group ${FFMPEG_LINK_LIBRARIES} -Wl,--end-group m)
+    # FFmpeg's AArch64 assembly addresses its tables directly: inside a shared library only
+    # with the library's own symbols bound locally.
+    target_link_options(bbgpu PRIVATE -Wl,-Bsymbolic)
+elseif (BB_FFMPEG)
     target_link_libraries(bbgpu PUBLIC PkgConfig::FFMPEG)
 else()
     target_compile_definitions(bbgpu PRIVATE BB_NO_FFMPEG=1)

@@ -12,5 +12,6 @@ cmake -S gpu -B out/android/gpu -G Ninja -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmak
     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${BB_ANDROID_API:-35}" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_FIND_ROOT_PATH="$prefix" -DCMAKE_PREFIX_PATH="$prefix" -DPKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig" \
     -DVulkan_INCLUDE_DIR="$prefix/include" -DBB_NET=OFF -DBB_LTO=OFF \
-    -DCMAKE_CXX_FLAGS="-include cstdlib"
+    -DCMAKE_CXX_FLAGS="-include cstdlib" \
+    -DBB_FFMPEG=$([[ -f $prefix/lib/libavcodec.a ]] && echo ON || echo OFF)  # tools/android_ffmpeg.sh
 cmake --build out/android/gpu --target bbgpu -- -k 0

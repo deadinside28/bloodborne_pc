@@ -453,6 +453,14 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    Position, the aux blocks carry no clip/cull distances. Still open: the device is lost in
    about one run of two within ~20 s (no fault info). The phone over USB (adb -s R5CY11JMTEY)
    when wireless debugging fails; the watchdog's adb calls are time-limited now.
+   The intermittent lost device is not the build without FFmpeg: the PC with that GPU library
+   (cmake -DBB_FFMPEG=OFF into out/gpu-noff, LD_LIBRARY_PATH over the RUNPATH) renders the
+   title for 90 s; the game makes no movie calls at the title at all (the opening plays after
+   New Game). **Movies on Android:** tools/android_ffmpeg.sh builds FFmpeg 8.0 (the PC's API,
+   libavcodec 62) static and minimal (mov demuxer, H.264 and AAC decoders and parsers, swscale,
+   swresample: the game's four MP4s are H.264 + AAC); android_gpu.sh turns BB_FFMPEG on when it
+   finds it; linked in one --start-group with -Bsymbolic (FFmpeg's AArch64 assembly addresses
+   its tables directly). Untried on the phone.
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
