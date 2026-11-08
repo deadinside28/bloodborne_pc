@@ -314,6 +314,11 @@ bool FillMode() noexcept {
     return fill_mode;
 }
 
+bool SplitPasses() noexcept {
+    static const bool split = bb_env_on("BB_BREADCRUMB_SPLIT");
+    return fill_mode && split;
+}
+
 u32 LastNoted(u32 stream) noexcept {
     return stream < MaxStreams ? u32(streams[stream].next.load(std::memory_order_relaxed) - 1) : 0;
 }

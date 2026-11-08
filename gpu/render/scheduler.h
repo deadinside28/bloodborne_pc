@@ -253,6 +253,14 @@ public:
             func(cmdbuf);
             Breadcrumbs::Mark(cmdbuf, stream, id, true, in_pass);
         });
+        // BB_BREADCRUMB_SPLIT=1: the pass ended and resumed after each draw, so that transfer-write
+        // markers name the draw, not the pass.
+        if (is_rendering && Breadcrumbs::SplitPasses()) {
+            const RenderState state = render_state;
+            EndRendering();
+            resume_rendering = true;
+            BeginRendering(state);
+        }
     }
 
     /// Waits until the submission signalling `tick` is in the queue. Another thread's

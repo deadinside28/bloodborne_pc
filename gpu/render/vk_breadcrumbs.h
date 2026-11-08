@@ -29,7 +29,7 @@ struct Crumb {
     u32 args_slot = ~0u;        ///< indirect dispatches: where the GPU copies its arguments
     /// Draws: guest memory the draw reads (index buffer 'i', vertex streams 'v', shader
     /// buffers 'b', textures 't' with size 0), for the report of a stuck draw.
-    static constexpr u32 MaxReads = 8;
+    static constexpr u32 MaxReads = 32;
     u64 reads[MaxReads]{};
     u32 read_sizes[MaxReads]{};
     char read_kinds[MaxReads]{};
@@ -46,6 +46,8 @@ void Mark(vk::CommandBuffer cmdbuf, u32 stream, u32 id, bool after, bool in_pass
 /// No VK_AMD_buffer_marker (Adreno): the markers are transfer writes, which a render pass cannot
 /// hold, so a pass is marked as a whole, at its end (BB_BREADCRUMB_FILL: Android's default).
 [[nodiscard]] bool FillMode() noexcept;
+/// BB_BREADCRUMB_SPLIT: with FillMode, each draw marked on its own.
+[[nodiscard]] bool SplitPasses() noexcept;
 /// The newest command noted in `stream`.
 [[nodiscard]] u32 LastNoted(u32 stream) noexcept;
 /// Indirect dispatches: a slot of a host-visible buffer for the arguments the GPU reads (the
