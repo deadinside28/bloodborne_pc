@@ -379,7 +379,10 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    and portable, renders right, same FPS as sites10 within noise (median 46.7 vs 45.9). AArch64
    (`sites11-aarch64`): 352 -> 210 MiB (-40%). Corpus: 144 configurations pass. Next candidates: the ABI's
    callee-saved registers across direct calls (not rbp: frame chains; setjmp needs them all),
-   and the state stores before calls of scratch registers no callee reads.
+   and the state stores before calls of scratch registers no callee reads. Tried (2026-11-07):
+   rbx and r12-r15 kept in the caller across calls: -3.4% more on the same shard, but it breaks
+   `corpus/nonabi.S` (hand-written helpers returning in callee-saved registers, which --abi
+   supports by design) and would leave stale saves for the C++ unwinder: not done.
 5. Report the LLVM 23.1.4 AArch64 crash (`recompiler/harness/llvm-bug-store-merge-bswap16.ll`);
    `build_game.sh` works around it with `-mstrict-align` for the one affected shard.
 
