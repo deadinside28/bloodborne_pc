@@ -177,7 +177,7 @@ Defaults to change on a machine where they misbehave, workarounds, and switches 
 | `BB_GPU_WRITE_TWINS_MAX` | =N: pages with at most N GPU-written ranges get twins (default 1024) |
 | `BB_GUEST_HOOKS` | =0: no guest code hooks at all (aspect ratio, HUD, mouse, fixes) |
 | `BB_GUEST_LAZY` | =1: lazy guest memory with the layer's memory module (off: broke buffers) |
-| `BB_GUEST_MEMORY` | =dmabuf / host / private: how guest memory is shared with the GPU (default per vendor) |
+| `BB_GUEST_MEMORY` | =dmabuf / host / private: how guest memory is shared with the GPU (default per vendor); Android: =inplace refuses the copying fallback when hardware buffers do not work |
 | `BB_GUEST_UNCACHED` | =1: guest memory only in memory types the GPU reads past its caches |
 | `BB_GUEST_VRAM` | =1 (experiment): direct memory in VRAM mapped through the PCI BAR |
 | `BB_GUEST_VRAM_RANGES` | =lo-hi,...: physical ranges for BB_GUEST_VRAM (default: the graphics heaps) |

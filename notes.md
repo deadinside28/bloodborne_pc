@@ -335,7 +335,19 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    guest site calls, 18 command buffers submitted and decoded, then the guest submitted nothing
    for 5 s (GPU stall report with a thread dump: next to read). Runs on the phone: watch
    MemAvailable from the PC every 2 s and force-stop the app below 1.5 GB (it fell to 0.7 GB once
-   near the end of a 2-minute run). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   near the end of a 2-minute run).
+   **The Android emulator (2026-11-07):** SDK emulator 37.2.13, AVD `bbport` (Android 15
+   google_apis x86_64, 8 GB, 48 GB data, -gpu host -feature Vulkan, headless): arm64 apps run
+   through libndk_translation; Vulkan is gfxstream over the PC's GPU. Its allocator (ranchu)
+   refuses BLOB hardware buffers with any GPU usage (GPU_DATA_BUFFER: UNSUPPORTED) and its Vulkan
+   imports no CPU-only BLOB (properties fail); a CPU-only buffer's fd is
+   /dev/goldfish_address_space, mappable only at the block's offset (memprobe finds it from the
+   lock's mapping). So no in-place memory there: when hardware buffers do not work the Android
+   mode now copies (SetAhbCopyOnly: every chunk stays in the memfd; BB_GUEST_MEMORY=inplace
+   refuses). But its Vulkan (gfxstream, 1.3.0, 44 device extensions) lacks VK_KHR_push_descriptor
+   and VK_EXT_robustness2 (required: instance.cpp), dynamic state 3, maintenance5: the renderer
+   does not start there (and the emulator crashed in the device creation that followed). Use it
+   for CPU-side checks only; the GPU path needs the phone. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

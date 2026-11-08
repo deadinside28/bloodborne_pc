@@ -162,6 +162,9 @@ bool Populate(u64 phys, u64 want);
 // bbport_guest_memory_android.cpp
 int AllocAhbChunk(u64 phys, u64 size);
 bool AhbWorks(const Vulkan::Instance& instance, const char*& why);
+/// No hardware buffer for any chunk: the game's direct memory stays in the runtime's memfd and
+/// the GPU copies what it uses (the Android emulator: its allocator gives no GPU-usable BLOB).
+void SetAhbCopyOnly();
 // bbport_guest_memory_probes.cpp
 bool UdmabufWorks(const Vulkan::Instance& instance, const char*& why);
 bool HostImportWorks(const Vulkan::Instance& instance, const char*& why);

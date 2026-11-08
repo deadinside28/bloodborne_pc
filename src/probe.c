@@ -348,6 +348,24 @@ static void dump_frames(ucontext_t *uc) {
     char line[] = "  tid=0000000000000000 rip=0000000000000000 image-relative=0000000000000000 host-relative=0000000000000000\n";
     uintptr_t rip=host_context_pc(uc), rbp=host_context_fp(uc);
     uint64_t tid=(uint64_t)gettid();
+    /* Recompiled code (BB_AOT): the game function it was recompiled from, and the native
+     * function by name (the thread's own code is the recompiled game's on AArch64). */
+    {
+        const uint64_t guest=runtime_aot_guest_pc((uint64_t)rip);
+        if (guest) {
+            char g[]="  tid=0000000000000000 in recompiled game function +0000000000000000\n";
+            write_hex(g+6,tid); write_hex(g+52,guest-(uint64_t)(uintptr_t)image);
+            ssize_t written_=write(2,g,sizeof(g)-1); (void)written_;
+        } else {
+            Dl_info where;
+            if (dladdr((void *)rip,&where) && where.dli_sname) {
+                char named[256];
+                const int n=snprintf(named,sizeof(named),"  tid=%016llx in %s+%#llx\n",(unsigned long long)tid,
+                                     where.dli_sname,(unsigned long long)(rip-(uintptr_t)where.dli_saddr));
+                ssize_t written_=write(2,named,(size_t)n); (void)written_;
+            }
+        }
+    }
     /* First argument register: the lock address when a thread waits on a futex. */
     char arg[]="  tid=0000000000000000 rdi=0000000000000000\n";
     write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)host_context_arg0(uc));

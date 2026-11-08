@@ -20,6 +20,7 @@ namespace BbGuestMemory::detail {
 namespace {
 
 constexpr u64 MaxBuffer = u64{256} << 20;
+std::atomic<bool> copy_only{false};
 
 /// MemAvailable (/proc/meminfo), bytes; 0 when unknown.
 u64 Available() {
@@ -173,7 +174,14 @@ bool ImportAhb(AHardwareBuffer* ahb, u64 size, vk::Buffer& buffer, vk::DeviceMem
 
 } // namespace
 
+void SetAhbCopyOnly() {
+    copy_only.store(true);
+}
+
 int AllocAhbChunk(u64 phys, u64 size) {
+    if (copy_only.load(std::memory_order_relaxed)) {
+        return -1;
+    }
     {
         std::scoped_lock lk{mutex};
         if (chunk_count == MaxChunks) {
@@ -282,6 +290,7 @@ bool AhbWorks(const Vulkan::Instance& instance, const char*& why) {
 #else
 
 namespace BbGuestMemory::detail {
+void SetAhbCopyOnly() {}
 int AllocAhbChunk(u64, u64) {
     return -1;
 }

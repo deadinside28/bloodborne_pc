@@ -195,7 +195,17 @@ bool Usable(const Vulkan::Instance& instance) {
                 return true;
             }
             std::printf("Guest memory: hardware buffers do not work here: %s\n", why);
-            return false;
+            // Copies instead (BB_GUEST_MEMORY=inplace refuses): every chunk stays in the
+            // runtime's memfd and the GPU copies what it uses. Slow, but it runs (the emulator).
+            const char* forced = bb_env("BB_GUEST_MEMORY");
+            if (forced && std::string_view{forced} == "inplace") {
+                return false;
+            }
+            SetAhbCopyOnly();
+            mode = Mode::AndroidHardwareBuffer;
+            std::printf("Guest memory: the game's direct memory stays in ordinary memory; the GPU "
+                        "copies what it uses (slow)\n");
+            return true;
         }
 #endif
         // BB_GUEST_MEMORY=dmabuf|host chooses; else AMD uses dma-buf chunks (tested the most) and

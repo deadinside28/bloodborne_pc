@@ -179,6 +179,29 @@ static int gpu_round_trip(AHardwareBuffer *ahb, uint64_t size, volatile uint32_t
     return checked;
 }
 
+/* Where in its fd a hardware buffer's memory starts: 0 for a dma-buf (phones); the emulator's
+ * buffers are blocks of /dev/goldfish_address_space, mappable only at the block's offset. Found
+ * where the buffer's own lock maps it (/proc/self/maps). */
+static uint64_t buffer_offset(AHardwareBuffer *ahb, int fd) {
+    void *probe = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0);
+    if (probe != MAP_FAILED) { munmap(probe, 4096); return 0; }
+    void *cpu = NULL;
+    if (AHardwareBuffer_lock(ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, NULL, &cpu)) return 0;
+    uint64_t offset = 0;
+    FILE *f = fopen("/proc/self/maps", "r");
+    char line[512];
+    while (f && fgets(line, sizeof(line), f)) {
+        unsigned long long start, end, off;
+        if (sscanf(line, "%llx-%llx %*s %llx", &start, &end, &off) == 3 && (uintptr_t)cpu >= start && (uintptr_t)cpu < end) {
+            offset = off + ((uintptr_t)cpu - start);
+            break;
+        }
+    }
+    if (f) fclose(f);
+    AHardwareBuffer_unlock(ahb, NULL);
+    return offset;
+}
+
 static int probe(uint64_t size, uint64_t at) {
     printf("%" PRIu64 " MiB at %#" PRIx64 ":\n", size >> 20, at);
     const AHardwareBuffer_Desc desc = { (uint32_t)size, 1, 1, AHARDWAREBUFFER_FORMAT_BLOB,
@@ -186,11 +209,19 @@ static int probe(uint64_t size, uint64_t at) {
         AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER, 0, 0, 0 };
     CHECK(size <= UINT32_MAX, "a BLOB's width is 32 bits: %" PRIu64 " MiB is too large for one buffer", size >> 20);
     AHardwareBuffer *ahb = NULL;
-    const int a = AHardwareBuffer_allocate(&desc, &ahb);
+    int a = AHardwareBuffer_allocate(&desc, &ahb);
+    if (a) {  /* the emulator's allocator (ranchu) refuses GPU_DATA_BUFFER for BLOBs: CPU usage only */
+        AHardwareBuffer_Desc cpu = desc;
+        cpu.usage &= ~(uint64_t)AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER;
+        a = AHardwareBuffer_allocate(&cpu, &ahb);
+        if (!a) printf("  allocated without GPU_DATA_BUFFER (refused with it)\n");
+    }
     CHECK(a == 0 && ahb, "AHardwareBuffer_allocate (%d)", a);
     const int fd = buffer_fd(ahb);
     CHECK(fd >= 0, "no fd from the native handle (%d)", fd);
-    void *p = mmap((void *)(uintptr_t)at, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED_NOREPLACE, fd, 0);
+    const uint64_t base = buffer_offset(ahb, fd);
+    if (base) printf("  its memory starts at offset %#" PRIx64 " of the fd\n", base);
+    void *p = mmap((void *)(uintptr_t)at, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED_NOREPLACE, fd, (off_t)base);
     CHECK(p == (void *)(uintptr_t)at, "mmap at the fixed address (%s)", p == MAP_FAILED ? strerror(errno) : "elsewhere");
     printf("  mapped at the game's address\n");
     ((volatile uint32_t *)p)[0] = 1;
