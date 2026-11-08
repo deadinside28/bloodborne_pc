@@ -9,6 +9,7 @@
 #include "common/logging/log.h"
 #include "common/thread.h"
 #include "platform/avplayer/player.h"
+#include "shim/bbport_guest_sites.h"
 
 namespace BbAvPlayer {
 
@@ -82,7 +83,8 @@ void Player::Emit(AvPlayerEvents event, void* data) {
         return;
     }
     if (game_events.event_callback) {
-        game_events.event_callback(game_events.object_ptr, event, 0, data);
+        // the game's code: through the runtime (recompiled on a host without x86 code)
+        BbGameFn<AvPlayerEventCallback>(game_events.event_callback)(game_events.object_ptr, event, 0, data);
         if (Tracing()) {
             std::printf("AvPlayer trace: event %d: the game's callback returned\n", int(event));
         }

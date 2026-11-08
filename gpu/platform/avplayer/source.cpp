@@ -21,6 +21,7 @@ extern "C" {
 #include "common/thread.h"
 #include "core/memory.h"
 #include "platform/avplayer/source.h"
+#include "shim/bbport_guest_sites.h"
 
 extern "C" int runtime_file_translate(const char* guest, char* out, size_t size);
 
@@ -83,13 +84,20 @@ void CopyNv12(u8* dst, u64 capacity, const AVFrame& src, u32 pitch, u32 height) 
 } // namespace
 #endif
 
+/// A callback of the game's (a function pointer it gave), called as the runtime calls its code.
+template <typename F>
+BbGuestFunction<F> Game(F callback) {
+    return BbGameFn<F>(callback);
+}
+
 // ---- Guest buffers ---------------------------------------------------------------------------
 
 GuestBuffer::GuestBuffer(const AvPlayerMemAllocator& allocator_, u32 align, u32 size_,
                          bool texture_)
     : allocator{&allocator_}, size{size_}, texture{texture_} {
-    void* memory = texture ? allocator->allocate_texture(allocator->object_ptr, align, size_)
-                           : allocator->allocate(allocator->object_ptr, align, size_);
+    // the game's callbacks: through the runtime (recompiled on a host without x86 code)
+    void* memory = texture ? Game(allocator->allocate_texture)(allocator->object_ptr, align, size_)
+                           : Game(allocator->allocate)(allocator->object_ptr, align, size_);
     data = static_cast<u8*>(memory);
     ASSERT_MSG(data, "the game's allocator gave no memory for a frame");
 }
@@ -99,9 +107,9 @@ GuestBuffer::~GuestBuffer() {
         return;
     }
     if (texture) {
-        allocator->deallocate_texture(allocator->object_ptr, data);
+        Game(allocator->deallocate_texture)(allocator->object_ptr, data);
     } else {
-        allocator->deallocate(allocator->object_ptr, data);
+        Game(allocator->deallocate)(allocator->object_ptr, data);
     }
 }
 
@@ -136,7 +144,7 @@ int ReadFileCallback(void* opaque, u8* buffer, int size) {
     }
     const u32 length = u32(std::min<u64>(u64(size), self->file_size - self->file_position));
     const s32 read =
-        self->file.read_offset(self->file.object_ptr, buffer, self->file_position, length);
+        Game(self->file.read_offset)(self->file.object_ptr, buffer, self->file_position, length);
     if (read <= 0) {
         return AVERROR_EOF;
     }
@@ -186,7 +194,7 @@ Source::~Source() {
         avio_context_free(&avio);
     }
     if (file_fd >= 0 && file.close) {
-        file.close(file.object_ptr);
+        Game(file.close)(file.object_ptr);
     }
 }
 
@@ -200,12 +208,12 @@ bool Source::Open(const AvPlayerInitData& init, std::string_view path) {
     }
     if (init.file_replacement.open) {
         file = init.file_replacement;
-        file_fd = file.open(file.object_ptr, guest_path.c_str());
+        file_fd = Game(file.open)(file.object_ptr, guest_path.c_str());
         if (file_fd < 0) {
             LOG_ERROR(Lib_AvPlayer, "the game's file callbacks could not open {}", guest_path);
             return false;
         }
-        file_size = file.size(file.object_ptr);
+        file_size = Game(file.size)(file.object_ptr);
         auto* buffer = static_cast<u8*>(av_malloc(IoBufferSize));
         avio = avio_alloc_context(buffer, IoBufferSize, 0, this, &ReadFileCallback, nullptr,
                                   &SeekFileCallback);
