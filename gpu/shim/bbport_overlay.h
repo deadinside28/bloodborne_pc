@@ -45,6 +45,8 @@ bool CapturesInput();
 
 /// The settings menu is open: the window shows the system cursor over it.
 bool MenuOpen();
+/// Opens the menu at the next frame (the touch controls' Menu button).
+void RequestOpen();
 
 /// Window thread: the game's text dialog (ImeDialog) state, drawn as a box over the frame.
 void SetTextPrompt(bool active, const std::string& prompt, const std::string& text);

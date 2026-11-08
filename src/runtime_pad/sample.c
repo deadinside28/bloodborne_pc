@@ -99,6 +99,23 @@ static void sample_host(PadData *d) {
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
         if (touch_right) touch_click(d,1);
     }
+    /* The on-screen touch controls (Android): over the pad state, gone while a gamepad is
+     * connected. Their sticks win where they are moved. */
+    int touch_active=0, touch_shown=0;
+    {
+        uint32_t tb=0; uint8_t ts[4];
+        const int touch=bbgpu_touch_pad(g!=NULL,&tb,ts);
+        touch_shown=touch>0;
+        if (touch==2) {
+            touch_active=1;
+            d->buttons|=tb & ~BTN_TOUCHPAD;
+            if (tb & BTN_L2) d->l2=255;
+            if (tb & BTN_R2) d->r2=255;
+            uint8_t *axes[4]={&d->left_x,&d->left_y,&d->right_x,&d->right_y};
+            for (int i=0;i<4;++i) if (ts[i]!=128) *axes[i]=ts[i];
+            if (tb & BTN_TOUCHPAD) { d->buttons|=BTN_TOUCHPAD; if (!d->touch_count) touch_click(d,0); }
+        }
+    }
     {
         /* BB_PAD_TRACE=1 (diagnostics): the gamepad's buttons and touches as read, on change. */
         static int trace=-1; static uint32_t last_buttons=~0u; static int last_touches=-1;
@@ -110,15 +127,15 @@ static void sample_host(PadData *d) {
                    (int)SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_BACK));
         }
     }
-    const int pad_active=g && (d->buttons || d->l2>30 || d->r2>30 || d->touch_count ||
+    const int pad_active=touch_active || (g && (d->buttons || d->l2>30 || d->r2>30 || d->touch_count ||
                                stick_moved(d->left_x) || stick_moved(d->left_y) ||
-                               stick_moved(d->right_x) || stick_moved(d->right_y));
+                               stick_moved(d->right_x) || stick_moved(d->right_y)));
     /* The Steam controller's trackpad mouse is the gamepad's: its prompts stay. */
     int keyboard_active=!pad_only &&
                         ((captured && (mouse_dx*mouse_dx+mouse_dy*mouse_dy>9.0 || wheel_up || wheel_down)) ||
                          (mouse_buttons!=0));
     for (int i=0;i<IN_COUNT && !keyboard_active;++i) keyboard_active=key_down(k,i);
-    prompt_note(g,pad_active,keyboard_active);
+    prompt_note(g,pad_active,keyboard_active,!g && touch_shown);
     apply_keyboard(d,k); /* the bound mouse buttons too */
     video_skip(d,k);
     if (motion_on()) {

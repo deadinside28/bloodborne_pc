@@ -5,6 +5,7 @@
 #include "shim/bb_env.h"
 
 #include "bbport_toggles.h"
+#include "bbport_touch.h"
 
 #include <algorithm>
 #include <array>
@@ -872,11 +873,16 @@ bool Visible() {
     }
     const bool shader_progress = ShaderProgressShown();
     return initialized && (menu_open || open_requested || prompt_active || banner_active ||
-                           trophy_active || BbSettings::Get().show_fps || shader_progress);
+                           trophy_active || BbSettings::Get().show_fps || shader_progress ||
+                           BbTouch::Shown());
 }
 
 bool MenuOpen() {
     return menu_open;
+}
+
+void RequestOpen() {
+    open_requested = true;
 }
 
 bool CapturesInput() {
@@ -952,6 +958,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     if (!menu_open) {
         ShaderProgressLine();
     }
+    BbTouch::Draw(io.DisplaySize.x, io.DisplaySize.y);
     if (trophy_active) {
         TrophyWindow(io.DeltaTime);
     }

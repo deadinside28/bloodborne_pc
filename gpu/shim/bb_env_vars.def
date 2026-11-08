@@ -41,6 +41,7 @@ BB_ENV(BB_FSR411_VARIANT, SETTING, "=int8 / fp8 / fp8emu / navi2 / lite: FSR 4.1
 BB_ENV(BB_FSR4_DIR, SETTING, "the FSR 4 v07 assets folder (default fsr4_shaders)")
 BB_ENV(BB_FSR_SHARPNESS, SETTING, "=0..1: RCAS sharpening (the menu's)")
 BB_ENV(BB_FULLSCREEN, SETTING, "=0 / 1 / exclusive: window mode")
+BB_ENV(BB_TOUCH_CONTROLS, SETTING, "=1 / 0: on-screen touch controls (on by default on Android; on a PC the mouse is the finger)")
 BB_ENV(BB_GAMEPAD, SETTING, "=SDL GUID or part of the name: the controller to use (the launcher's)")
 BB_ENV(BB_GAME_DIR, SETTING, "the game's folder (with eboot.bin)")
 BB_ENV(BB_GAME_MENU, SETTING, "=0: no port pages in the game's System menu")

@@ -11,12 +11,14 @@
 static int prompt_device=-1;
 static SDL_GamepadType prompt_pad_type=SDL_GAMEPAD_TYPE_UNKNOWN;
 static unsigned prompt_generation=1;
-static void prompt_note(SDL_Gamepad *g, int pad_active, int keyboard_active) {
+static void prompt_note(SDL_Gamepad *g, int pad_active, int keyboard_active, int touch) {
     int device=prompt_device;
-    const SDL_GamepadType type=g ? SDL_GetGamepadType(g) : SDL_GAMEPAD_TYPE_UNKNOWN;
+    /* the touch controls draw a DualShock 4's buttons */
+    const SDL_GamepadType type=g ? SDL_GetGamepadType(g) : touch ? SDL_GAMEPAD_TYPE_PS4 : SDL_GAMEPAD_TYPE_UNKNOWN;
     const int playstation=type==SDL_GAMEPAD_TYPE_PS3 || type==SDL_GAMEPAD_TYPE_PS4 || type==SDL_GAMEPAD_TYPE_PS5;
     if (keyboard_active) device=2;
     else if (g && (pad_active || device<0)) device=playstation ? 0 : 1;
+    else if (touch && (pad_active || device<0 || device==2)) device=0;
     else if (device<0) device=2;
     SDL_GamepadType shown_type=type;
     if (prompt_forced>=0) {

@@ -468,6 +468,16 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    (out/android/bbport-data: run.sh's three .bin files, app0/ for the dump). Files the app copies
    are its own: no chmod. Tried on the emulator (fake folder: picker driven with uiautomator,
    checksums equal).
+   **Touch controls (BB_TOUCH_CONTROLS, on by default on Android):** gpu/shim/bbport_touch.cpp
+   takes the window's finger events (and taps' mouse clicks, so they do not take the mouse):
+   left of 45% of the width a floating stick, right of it a floating camera stick (the origin
+   follows a finger that goes past the radius), DS4 buttons drawn by the overlay (face, L1/L2,
+   R1/R2, R3 lock-on, L3, d-pad, Touch, Options, and Menu for the port's menu). runtime_pad's
+   sample_host reads them (bbgpu_touch_pad) over the pad state; they hide and read nothing while
+   a gamepad is connected or the menu is open; prompts are the PS4's while they are shown. On a
+   PC with BB_TOUCH_CONTROLS=1 the mouse is the finger (SDL_HINT_MOUSE_TOUCH_EVENTS). Drawn on
+   the PC (title); the logic checked with a standalone test fed SDL finger events. Untried on
+   the phone.
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,

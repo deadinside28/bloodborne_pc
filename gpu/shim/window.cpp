@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "bbgpu.h"
+#include "bbport_touch.h"
 #include <SDL3/SDL.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -179,6 +180,10 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     // closing the activity.
     SDL_SetHintWithPriority(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1", SDL_HINT_DEFAULT);
 #endif
+    // The touch controls on a PC (tests): the mouse as a finger.
+    if (BbTouch::Enabled()) {
+        SDL_SetHintWithPriority(SDL_HINT_MOUSE_TOUCH_EVENTS, "1", SDL_HINT_DEFAULT);
+    }
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
@@ -389,6 +394,10 @@ bool WindowSDL::PollEvents() {
                 SDL_StopTextInput(window);
             }
             UpdateTextTitle();
+            continue;
+        }
+        // the on-screen touch controls take fingers (and taps as clicks) while the menu is closed
+        if (BbTouch::HandleEvent(event)) {
             continue;
         }
         if (BbOverlay::HandleEvent(event)) {
