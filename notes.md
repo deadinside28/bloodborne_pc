@@ -419,7 +419,10 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    the phone the live host display buffer (BB_PRESENT_DUMP_TRIGGER) is opaque black (alpha set,
    colour 0). Left: Adreno's limits and features inside its extensions (storage images without
    format, alignments, push descriptor limits) and its shader compiler; a frame capture
-   (RenderDoc for Android) would show which pass goes black.
+   (RenderDoc for Android) would show which pass goes black. Limits compared (phone / PC):
+   subgroup stages compute+fragment only / all (the shader compiler now logs subgroup use
+   outside them; none at the title), no clustered subgroup ops, no shaderFloat64, storage/uniform
+   offset alignment 64/256 (16/64), 7 descriptor sets (32), subgroup 64 (32). Validation was clean.
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,

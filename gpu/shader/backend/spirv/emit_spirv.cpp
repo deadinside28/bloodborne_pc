@@ -4,6 +4,8 @@
 // converted by the function's parameter types), the abstract syntax list becomes structured
 // control flow, and the module gets its capabilities, entry point, execution modes and float
 // controls.
+#include <atomic>
+#include <cstdio>
 #include <mutex>
 #include <span>
 #include <type_traits>
@@ -335,6 +337,21 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
     }
     if (info.uses_lane_id) {
         ctx.AddCapability(Capability::GroupNonUniform);
+    }
+    // Subgroup operations outside compute and fragment shaders: drivers that support them only
+    // there (Adreno: subgroupSupportedStages compute | fragment) give undefined results.
+    if ((info.uses_group_ballot || info.uses_group_quad || info.uses_group_shuffle ||
+         info.uses_lane_id) &&
+        info.sw_stage != Shader::SwStage::Compute && info.sw_stage != Shader::SwStage::Fragment) {
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1) < 20) {
+            std::printf("Shader %016llx (stage %u): subgroup operations%s%s%s%s outside compute and "
+                        "fragment\n",
+                        (unsigned long long)info.pgm_hash, unsigned(info.sw_stage),
+                        info.uses_group_ballot ? " ballot/readlane" : "",
+                        info.uses_group_quad ? " quad" : "", info.uses_group_shuffle ? " shuffle" : "",
+                        info.uses_lane_id ? " lane id" : "");
+        }
     }
     if (info.uses_group_quad) {
         ctx.AddCapability(Capability::GroupNonUniformQuad);
