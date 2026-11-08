@@ -9,6 +9,7 @@
 #include "shim/bb_env.h"
 #ifndef _WIN32
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>

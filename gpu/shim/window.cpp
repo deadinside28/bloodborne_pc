@@ -213,6 +213,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         window_info.type = WindowSystemType::X11;
         window_info.display_connection = SDL_GetPointerProperty(wp, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
         window_info.render_surface = reinterpret_cast<void*>(SDL_GetNumberProperty(wp, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
+    } else if (driver && !std::strcmp(driver, "android")) {
+        window_info.type = WindowSystemType::Android;
+        window_info.render_surface = SDL_GetPointerProperty(wp, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
     } else if (driver && !std::strcmp(driver, "wayland")) {
         window_info.type = WindowSystemType::Wayland;
         window_info.display_connection = SDL_GetPointerProperty(wp, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);

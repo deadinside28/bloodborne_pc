@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #ifdef _WIN32
 #define VK_USE_PLATFORM_WIN32_KHR
+#elif defined(__ANDROID__)
+#define VK_USE_PLATFORM_ANDROID_KHR
 #else
 #define VK_USE_PLATFORM_WAYLAND_KHR
 #define VK_USE_PLATFORM_XLIB_KHR
@@ -90,6 +92,10 @@ std::vector<const char*> Extensions(Frontend::WindowSystemType window_type,
 #ifdef _WIN32
     if (window_type == Frontend::WindowSystemType::Windows) {
         extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+    }
+#elif defined(__ANDROID__)
+    if (window_type == Frontend::WindowSystemType::Android) {
+        extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
     }
 #else
     if (window_type == Frontend::WindowSystemType::X11) {
@@ -242,6 +248,13 @@ vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::WindowSDL& w
             .hwnd = static_cast<HWND>(info.render_surface),
         };
         result = instance.createWin32SurfaceKHR(&create_info, nullptr, &surface);
+    }
+#elif defined(__ANDROID__)
+    if (info.type == Frontend::WindowSystemType::Android) {
+        const vk::AndroidSurfaceCreateInfoKHR create_info{
+            .window = static_cast<ANativeWindow*>(info.render_surface),
+        };
+        result = instance.createAndroidSurfaceKHR(&create_info, nullptr, &surface);
     }
 #else
     if (info.type == Frontend::WindowSystemType::X11) {

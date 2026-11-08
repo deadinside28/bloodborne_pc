@@ -293,8 +293,15 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    mallopt tuning, no asm/prctl.h, strtok_r. Wireless adb: pair with the SDK's adb
    (~/.local/opt/android-sdk/platform-tools/adb; the pairing port from `adb mdns services`,
    _adb-tls-pairing) right after the code shows: stale codes fail with "protocol fault".
-   Next on Android: the GPU library with the NDK (Vulkan from the NDK; SDL3, boost, fmt...
-   built for Android), then an APK (SDL's activity) for a window. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   Then the GPU library for Android: `tools/android_deps.sh` (SDL 3.4.18, fmt 11.2.0, Zycore +
+   Zydis 4.1.1, xxHash 0.8.3 built with the NDK into out/android/deps; Boost, robin-map, VMA and
+   the 1.4.357 Vulkan headers copied) and `tools/android_gpu.sh` -> out/android/gpu/libbbgpu.so.
+   Changes: BB_FFMPEG (off on Android: no movies, platform/avplayer's Source never opens), no X11
+   on Android, the Android Vulkan surface (WindowSystemType::Android, VK_KHR_android_surface,
+   SDL's ANativeWindow), -z undefs (the runtime's symbols come from the executable), <algorithm>
+   in read_sample.cpp, fmt with -include cstdlib. To note: the movie player calls the game's
+   allocator callbacks natively (GuestBuffer): through runtime_guest_call before FFmpeg returns
+   on AArch64. Next: an APK (SDL's activity; bb-probe as libmain.so's SDL_main). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

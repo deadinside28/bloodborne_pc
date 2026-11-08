@@ -4,6 +4,7 @@
 #include <cstring>
 #include <string>
 
+#ifndef BB_NO_FFMPEG
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -12,6 +13,7 @@ extern "C" {
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
+#endif
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -24,6 +26,7 @@ extern "C" int runtime_file_translate(const char* guest, char* out, size_t size)
 
 namespace BbAvPlayer {
 
+#ifndef BB_NO_FFMPEG
 namespace {
 
 constexpr s32 WarningLoopingBack = s32(0x806A00A1);
@@ -78,6 +81,7 @@ void CopyNv12(u8* dst, u64 capacity, const AVFrame& src, u32 pitch, u32 height) 
 }
 
 } // namespace
+#endif
 
 // ---- Guest buffers ---------------------------------------------------------------------------
 
@@ -113,6 +117,7 @@ GuestBuffer& GuestBuffer::operator=(GuestBuffer&& other) noexcept {
     return *this;
 }
 
+#ifndef BB_NO_FFMPEG
 void Source::PacketDeleter::operator()(AVPacket* packet) const {
     av_packet_free(&packet);
 }
@@ -703,5 +708,56 @@ bool Source::GetAudioData(AvPlayerFrameInfo& info) {
     audio.current = std::move(frame);
     return true;
 }
+
+#else // BB_NO_FFMPEG: no movies (a build without FFmpeg): a source never opens
+
+void Source::PacketDeleter::operator()(AVPacket*) const {}
+void Source::FrameDeleter::operator()(AVFrame*) const {}
+Source::Source(SourceListener& listener_) : listener{listener_} {}
+Source::~Source() = default;
+bool Source::Open(const AvPlayerInitData&, std::string_view path) {
+    LOG_WARNING(Lib_AvPlayer, "movie {}: not played (built without FFmpeg)", path);
+    return false;
+}
+bool Source::FindStreams() {
+    return false;
+}
+s32 Source::StreamCount() const {
+    return 0;
+}
+bool Source::StreamInfo(u32, AvPlayerStreamInfo&) const {
+    return false;
+}
+bool Source::EnableStream(u32) {
+    return false;
+}
+void Source::SetLooping(bool) {}
+bool Source::HasFrames(u32) {
+    return true;  // the file "ended"
+}
+bool Source::Start() {
+    return false;
+}
+bool Source::Stop() {
+    return true;
+}
+void Source::Pause() {}
+void Source::Resume() {}
+bool Source::GetAudioData(AvPlayerFrameInfo&) {
+    return false;
+}
+bool Source::GetVideoData(AvPlayerFrameInfo&) {
+    return false;
+}
+bool Source::GetVideoData(AvPlayerFrameInfoEx&) {
+    return false;
+}
+u64 Source::CurrentTime() {
+    return 0;
+}
+bool Source::IsActive() {
+    return false;
+}
+#endif
 
 } // namespace BbAvPlayer
