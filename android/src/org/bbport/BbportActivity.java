@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 package org.bbport;
 
+import android.os.Build;
+import android.os.Bundle;
+import android.view.WindowManager;
+
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -18,6 +22,17 @@ import org.libsdl.app.SDLActivity;
  * Android loads code only from the app's own library folder.
  */
 public class BbportActivity extends SDLActivity {
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        // The picture also under the camera cutout: the whole panel (3120x1440 on the S25 Ultra).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowManager.LayoutParams attrs = getWindow().getAttributes();
+            attrs.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+            getWindow().setAttributes(attrs);
+        }
+    }
+
     @Override
     protected String[] getLibraries() {
         return new String[] { "SDL3", "main" };  // libmain.so needs libbbgpu.so: loaded together

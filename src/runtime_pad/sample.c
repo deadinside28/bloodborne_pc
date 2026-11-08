@@ -88,7 +88,7 @@ static void sample_host(PadData *d) {
                 }
             }
         }
-#ifdef __linux__
+#if defined(__linux__) && !defined(__ANDROID__)
         else {
             const SDL_GamepadType type=SDL_GetGamepadType(g);
             if (type==SDL_GAMEPAD_TYPE_PS4 || type==SDL_GAMEPAD_TYPE_PS5) evdev_touchpad(d,d->timestamp);

@@ -62,6 +62,12 @@ static void defaults(const char *data) {
     /* Hardware buffers take their 256 MiB at once, ordinary memory as it is touched: keep more of
      * the phone free (with 2 GiB the start dipped under 1.5 GB available). */
     setenv("BB_AHB_RESERVE_MB", "4000", 0);
+    /* Live output changes over the startup patch (run.sh sets it): the output follows the
+     * display (3120x1440 on the S25 Ultra) and the game's camera and HUD its aspect ratio;
+     * without it the output stayed 1920x1080 and the picture 16:9 between black bars. */
+    setenv("BB_LIVE_HYBRID", "1", 0);
+    /* The whole screen: SDL hides the status and navigation bars (immersive). */
+    setenv("BB_FULLSCREEN", "1", 0);
     snprintf(path, sizeof(path), "%s/bbport.ini", data);
     setenv("BB_CONFIG", path, 0);
     snprintf(path, sizeof(path), "%s/user", data);

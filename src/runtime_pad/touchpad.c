@@ -14,7 +14,7 @@ static void touch_click(PadData *d, int right) {
     if (d->touch_count<2) d->touches[d->touch_count++]=(PadTouch){.x=x,.y=471,.id=0};
 }
 
-#ifdef __linux__
+#if defined(__linux__) && !defined(__ANDROID__) /* Android: no /dev/input access */
 /* A DualShock 4 / DualSense touchpad SDL does not see (no hidraw access: SDL then reads the pad
  * through evdev, whose touchpad is a separate "... Touchpad" device): read from that device, its
  * fingers and its click, so the game gets the side pressed (from the SrShadowy fork). Looked for
