@@ -461,6 +461,13 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    swresample: the game's four MP4s are H.264 + AAC); android_gpu.sh turns BB_FFMPEG on when it
    finds it; linked in one --start-group with -Bsymbolic (FFmpeg's AArch64 assembly addresses
    its tables directly). Untried on the phone.
+   **First-run setup in the app:** SetupActivity is the launcher; with the game's files missing
+   it asks for a folder (Android's picker) and copies it into the app's files folder with
+   progress, a free-space check (2 GB stay free) and resume (same-size files skipped; .part
+   while copying), then starts BbportActivity. The folder is tools/android_prepare.sh's
+   (out/android/bbport-data: run.sh's three .bin files, app0/ for the dump). Files the app copies
+   are its own: no chmod. Tried on the emulator (fake folder: picker driven with uiautomator,
+   checksums equal).
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
