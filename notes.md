@@ -426,7 +426,7 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    **Found with RenderDoc (2026-11-08):** captured on the phone (BB_RENDERDOC_TRIGGER, RenderDoc's
    layer packed into the APK: BB_APK_LAYERS; gpu_debug_layer_app was not searched) and replayed
    on the phone through RenderDoc's remote server, driven by a small C++ tool against
-   librenderdoc's replay API (qrenderdoc needs an analytics answer first; the PC cannot replay the
+   librenderdoc's replay API (tools/renderdoc: the tools and how to use them) (qrenderdoc needs an analytics answer first; the PC cannot replay the
    capture: APIHardwareUnsupported). The display pass (game vs 89cda9e4) reads a good
    1920x1080 image and the 1025x1x3 display LUT, but writes no pixel: its output keeps the clear
    (alpha 1 everywhere). It is a RECT LIST drawn as a 3-control-point patch through bbport's
