@@ -21,7 +21,7 @@ namespace Vulkan::PipelineStore {
 
 /// Increment the one whose layout changes.
 constexpr u32 ShaderBinaryVersion = 24u; // paged records read once, a lookup per page (PagedDwords)
-constexpr u32 ShaderMetaVersion = 13u;   // no denormal flush on Adreno (it zeroed fragment colour)
+constexpr u32 ShaderMetaVersion = 14u;   // motion vector varyings at locations 24 and 25
 constexpr u32 PipelineKeyVersion = 5u;   // Info layout (ImageResource::needs_native)
 
 void SaveCompute(const ComputePipelineKey& key, const ComputePipeline::SerializationSupport& sdata);

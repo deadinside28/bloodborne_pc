@@ -3,6 +3,7 @@
 // bbport render: Rasterizer, the draw and dispatch entry points: pipeline selection, then recording here or on the
 // draw recording thread (raster_pipe.cpp), and the per-frame bookkeeping.
 
+#include <unordered_set>
 #include <mutex>
 #include "shim/bb_env.h"
 #include <set>
@@ -744,6 +745,31 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         .program = {vs_info.ProgramBase(), ps_info ? ps_info->ProgramBase() : 0},
         .count = {num_indices, num_instances, 0},
     };
+    // Transfer-write breadcrumbs (Adreno, no fault report): what each new pipeline's render state
+    // is, once: the state first seen right before a device lost.
+    if (Breadcrumbs::Enabled() && Breadcrumbs::FillMode()) {
+        static std::unordered_set<const void*> seen;
+        if (seen.insert(pipeline).second) {
+            const auto& pk = pipeline->GetGraphicsKey();
+            std::string colors, vertex;
+            for (u32 i = 0; i < pk.num_color_attachments && i < pk.color_buffers.size(); ++i) {
+                colors += fmt::format(" {}/{}", u32(pk.color_buffers[i].data_format),
+                                      u32(pk.color_buffers[i].num_format));
+            }
+            for (const vk::Format format : pk.vertex_buffer_formats) {
+                if (format != vk::Format::eUndefined) {
+                    vertex += fmt::format(" {}", u32(format));
+                }
+            }
+            std::printf("Pipeline state: vs %016llx ps %016llx prim %u poly %u samples %u/%u z %u "
+                        "stencil %u clamp %u clip %u mrt %#x patch %u; colors%s; vertex%s\n",
+                        (unsigned long long)crumb.hash[0], (unsigned long long)crumb.hash[1],
+                        u32(pk.prim_type), u32(pk.polygon_mode), u32(pk.num_samples),
+                        u32(pk.depth_samples), u32(pk.z_format), u32(pk.stencil_format),
+                        u32(pk.depth_clamp_enable), u32(pk.depth_clip_enable), pk.mrt_mask,
+                        pk.patch_control_points, colors.c_str(), vertex.c_str());
+        }
+    }
     // On NVIDIA by default (its hangs give no fault address): it costs the recording thread a
     // few T# and V# reads a draw. BB_BREADCRUMB_READS=1 / 0: on / off everywhere.
     static const bool crumb_reads = [&] {

@@ -538,7 +538,8 @@ GraphicsPipeline::GraphicsPipeline(
             LOG_WARNING(Render_Vulkan, "color buffer format {} does not support COLOR_ATTACHMENT_BIT",
                         vk::to_string(format));
         }
-        color_formats[i] = format;
+        // A slot the game leaves out between used ones has no image: VUID-...-08912.
+        color_formats[i] = (key.mrt_mask >> i) & 1 ? format : vk::Format::eUndefined;
     }
     std::array<vk::SampleCountFlagBits, Gcn::NUM_COLOR_BUFFERS> color_samples;
     std::ranges::transform(key.color_samples, color_samples.begin(), [&instance](u8 samples) {
