@@ -142,7 +142,8 @@ static void load_bindings(void) {
         if (input<0 || (pad && input>=IN_MOVE_UP)) { printf("Runtime: controls: unknown input %s\n",line); continue; }
         Binding *b=&bindings[input];
         if (keyboard) b->key_count=0; else b->pad_count=0;
-        for (char *name=strtok(eq+1,",\r\n"); name; name=strtok(NULL,",\r\n")) {
+        char *rest=NULL;
+        for (char *name=strtok_r(eq+1,",\r\n",&rest); name; name=strtok_r(NULL,",\r\n",&rest)) {
             while (*name==' ') ++name;
             for (char *end=name+strlen(name); end>name && end[-1]==' ';) *--end=0;
             if (!*name) continue;

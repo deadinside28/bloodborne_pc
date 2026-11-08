@@ -284,7 +284,17 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    memory, files, 60 audio buffers out; it stops at the first graphics call
    (sceGnmGetTheTessellationFactorRingBufferBaseAddress: unresolved without the GPU library), as
    CPU-only must. Next: the GPU library for AArch64 (it compiles; needs AArch64 Vulkan, SDL3,
-   boost... to link) and a machine with a GPU to run it on. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   boost... to link) and a machine with a GPU to run it on.
+   **And on the phone (2026-11-07):** `tools/android_cpu_only.sh` builds bb-probe with NDK r30
+   (`sdkmanager "ndk;30.0.16248370"`, aarch64-linux-android35-clang, -Werror), pushes it, the
+   image and the library to /data/local/tmp/bbport (adb over Wi-Fi: ~450 MB in 8 s) and runs it:
+   the Galaxy S25 Ultra (SM8750, Android 17) runs the same startup as QEMU, to the same first
+   graphics call. Android needed: USER_MAX below 512 GiB on AArch64 (0x7000000000), no glibc
+   mallopt tuning, no asm/prctl.h, strtok_r. Wireless adb: pair with the SDK's adb
+   (~/.local/opt/android-sdk/platform-tools/adb; the pairing port from `adb mdns services`,
+   _adb-tls-pairing) right after the code shows: stale codes fail with "protocol fault".
+   Next on Android: the GPU library with the NDK (Vulkan from the NDK; SDL3, boost, fmt...
+   built for Android), then an APK (SDL's activity) for a window. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

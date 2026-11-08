@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
-#ifndef _WIN32
+#if !defined(_WIN32) && defined(__x86_64__)
 #include <asm/prctl.h>
 #endif
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))

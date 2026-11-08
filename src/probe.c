@@ -536,8 +536,10 @@ int main(int argc, char **argv) {
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
        non-PIE brk heap, i.e. below 1 TiB: the guest packs pointers into 40 bits. */
+#if defined(M_ARENA_MAX)  /* glibc; Android's 39-bit address space is below 1 TiB anyway */
     mallopt(M_ARENA_MAX,1);
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
+#endif
 #endif
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
     /* Shader recipes (gpu/render/shader_rebuild.h): no game here, the guest's addresses stay free. */

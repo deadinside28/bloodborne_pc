@@ -52,7 +52,13 @@ static uint64_t pool_size_bytes(void) { return game_pool_bytes() + extra_pool_by
 #define FLEXIBLE_SIZE (UINT64_C(448) * 1024 * 1024)
 #define PAGE UINT64_C(16384)
 #define USER_MIN UINT64_C(0x1000000000)
+#if defined(__aarch64__)
+/* Many AArch64 devices (Android phones) have a 39-bit address space (user space below 512 GiB):
+ * the guest's range ends below it. The game's highest address measured on PC is ~70 GiB. */
+#define USER_MAX UINT64_C(0x7000000000)
+#else
 #define USER_MAX UINT64_C(0xfc00000000)
+#endif
 #define LIMIT 4096
 #define INVALID ((int32_t)UINT32_C(0x80020016))
 #define NO_MEMORY ((int32_t)UINT32_C(0x8002000c))
