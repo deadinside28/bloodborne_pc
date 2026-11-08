@@ -193,6 +193,24 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         std::printf("Guest memory: the layer's memory module binds the game's memory in place "
                     "(chunk buffers, no sparse arena for it; BB_LAYER_MEMORY=1)\n");
     }
+    {
+        const auto props = instance.GetPhysicalDevice()
+                               .getProperties2<vk::PhysicalDeviceProperties2,
+                                               vk::PhysicalDeviceVulkan13Properties>();
+        const u64 max_buffer = props.get<vk::PhysicalDeviceVulkan13Properties>().maxBufferSize;
+        if (max_buffer && max_buffer < (u64{1} << 32)) {
+            u64 bits = MIN_ARENA_PAGE_BITS;
+            while (bits < 32 && (u64{4} << (bits + 1)) <= max_buffer) {
+                ++bits;
+            }
+            ARENA_PAGE_BITS = bits;
+            ARENA_PAGE_SIZE = u64{1} << bits;
+            std::printf("Guest memory: arenas over %llu MiB pages (the GPU's buffers reach %llu "
+                        "MiB)\n",
+                        (unsigned long long)(ARENA_PAGE_SIZE >> 20),
+                        (unsigned long long)(max_buffer >> 20));
+        }
+    }
     const std::array<u32, 2> families = {instance.GetGraphicsQueueFamilyIndex(),
                                          instance.GetReadbackQueueFamilyIndex()};
     const bool shared = bool(instance.GetReadbackQueue()); // as Buffer creates the arenas
@@ -245,7 +263,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     const u64 bda_pagetable_size = (Shader::PageTableSpan >> block_shift) * sizeof(vk::DeviceAddress) *
                                    (LayerActive() ? 2 : 1);
     fault_manager = std::make_unique<FaultBuffer>(instance, scheduler, *this, block_shift,
-                                                   blocks_per_arena_page * NUM_ARENA_PAGES);
+                                                   u64{1} << (ADDRESS_SPACE_BITS - block_shift));
     bda_pagetable_buffer = std::make_unique<Buffer>(
         instance, 0, bda_pagetable_size, MemoryType::DeviceLocal, "BDA Page Table Buffer");
     runtime.FillBuffer(bda_pagetable_buffer.get(), 0u, bda_pagetable_size, 0u);

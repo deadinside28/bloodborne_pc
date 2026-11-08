@@ -81,9 +81,12 @@ public:
 
 class BufferCache {
     static constexpr u64 ADDRESS_SPACE_BITS = 40;
-    static constexpr u64 ARENA_PAGE_BITS = 32;
-    static constexpr u64 ARENA_PAGE_SIZE = u64{1} << ARENA_PAGE_BITS;
-    static constexpr u64 NUM_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - ARENA_PAGE_BITS);
+    // Arenas cover whole pages of the address space: 4 GiB, or less where the device's buffers
+    // are smaller (Adreno: under 4 GiB): four pages (a merged arena's reach) then fit in one.
+    static constexpr u64 MIN_ARENA_PAGE_BITS = 29;
+    static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_ARENA_PAGE_BITS);
+    u64 ARENA_PAGE_BITS = 32;
+    u64 ARENA_PAGE_SIZE = u64{1} << 32;
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
 
 public:
@@ -613,7 +616,7 @@ private:
     std::unique_ptr<FaultBuffer> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
 
-    std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
+    std::array<const Buffer*, MAX_ARENA_PAGES> address_space{};
     std::deque<Buffer> arenas;
     std::vector<ArenaBinds> pending_binds;
     Vulkan::Semaphore memory_semaphore;

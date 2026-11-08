@@ -3,6 +3,9 @@
 package org.bbport;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import org.libsdl.app.SDLActivity;
 
@@ -26,14 +29,21 @@ public class BbportActivity extends SDLActivity {
         final String dir = files.getAbsolutePath();
         final String libs = getApplicationInfo().nativeLibraryDir;
         new File(files, "user").mkdirs();
-        // KEY=VALUE before "--": the environment run.sh would set (src/android_main.c)
-        return new String[] {
-            "BB_AOT=" + libs + "/libbbaot.so",
-            "BB_DATA_DIR=" + dir,
-            "--",
+        // KEY=VALUE before "--": the environment run.sh would set (src/android_main.c); more from
+        // the launch (adb shell am start -n org.bbport/.BbportActivity --es env "KEY=VALUE ...")
+        final List<String> args = new ArrayList<>();
+        args.add("BB_AOT=" + libs + "/libbbaot.so");
+        args.add("BB_DATA_DIR=" + dir);
+        final String env = getIntent() != null ? getIntent().getStringExtra("env") : null;
+        if (env != null) {
+            for (String kv : env.trim().split("\\s+")) {
+                if (kv.indexOf('=') > 0) args.add(kv);
+            }
+        }
+        args.addAll(Arrays.asList("--",
             dir + "/boot-linked.bin", "--content-profile", dir + "/content.bin",
             "--patches", dir + "/patches.bin", "--app0", dir + "/app0", "--user", dir + "/user",
-            "--timeout", "0",
-        };
+            "--timeout", "0"));
+        return args.toArray(new String[0]);
     }
 }

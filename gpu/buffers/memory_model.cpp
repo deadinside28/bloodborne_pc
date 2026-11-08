@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <execinfo.h>
+#include <unistd.h>
 #include "buffers/memory_model.h"
 #include "shim/bb_env.h"
 
@@ -16,7 +18,13 @@ void GuestMemoryUnusable(const char* why) {
                 "NVIDIA or Windows driver); please report the GPU and driver with this log.\n",
                 why);
     std::fflush(stdout);
-    std::exit(23);
+    // Where it was decided (module+offset: addr2line -e libbbgpu.so), and out at once: exit's
+    // destructors would run under the GPU threads still at work (a destroyed mutex aborted).
+    void* frames[48];
+    const int depth = backtrace(frames, 48);
+    std::fputs("Call stack:\n", stderr);
+    backtrace_symbols_fd(frames, depth, STDERR_FILENO);
+    std::_Exit(23);
 }
 
 bool WriteVerify() {

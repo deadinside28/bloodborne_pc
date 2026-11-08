@@ -359,7 +359,21 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    skips frames; the window thread (SDL_ANDROID_BLOCK_ON_PAUSE=0) tracks the surface, the
    presenter skips frames while there is none and makes the swapchain's surface again for a new
    one (Swapchain::RecreateSurface). Untested on the phone yet: run it in the foreground, then
-   background and back. (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
+   background and back. **The 18-buffer stall, found (2026-11-07):** not the background (it
+   stalls in front too) and not a deadlock: the game's main loop paced empty frames (the frame
+   pacer at guest 0x2034770 busy-waits ~2 ms a frame; BB_AOT_TARGETS=1 now samples calls into
+   bbport with the guest return address). The game could not read its files: adb push makes
+   directories `drwxrws--- shell ext_data_rw`, which the app cannot enter (files pushed straight
+   into files/ are readable, so boot-linked.bin loaded): param.sfo unread (serial UNKNOWN, no
+   game profile), app0 unreadable, loading never ends. After a push: `adb shell chmod -R a+rX
+   .../files/app0; chmod -R a+rwX .../files/user`. Then the layer's copy path (bindings not whole
+   in one chunk go to the sparse arena) stopped: Adreno's buffers reach 4095 MiB and arenas were
+   4 GiB pages; arena pages now follow maxBufferSize (512 MiB on Adreno, 4 GiB elsewhere). The
+   memory STOP prints its call stack and leaves with _Exit (exit's destructors under live GPU
+   threads aborted on a destroyed mutex). The app takes extra KEY=VALUE settings from the launch
+   (`am start ... --es env "KEY=VALUE ..."`). Next: memory: the game took ~2 GB in its first 2 s
+   and the watchdog (1.5 GB available) stopped it; MemAvailable leaves out cached apps that the
+   low-memory killer would close. (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch

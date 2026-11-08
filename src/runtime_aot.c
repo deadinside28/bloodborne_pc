@@ -240,10 +240,16 @@ static void report_targets(void) {
     memcpy(sorted, target_counts, sizeof(sorted));
     pthread_mutex_unlock(&target_lock);
     qsort(sorted, 4096, sizeof(*sorted), by_count);
-    printf("AOT: most frequent targets in the original game code (%s call or jump, by count):\n",
+    printf("AOT: most frequent targets in the original game code and bbport (%s call or jump, by count):\n",
            sample_targets == 2 ? "every" : "every 64th");
     for (int i = 0; i < 40 && sorted[i].count; ++i) {
         Dl_info where;
+        if (sorted[i].jump == 2) {
+            const char *n = dladdr((void *)(uintptr_t)sorted[i].target, &where) && where.dli_sname ? where.dli_sname : "?";
+            printf("AOT:   %8" PRIu64 " call to bbport %s (%#" PRIx64 ") returning to guest 0x%" PRIx64 "\n",
+                   sorted[i].count, n, sorted[i].target, sorted[i].caller);
+            continue;
+        }
         const char *n = dladdr((void *)(uintptr_t)sorted[i].caller, &where) && where.dli_sname ? where.dli_sname : "?";
         printf("AOT:   %8" PRIu64 " %s guest 0x%" PRIx64 " (e.g. from %s)\n", sorted[i].count,
                sorted[i].jump ? "jump to" : "call to", sorted[i].target - __recomp_slide, n);
@@ -401,6 +407,8 @@ void __recomp_dispatch(RecompState *st, uint64_t target) {
     DispatchEvent *e = note(st, target, (uint64_t)(uintptr_t)__builtin_return_address(0), EV_CALL);
     if (target - __recomp_slide >= image_size) {  /* bbport's runtime (an import), not the game */
         recomp_hybrid_self->host_calls++;
+        /* kind 2: a call into bbport, counted with the guest's return address ([rsp]) */
+        if (sample_targets) sample(target, *(const uint64_t *)(uintptr_t)st->gpr[G_RSP] - __recomp_slide, 2);
         if (host_calls_portable) {
             portable_call_host(st, target);
             if (e->target == target) e->done_rsp = st->gpr[G_RSP];
