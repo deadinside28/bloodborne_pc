@@ -60,6 +60,12 @@ static void bridge_unbound(RecompState *st, uint64_t host);
 static int unbound_count;
 static char unbound_slots[256];  // distinct addresses standing for imports nobody provides
 
+// glibc's checked memcpy (zlib-ng calls it), which a static musl build lacks
+static void *memcpy_chk(void *dst, const void *src, size_t n, size_t dst_size) {
+    if (n > dst_size) abort();
+    return memcpy(dst, src, n);
+}
+
 static const struct { const char *name; void *fn; } host_imports[] = {
     { "malloc", (void *)malloc }, { "free", (void *)free }, { "calloc", (void *)calloc },
     { "realloc", (void *)realloc }, { "memcpy", (void *)memcpy }, { "memmove", (void *)memmove },
@@ -67,6 +73,7 @@ static const struct { const char *name; void *fn; } host_imports[] = {
     { "strlen", (void *)strlen }, { "strerror", (void *)strerror }, { "read", (void *)read },
     { "write", (void *)write }, { "close", (void *)close }, { "lseek64", (void *)lseek },
     { "lseek", (void *)lseek }, { "__errno_location", (void *)__errno_location },
+    { "__memcpy_chk", (void *)memcpy_chk },
 };
 
 static Import *find_import(uint64_t host) {
@@ -252,9 +259,22 @@ uint64_t __recomp_rdtsc(void) {
 }
 
 // cpuid for recompiled code: the host's answer (bbport will report the PS4's Jaguar).
+// RECOMP_CPUID=sse2: a baseline x86-64 (SSE2, no later extension, no XSAVE): libraries that
+// pick code by the CPU (zlib-ng: AVX2, AVX-512, VPCLMULQDQ, SSSE3, PCLMULQDQ paths) take their
+// SSE2 one, which the lifter covers.
 void __recomp_cpuid(uint32_t leaf, uint32_t sub, uint32_t out[4]) {
 #if defined(__x86_64__)
     __asm__ volatile("cpuid" : "=a"(out[0]), "=b"(out[1]), "=c"(out[2]), "=d"(out[3]) : "a"(leaf), "c"(sub));
+    static int baseline = -1;
+    if (baseline < 0) {
+        const char *e = getenv("RECOMP_CPUID");
+        baseline = e && !strcmp(e, "sse2");
+    }
+    if (baseline) {
+        if (leaf == 1) out[2] = 0;                                  // SSE3 .. AVX, OSXSAVE
+        else if (leaf == 7 || leaf == 0xd) out[1] = out[2] = out[3] = out[0] = 0;
+        else if (leaf == 0x80000001u) out[2] &= 1;                  // LAHF only (no LZCNT, SSE4a)
+    }
 #else
     (void)sub;
     memset(out, 0, 16);
