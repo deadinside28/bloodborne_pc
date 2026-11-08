@@ -373,7 +373,11 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    threads aborted on a destroyed mutex). The app takes extra KEY=VALUE settings from the launch
    (`am start ... --es env "KEY=VALUE ..."`). Next: memory: the game took ~2 GB in its first 2 s
    and the watchdog (1.5 GB available) stopped it; MemAvailable leaves out cached apps that the
-   low-memory killer would close. (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
+   low-memory killer would close. **With the phone's other apps closed (5.3 GB available): the
+   game runs on the phone, 60 frames a second for 3 minutes** (vblank 60 Hz; the title stage as
+   on the PC), no stall, 2.3 GB of direct memory in hardware buffers and the rest copied (300-500
+   bindings per 2 s across chunks through the 512 MiB arenas), MemAvailable steady at 2.0-2.7 GB.
+   (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
