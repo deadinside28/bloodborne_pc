@@ -423,6 +423,21 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    subgroup stages compute+fragment only / all (the shader compiler now logs subgroup use
    outside them; none at the title), no clustered subgroup ops, no shaderFloat64, storage/uniform
    offset alignment 64/256 (16/64), 7 descriptor sets (32), subgroup 64 (32). Validation was clean.
+   **Found with RenderDoc (2026-11-08):** captured on the phone (BB_RENDERDOC_TRIGGER, RenderDoc's
+   layer packed into the APK: BB_APK_LAYERS; gpu_debug_layer_app was not searched) and replayed
+   on the phone through RenderDoc's remote server, driven by a small C++ tool against
+   librenderdoc's replay API (qrenderdoc needs an analytics answer first; the PC cannot replay the
+   capture: APIHardwareUnsupported). The display pass (game vs 89cda9e4) reads a good
+   1920x1080 image and the 1025x1x3 display LUT, but writes no pixel: its output keeps the clear
+   (alpha 1 everywhere). It is a RECT LIST drawn as a 3-control-point patch through bbport's
+   auxiliary tessellation shaders (emit_spirv_quad_rect.cpp); push constants (960/540 scale and
+   offset), viewport (16384, the limit), scissor and raster state are right, the fragment
+   shader is right (no fragment reached it). So Adreno's tessellation of these patches produces
+   nothing. Tried, no change: the control shader reading a plain Position built-in (the vertex
+   shaders write one) and no clip/cull distances in the aux blocks (both kept: valid and cleaner;
+   ShaderMetaVersion 11). Next: rect lists without tessellation on Adreno (a geometry shader, or
+   the fourth vertex computed by a second vertex invocation), or a minimal tessellation test on
+   the phone. Captures under RenderDoc now fail at startup (ConstantRing: out of device memory).
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,

@@ -21,7 +21,7 @@ namespace Vulkan::PipelineStore {
 
 /// Increment the one whose layout changes.
 constexpr u32 ShaderBinaryVersion = 24u; // paged records read once, a lookup per page (PagedDwords)
-constexpr u32 ShaderMetaVersion = 9u;    // the SRT walker's portable program
+constexpr u32 ShaderMetaVersion = 11u;   // rect/quad list shaders: plain Position in, no clip/cull distances
 constexpr u32 PipelineKeyVersion = 5u;   // Info layout (ImageResource::needs_native)
 
 void SaveCompute(const ComputePipelineKey& key, const ComputePipeline::SerializationSupport& sdata);

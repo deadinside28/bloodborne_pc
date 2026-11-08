@@ -30,12 +30,12 @@ public:
         float_min_one = Constant(float_id, -1.0f);
         int_zero = Constant(int_id, 0);
 
-        // gl_PerVertex
-        const Id float_arr{TypeArray(float_id, Constant(uint_id, 1U))};
-        per_vertex_type = TypeStruct(vec4_id, float_id, float_arr, float_arr);
+        // gl_PerVertex: position and point size only. Clip and cull distances declared but never
+        // written are undefined: on Adreno the patches came out culled (a black frame: the
+        // display pass is a rect list); these shaders never pass them on anyway.
+        per_vertex_type = TypeStruct(vec4_id, float_id);
         Decorate(per_vertex_type, spv::Decoration::Block);
-        const std::array builtins{spv::BuiltIn::Position, spv::BuiltIn::PointSize,
-                                  spv::BuiltIn::ClipDistance, spv::BuiltIn::CullDistance};
+        const std::array builtins{spv::BuiltIn::Position, spv::BuiltIn::PointSize};
         for (u32 member = 0; member < builtins.size(); ++member) {
             MemberDecorate(per_vertex_type, member, spv::Decoration::BuiltIn,
                            static_cast<u32>(builtins[member]));
@@ -53,7 +53,7 @@ public:
 
         std::array<Id, 3> pos;
         for (int i = 0; i < 3; i++) {
-            pos[i] = OpLoad(vec4_id, OpAccessChain(input_vec4, gl_in, Int(i), int_zero));
+            pos[i] = OpLoad(vec4_id, InPosition(input_vec4, Int(i)));
         }
         // equal(pos[i].xy, pos[i + 1].xy)
         std::array<Id, 3> xy_equal_next;
@@ -87,7 +87,7 @@ public:
         const Id index{OpSMod(int_id, OpIAdd(int_id, first, invocation_id), Int(3))};
 
         const Id pos3{interpolate(pos[0], pos[1], pos[2])};
-        const Id in_ptr{OpAccessChain(input_vec4, gl_in, index, Int(0))};
+        const Id in_ptr{InPosition(input_vec4, index)};
         const Id position{OpSelect(vec4_id, is_fourth, pos3, OpLoad(vec4_id, in_ptr))};
         OpStore(OpAccessChain(output_vec4, gl_out, invocation_id, Int(0)), position);
 
@@ -119,7 +119,7 @@ public:
         const Id invocation_id{OpLoad(int_id, gl_invocation_id)};
         const Id index{OpLoad(int_id, OpAccessChain(func_int, indices, invocation_id))};
 
-        const Id in_position{OpLoad(vec4_id, OpAccessChain(input_vec4, gl_in, index, Int(0)))};
+        const Id in_position{OpLoad(vec4_id, InPosition(input_vec4, index))};
         OpStore(OpAccessChain(output_vec4, gl_out, invocation_id, Int(0)), in_position);
         for (size_t i = 0; i < inputs.size(); i++) {
             const Id param{OpLoad(vec4_id, OpAccessChain(input_vec4, inputs[i], index))};
@@ -197,8 +197,17 @@ private:
             gl_invocation_id = AddInterface(spv::StorageClass::Input, int_id);
             Decorate(gl_invocation_id, spv::Decoration::BuiltIn, spv::BuiltIn::InvocationId);
         }
-        const Id per_vertex_array{TypeArray(per_vertex_type, Constant(uint_id, 32U))};
-        gl_in = AddInterface(spv::StorageClass::Input, per_vertex_array);
+        if (model == spv::ExecutionModel::TessellationControl) {
+            // The vertex shaders write a plain Position built-in (no gl_PerVertex block): the
+            // control shader reads it the same way. Adreno's driver produced no primitives for a
+            // block on this side (the display pass drew nothing: a black frame on the phone).
+            gl_in = AddInterface(spv::StorageClass::Input, TypeArray(vec4_id, Constant(uint_id, 32U)));
+            Decorate(gl_in, spv::Decoration::BuiltIn, spv::BuiltIn::Position);
+            in_plain_position = true;
+        } else {
+            const Id per_vertex_array{TypeArray(per_vertex_type, Constant(uint_id, 32U))};
+            gl_in = AddInterface(spv::StorageClass::Input, per_vertex_array);
+        }
         const Id param_array{TypeArray(vec4_id, Int(32))};
         inputs.reserve(fs_info.num_inputs);
         for (u32 i = 0; i < fs_info.num_inputs; i++) {
@@ -253,7 +262,14 @@ private:
     Id float_one;
     Id float_min_one;
     Id int_zero;
+    /// The input vertex `index`'s position (gl_in[index].gl_Position).
+    Id InPosition(Id input_vec4, Id index) {
+        return in_plain_position ? OpAccessChain(input_vec4, gl_in, index)
+                                 : OpAccessChain(input_vec4, gl_in, index, Int(0));
+    }
+
     Id per_vertex_type;
+    bool in_plain_position = false;
     Id gl_in;
     Id gl_out;
     Id gl_per_vertex;

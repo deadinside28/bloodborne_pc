@@ -26,6 +26,7 @@
 #include "upscale/vk_temporal_upscaler.h"
 #include "render/rasterizer.h"
 #include "vulkan/platform.h"
+#include "shim/bbport_renderdoc.h"
 
 namespace Vulkan {
 
@@ -741,6 +742,7 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
             }
         }
     } give_back{*this, generated, generated_tick};
+    BbRenderDoc::Poll(); // BB_RENDERDOC_TRIGGER: the frame after this present is captured
     const u32 width = u32(window.GetWidth());
     const u32 height = u32(window.GetHeight());
     // Nothing to present to while the window is minimised (a 0x0 surface, issue #31).

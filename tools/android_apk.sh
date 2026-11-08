@@ -45,9 +45,15 @@ patchelf=${BB_PATCHELF:-out/android/tools/patchelf}
 #   adb shell settings put global gpu_debug_app org.bbport
 #   adb shell settings put global gpu_debug_layers VK_LAYER_KHRONOS_validation
 # (and `settings delete global ...` for the three afterwards). Messages go to logcat (VALIDATION).
+# BB_APK_LAYERS="<layer.so> ...": other Vulkan layers the same way (RenderDoc's
+# libVkLayer_GLES_RenderDoc.so from its org.renderdoc.renderdoccmd.arm64.apk: gpu_debug_layers
+# VK_LAYER_RENDERDOC_Capture; a layer app's own libraries were not searched on the phone).
 manifest=android/AndroidManifest.xml
-if [[ -n ${BB_APK_VALIDATION:-} ]]; then
-    cp "$BB_APK_VALIDATION" "$work/lib/arm64-v8a/libVkLayer_khronos_validation.so"
+for layer in ${BB_APK_LAYERS:-}; do
+    cp "$layer" "$work/lib/arm64-v8a/"
+done
+if [[ -n ${BB_APK_VALIDATION:-} || -n ${BB_APK_LAYERS:-} ]]; then
+    [[ -n ${BB_APK_VALIDATION:-} ]] && cp "$BB_APK_VALIDATION" "$work/lib/arm64-v8a/libVkLayer_khronos_validation.so"
     manifest=$work/AndroidManifest.xml
     sed 's|android:allowBackup="false">|android:allowBackup="false"\n        android:debuggable="true">|' \
         android/AndroidManifest.xml > "$manifest"
