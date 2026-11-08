@@ -406,7 +406,13 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    BB_AHB_RESERVE_MB 4000 on the phone (lowest ~2.9-3.2 GB available, was ~1.5). The presented
    frame is still all zero: next, dump the UI target and the live host display buffer on the
    phone, and look for AArch64-only paths in the GPU library (CPU texture conversion, the SRT
-   program) that the PC never takes.
+   program) that the PC never takes. Checked since: the PC with BB_SRT_INTERP=1 dumps a full
+   frame; the code hooks are in the library's sites (BB_AOT_DUMP's .sites lists them: 14 of 56);
+   the upscaler dump does not run in UI-only frames; BB_PRESENT_DUMP_TRIGGER and GPU-assisted
+   validation (debug.vulkan.khronos_validation.validate_gpu_based) both ended in a lost device
+   (now within 5-25 s in about every second run) before reporting. Ideas: --vulkan-only on the
+   phone (does the presenter show anything), the draws one by one (BB_SKIP_PS), Adreno-specific
+   shader translation differences.
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
