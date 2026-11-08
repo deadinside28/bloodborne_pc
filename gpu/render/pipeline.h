@@ -192,6 +192,7 @@ public:
         std::vector<u32> tcs{};
         std::vector<u32> tes{};
         std::vector<u32> fragment{};
+        std::vector<u32> gs{}; ///< a rect list's geometry shader (Instance::RectListsByGeometry)
 
         void Serialize(Serialization::Archive& ar) const;
         bool Deserialize(Serialization::Archive& ar);

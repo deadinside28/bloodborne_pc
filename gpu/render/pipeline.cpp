@@ -412,10 +412,15 @@ GraphicsPipeline::GraphicsPipeline(
     };
 
     // Rect and quad lists are drawn as patches (auxiliary tessellation shaders).
-    const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
-        .topology = GcnToVk::PrimitiveType(key.prim_type),
-    };
     const bool is_rect_list = key.prim_type == Gcn::PrimitiveType::RectList;
+    // Rect lists by a geometry shader (Instance::RectListsByGeometry): triangles in, unless the
+    // game's own geometry shader is there.
+    const bool rect_by_gs = is_rect_list && instance.RectListsByGeometry() &&
+                            !infos[u32(Shader::SwStage::Geometry)];
+    const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
+        .topology = rect_by_gs ? vk::PrimitiveTopology::eTriangleList
+                               : GcnToVk::PrimitiveType(key.prim_type),
+    };
     const bool is_quad_list = key.prim_type == Gcn::PrimitiveType::QuadList;
     const vk::PipelineTessellationStateCreateInfo tessellation_state{
         .patchControlPoints = is_rect_list ? 3U : (is_quad_list ? 4U : key.patch_control_points),
@@ -469,7 +474,7 @@ GraphicsPipeline::GraphicsPipeline(
     boost::container::static_vector<vk::PipelineShaderStageCreateInfo, MaxShaderStages> shaders;
     const auto add_stage = [&](vk::ShaderStageFlagBits stage, vk::ShaderModule module) {
         shaders.push_back({
-            .pNext = instance.IsSubgroupSize64Supported() ? &Wave64 : nullptr,
+            .pNext = instance.IsSubgroupSize64Supported(stage) ? &Wave64 : nullptr,
             .stage = stage,
             .module = module,
             .pName = "main",
@@ -483,9 +488,15 @@ GraphicsPipeline::GraphicsPipeline(
     }
     if (const auto module = translated(Shader::SwStage::Geometry)) {
         add_stage(vk::ShaderStageFlagBits::eGeometry, module);
+    } else if (rect_by_gs) {
+        if (!preloading) {
+            sdata.gs = Shader::Backend::SPIRV::EmitRectListGeometryShader(fs_info);
+        }
+        add_stage(vk::ShaderStageFlagBits::eGeometry, CompileSPV(sdata.gs, device));
     }
     if (const auto module = translated(Shader::SwStage::TessellationControl)) {
         add_stage(vk::ShaderStageFlagBits::eTessellationControl, module);
+    } else if (rect_by_gs) {
     } else if (is_rect_list || is_quad_list) {
         if (!preloading) {
             sdata.tcs = Shader::Backend::SPIRV::EmitAuxilaryTessShader(
@@ -495,6 +506,7 @@ GraphicsPipeline::GraphicsPipeline(
     }
     if (const auto module = translated(Shader::SwStage::TessellationEval)) {
         add_stage(vk::ShaderStageFlagBits::eTessellationEvaluation, module);
+    } else if (rect_by_gs) {
     } else if (is_rect_list || is_quad_list) {
         if (!preloading) {
             sdata.tes = Shader::Backend::SPIRV::EmitAuxilaryTessShader(

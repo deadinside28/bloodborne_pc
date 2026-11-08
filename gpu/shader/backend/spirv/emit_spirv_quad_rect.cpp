@@ -31,8 +31,7 @@ public:
         int_zero = Constant(int_id, 0);
 
         // gl_PerVertex: position and point size only. Clip and cull distances declared but never
-        // written are undefined: on Adreno the patches came out culled (a black frame: the
-        // display pass is a rect list); these shaders never pass them on anyway.
+        // written would be undefined; these shaders never pass them on anyway.
         per_vertex_type = TypeStruct(vec4_id, float_id);
         Decorate(per_vertex_type, spv::Decoration::Block);
         const std::array builtins{spv::BuiltIn::Position, spv::BuiltIn::PointSize};
@@ -199,8 +198,7 @@ private:
         }
         if (model == spv::ExecutionModel::TessellationControl) {
             // The vertex shaders write a plain Position built-in (no gl_PerVertex block): the
-            // control shader reads it the same way. Adreno's driver produced no primitives for a
-            // block on this side (the display pass drew nothing: a black frame on the phone).
+            // control shader reads it the same way.
             gl_in = AddInterface(spv::StorageClass::Input, TypeArray(vec4_id, Constant(uint_id, 32U)));
             Decorate(gl_in, spv::Decoration::BuiltIn, spv::BuiltIn::Position);
             in_plain_position = true;
@@ -283,6 +281,136 @@ private:
 };
 
 } // namespace
+
+namespace {
+
+/// The rect list's geometry shader: triangles in (Position as the vertex shaders write it, a
+/// plain built-in), a strip of four out: the corner at the right angle, its two neighbours, and
+/// the fourth corner (their sum less the right-angle one), attributes weighted the same way.
+class RectListGeometryShader : public Sirit::Module {
+public:
+    explicit RectListGeometryShader(const HwFragmentRuntimeInfo& fs_info)
+        : Sirit::Module{SpirvVersion1_5} {
+        void_id = TypeVoid();
+        bool_id = TypeBool();
+        float_id = TypeFloat(32);
+        uint_id = TypeUInt(32U);
+        int_id = TypeInt(32U, true);
+        bvec2_id = TypeVector(bool_id, 2);
+        vec2_id = TypeVector(float_id, 2);
+        vec4_id = TypeVector(float_id, 4);
+        AddCapability(spv::Capability::Shader);
+        AddCapability(spv::Capability::Geometry);
+        std::vector<Id> interfaces;
+        const auto add = [&](spv::StorageClass storage, Id type) {
+            const Id variable{AddGlobalVariable(TypePointer(storage, type), storage)};
+            interfaces.push_back(variable);
+            return variable;
+        };
+        const Id vec4_x3{TypeArray(vec4_id, Constant(uint_id, 3U))};
+        in_position = add(spv::StorageClass::Input, vec4_x3);
+        Decorate(in_position, spv::Decoration::BuiltIn, spv::BuiltIn::Position);
+        out_position = add(spv::StorageClass::Output, vec4_id);
+        Decorate(out_position, spv::Decoration::BuiltIn, spv::BuiltIn::Position);
+        for (u32 i = 0; i < fs_info.num_inputs; i++) {
+            const auto& input = fs_info.inputs[i];
+            if (input.IsDefault()) {
+                continue;
+            }
+            inputs.push_back(add(spv::StorageClass::Input, vec4_x3));
+            Decorate(inputs.back(), spv::Decoration::Location, input.param_index);
+            outputs.push_back(add(spv::StorageClass::Output, vec4_id));
+            Decorate(outputs.back(), spv::Decoration::Location, input.param_index);
+        }
+        const Id main{OpFunction(void_id, spv::FunctionControlMask::MaskNone, TypeFunction(void_id))};
+        AddExecutionMode(main, spv::ExecutionMode::Triangles);
+        AddExecutionMode(main, spv::ExecutionMode::OutputTriangleStrip);
+        AddExecutionMode(main, spv::ExecutionMode::OutputVertices, 4U);
+        AddExecutionMode(main, spv::ExecutionMode::Invocations, 1U);
+        AddEntryPoint(spv::ExecutionModel::Geometry, main, "main", interfaces);
+        AddLabel(OpLabel());
+        Body();
+        OpReturn();
+        OpFunctionEnd();
+    }
+
+private:
+    Id Int(s32 value) {
+        return Constant(int_id, value);
+    }
+
+    void Body() {
+        const Id input_vec4{TypePointer(spv::StorageClass::Input, vec4_id)};
+        std::array<Id, 3> pos;
+        for (int i = 0; i < 3; i++) {
+            pos[i] = OpLoad(vec4_id, OpAccessChain(input_vec4, in_position, Int(i)));
+        }
+        // the corner at the right angle: its neighbours share its x or its y (as the TCS)
+        std::array<Id, 3> xy_equal_next;
+        for (int i = 0; i < 3; i++) {
+            const Id left{OpVectorShuffle(vec2_id, pos[i], pos[i], 0, 1)};
+            const Id right{OpVectorShuffle(vec2_id, pos[(i + 1) % 3], pos[(i + 1) % 3], 0, 1)};
+            xy_equal_next[i] = OpFOrdEqual(bvec2_id, left, right);
+        }
+        const Id one{Constant(float_id, 1.0f)};
+        const Id minus_one{Constant(float_id, -1.0f)};
+        std::array<Id, 3> weight;
+        std::array<Id, 3> is_corner;
+        for (int i = 0; i < 3; i++) {
+            const Id prev = xy_equal_next[(i + 2) % 3];
+            const Id xy_equal{OpLogicalAnd(bool_id, OpCompositeExtract(bool_id, xy_equal_next[i], 0),
+                                           OpCompositeExtract(bool_id, prev, 1))};
+            const Id yx_equal{OpLogicalAnd(bool_id, OpCompositeExtract(bool_id, xy_equal_next[i], 1),
+                                           OpCompositeExtract(bool_id, prev, 0))};
+            is_corner[i] = OpLogicalOr(bool_id, xy_equal, yx_equal);
+            weight[i] = OpSelect(float_id, is_corner[i], minus_one, one);
+        }
+        const auto interpolate = [&](Id v0, Id v1, Id v2) {
+            return OpFAdd(vec4_id, OpVectorTimesScalar(vec4_id, v0, weight[0]),
+                          OpFAdd(vec4_id, OpVectorTimesScalar(vec4_id, v1, weight[1]),
+                                 OpVectorTimesScalar(vec4_id, v2, weight[2])));
+        };
+        Id first{OpSelect(int_id, is_corner[2], Int(2), Int(0))};
+        first = OpSelect(int_id, is_corner[1], Int(1), first);
+        // the strip: the right-angle corner, its neighbours, the fourth corner
+        std::array<Id, 3> index;
+        for (int k = 0; k < 3; k++) {
+            index[k] = OpSMod(int_id, OpIAdd(int_id, first, Int(k)), Int(3));
+        }
+        std::vector<std::array<Id, 3>> attrs(inputs.size());
+        for (size_t a = 0; a < inputs.size(); a++) {
+            for (int i = 0; i < 3; i++) {
+                attrs[a][i] = OpLoad(vec4_id, OpAccessChain(input_vec4, inputs[a], Int(i)));
+            }
+        }
+        for (int k = 0; k < 4; k++) {
+            if (k < 3) {
+                OpStore(out_position, OpLoad(vec4_id, OpAccessChain(input_vec4, in_position, index[k])));
+                for (size_t a = 0; a < inputs.size(); a++) {
+                    OpStore(outputs[a], OpLoad(vec4_id, OpAccessChain(input_vec4, inputs[a], index[k])));
+                }
+            } else {
+                OpStore(out_position, interpolate(pos[0], pos[1], pos[2]));
+                for (size_t a = 0; a < inputs.size(); a++) {
+                    OpStore(outputs[a], interpolate(attrs[a][0], attrs[a][1], attrs[a][2]));
+                }
+            }
+            OpEmitVertex();
+        }
+        OpEndPrimitive();
+    }
+
+    Id void_id, bool_id, float_id, uint_id, int_id, bvec2_id, vec2_id, vec4_id;
+    Id in_position, out_position;
+    std::vector<Id> inputs, outputs;
+};
+
+} // namespace
+
+std::vector<u32> EmitRectListGeometryShader(const HwFragmentRuntimeInfo& fs_info) {
+    RectListGeometryShader shader{fs_info};
+    return shader.Assemble();
+}
 
 std::vector<u32> EmitAuxilaryTessShader(AuxShaderType type, const HwFragmentRuntimeInfo& fs_info) {
     AuxTessShader shader{fs_info};

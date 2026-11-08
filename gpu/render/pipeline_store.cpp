@@ -162,6 +162,7 @@ void GraphicsPipeline::SerializationSupport::Serialize(Serialization::Archive& a
     writer.Write(tcs);
     writer.Write(tes);
     writer.Write(fragment);
+    writer.Write(gs);
 }
 
 bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive& ar) {
@@ -176,6 +177,9 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
     // (their pipelines are recreated without it, as they were before).
     if (!ar.IsEoS()) {
         reader.Read(fragment);
+    }
+    if (!ar.IsEoS()) {
+        reader.Read(gs);
     }
     return true;
 }

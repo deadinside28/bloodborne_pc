@@ -438,6 +438,21 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    ShaderMetaVersion 11). Next: rect lists without tessellation on Adreno (a geometry shader, or
    the fourth vertex computed by a second vertex invocation), or a minimal tessellation test on
    the phone. Captures under RenderDoc now fail at startup (ConstantRing: out of device memory).
+   **BLACK SCREEN FIXED (2026-11-08): the title renders on the phone.** Cause: Adreno's driver
+   (512.800) zeroes a fragment shader's colour when it declares `DenormFlushToZero 32` (it claims
+   shaderDenormFlushToZeroFloat32). Found by replaying the captured display pass on the phone
+   with its shader swapped (rdpatch: RenderDoc's BuildTargetShader + ReplaceResource, variants
+   made with the NDK's spirv-dis/spirv-as): without that one execution mode a white input came out
+   white, with it black. pipeline_cache.cpp: no denormal flush on Qualcomm (BB_DENORM_FLUSH=0/1
+   overrides); ShaderMetaVersion 13. Earlier guesses on the way (rect lists by tessellation, the
+   table's LOD, separate samplers, compute-written images) were ruled out with RenderDoc's pixel
+   history and small probes (scratchpad lut1d): tessellation works on Adreno; rect lists by a
+   geometry shader stay as an option (BB_RECT_LISTS=geometry, same frame on both GPUs). Real
+   fixes kept from that search: a required subgroup size only on stages the device lists
+   (requiredSubgroupSizeStages: Adreno compute only); the aux control shader reads a plain
+   Position, the aux blocks carry no clip/cull distances. Still open: the device is lost in
+   about one run of two within ~20 s (no fault info). The phone over USB (adb -s R5CY11JMTEY)
+   when wireless debugging fails; the watchdog's adb calls are time-limited now.
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,

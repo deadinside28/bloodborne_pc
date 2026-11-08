@@ -91,6 +91,16 @@ Shader::Profile MakeProfile(const Instance& instance, u32 sparse_page_shift) {
     const auto& vk12 = instance.GetVk12Properties();
     const auto driver = instance.GetDriverID();
     const bool nvidia = driver == vk::DriverId::eNvidiaProprietary;
+    // Denormal flush-to-zero: Adreno's driver (Qualcomm, 512.800) claims it, but a fragment
+    // shader declaring DenormFlushToZero 32 wrote zero colour (the display pass: a black frame,
+    // found by replaying it with the mode removed). BB_DENORM_FLUSH=0/1 chooses.
+    static const bool denorm_flush = [&] {
+        const char* env = bb_env("BB_DENORM_FLUSH");
+        if (env && *env) {
+            return env[0] == '1';
+        }
+        return instance.GetVendorID() != 0x5143;
+    }();
     return Shader::Profile{
         .max_viewport_width = instance.GetMaxViewportWidth(),
         .max_viewport_height = instance.GetMaxViewportHeight(),
@@ -108,13 +118,13 @@ Shader::Profile MakeProfile(const Instance& instance, u32 sparse_page_shift) {
         .supports_rounding_mode_independence =
             vk12.roundingModeIndependence != vk::ShaderFloatControlsIndependence::eNone,
         .support_fp16_denorm_preserve = bool(vk12.shaderDenormPreserveFloat16),
-        .support_fp16_denorm_flush = bool(vk12.shaderDenormFlushToZeroFloat16),
+        .support_fp16_denorm_flush = denorm_flush && bool(vk12.shaderDenormFlushToZeroFloat16),
         .support_fp16_round_to_zero = bool(vk12.shaderRoundingModeRTZFloat16),
         .support_fp32_denorm_preserve = bool(vk12.shaderDenormPreserveFloat32),
-        .support_fp32_denorm_flush = bool(vk12.shaderDenormFlushToZeroFloat32),
+        .support_fp32_denorm_flush = denorm_flush && bool(vk12.shaderDenormFlushToZeroFloat32),
         .support_fp32_round_to_zero = bool(vk12.shaderRoundingModeRTZFloat32),
         .support_fp64_denorm_preserve = bool(vk12.shaderDenormPreserveFloat64),
-        .support_fp64_denorm_flush = bool(vk12.shaderDenormFlushToZeroFloat64),
+        .support_fp64_denorm_flush = denorm_flush && bool(vk12.shaderDenormFlushToZeroFloat64),
         .support_fp64_round_to_zero = bool(vk12.shaderRoundingModeRTZFloat64),
         .support_fp16_signed_zero_inf_nan_preserve =
             bool(vk12.shaderSignedZeroInfNanPreserveFloat16),

@@ -21,6 +21,10 @@ enum class AuxShaderType : u32 {
     PassthroughTES,
 };
 
+/// A rect list as a geometry shader instead of tessellation (BB_RECT_LISTS=geometry): each
+/// triangle (three corners of a rect) out as a strip of four with the fourth corner.
+[[nodiscard]] std::vector<u32> EmitRectListGeometryShader(const HwFragmentRuntimeInfo& fs_info);
+
 /// The shader for the fragment shader's inputs (passed through or interpolated).
 [[nodiscard]] std::vector<u32> EmitAuxilaryTessShader(AuxShaderType type,
                                                       const HwFragmentRuntimeInfo& fs_info);

@@ -218,6 +218,15 @@ void Instance::ReadProperties() {
     vk11_props = chain.get<vk::PhysicalDeviceVulkan11Properties>();
     vk12_props = chain.get<vk::PhysicalDeviceVulkan12Properties>();
     vk13_props = chain.get<vk::PhysicalDeviceVulkan13Properties>();
+    {
+        // Rect lists: tessellation patches, or (BB_RECT_LISTS=geometry) a geometry shader; both
+        // render the same on NVIDIA and Adreno.
+        const char* env = bb_env("BB_RECT_LISTS");
+        rect_lists_by_geometry = env && std::string_view{env} == "geometry";
+        if (rect_lists_by_geometry) {
+            std::printf("GPU: rect lists by a geometry shader (BB_RECT_LISTS=tessellation: patches)\n");
+        }
+    }
     max_push_descriptors =
         chain.get<vk::PhysicalDevicePushDescriptorPropertiesKHR>().maxPushDescriptors;
     const auto& driver = chain.get<vk::PhysicalDeviceDriverProperties>();

@@ -250,6 +250,17 @@ public:
     bool IsSubgroupSize64Supported() const {
         return vk13_features.subgroupSizeControl && vk13_props.maxSubgroupSize >= 64;
     }
+    /// A required subgroup size of 64 for `stage`: only where the device allows one
+    /// (requiredSubgroupSizeStages; Adreno: compute only).
+    /// Rect lists by a geometry shader instead of tessellation (BB_RECT_LISTS=geometry; the
+    /// default is tessellation).
+    bool RectListsByGeometry() const {
+        return rect_lists_by_geometry;
+    }
+    bool IsSubgroupSize64Supported(vk::ShaderStageFlagBits stage) const {
+        return IsSubgroupSize64Supported() &&
+               bool(vk13_props.requiredSubgroupSizeStages & stage);
+    }
 
     // Extensions.
     bool IsMaintenance8Supported() const {
@@ -445,6 +456,7 @@ private:
     vk::PhysicalDeviceVulkan11Properties vk11_props;
     vk::PhysicalDeviceVulkan12Properties vk12_props;
     vk::PhysicalDeviceVulkan13Properties vk13_props;
+    bool rect_lists_by_geometry = false;
     vk::DriverId driver_id{};
     u32 max_push_descriptors = 0;
     vk::PhysicalDeviceFeatures features;
