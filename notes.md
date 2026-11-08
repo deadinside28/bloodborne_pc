@@ -370,6 +370,14 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    exceptions (38 functions with handlers: the unwinder jumps into the middle of functions).
 3. Multi-threaded tests of `lock` atomicity and of `--tso` ordering, on the phone.
 4. Code size (6.1x): flags and register write-backs at calls and exits are the main cost.
+   **Registers a function never touches no longer cross its calls (2026-11-07,
+   `BB_RECOMP_PRUNE`, on by default):** spill/reload leave markers that `expand_markers` fills
+   with the registers the body uses; the others' state slots already hold their values. Measured
+   on a 2,260-function AArch64 shard: 4.64 -> 2.70 MB (-42%), host stack spills 109k -> 11k
+   (the i128 vector registers lived in GPR pairs). Whole game, x86-64 (`sites11`): 582 -> 220 MiB;
+   title 3 min strict, no native call. Corpus: 144 configurations pass. Next candidates: the ABI's
+   callee-saved registers across direct calls (not rbp: frame chains; setjmp needs them all),
+   and the state stores before calls of scratch registers no callee reads.
 5. Report the LLVM 23.1.4 AArch64 crash (`recompiler/harness/llvm-bug-store-merge-bswap16.ll`);
    `build_game.sh` works around it with `-mstrict-align` for the one affected shard.
 

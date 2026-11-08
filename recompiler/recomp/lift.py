@@ -22,6 +22,8 @@ Execution model (see recompiler/README.md):
   in functions that set up a frame pointer: locals are assumed not to be shared with other
   threads) or for loads from read-only image segments (constants, jump tables).
 """
+import os
+import re
 import iced_x86 as X
 
 M = X.Mnemonic
@@ -483,25 +485,61 @@ class FunctionLifter:
             return range(16)
         return {"call": range(8), "after_call": range(2), "ret": range(2), "entry": range(16)}[where]
 
+    # Registers cross calls and exits through the state. A register the function's own
+    # instructions never touch needs no local copy: its state slot already holds its value
+    # (callees and site handlers change it there). spill/reload leave markers; lift() expands
+    # them for the registers the body uses (prune_registers).
     def spill(self, where="call"):
-        for i in range(16):
+        self.out.append(f";@spill {where}")
+
+    def reload(self, where="after_call"):
+        self.out.append(f";@reload {where}")
+
+    def _spill_code(self, where, gprs, vecs):
+        for i in gprs:
             p = self.op(f"getelementptr inbounds %State, ptr %st, i32 0, i32 {ST_GPR}, i32 {i}")
             self.e(f"store i64 {self.get64(i)}, ptr {p}")
         for i in self.vec_set(where):
             for arr, field in (("x", ST_XMM), ("h", ST_YMMH)):
+                if (arr, i) not in vecs:
+                    continue
                 p = self.op(f"getelementptr inbounds %State, ptr %st, i32 0, i32 {field}, i32 {i}")
                 v = self.op(f"load i128, ptr %{arr}{i}")
                 self.e(f"store i128 {v}, ptr {p}")
 
-    def reload(self, where="after_call"):
-        for i in range(16):
+    def _reload_code(self, where, gprs, vecs):
+        for i in gprs:
             p = self.op(f"getelementptr inbounds %State, ptr %st, i32 0, i32 {ST_GPR}, i32 {i}")
             self.set64(i, self.op(f"load i64, ptr {p}"))
         for i in self.vec_set(where):
             for arr, field in (("x", ST_XMM), ("h", ST_YMMH)):
+                if (arr, i) not in vecs:
+                    continue
                 p = self.op(f"getelementptr inbounds %State, ptr %st, i32 0, i32 {field}, i32 {i}")
                 v = self.op(f"load i128, ptr {p}")
                 self.e(f"store i128 {v}, ptr %{arr}{i}")
+
+    def expand_markers(self, lines):
+        """The spill and reload markers in `lines`, for the registers the other lines use
+        (all of them with prune_registers off)."""
+        if self.mod.prune_registers:
+            body = "\n".join(l for l in lines if not l.startswith(";@") and " = alloca " not in l)
+            gprs = sorted({int(m) for m in re.findall(r"%r(\d+)\b", body)})
+            vecs = {(a, int(m)) for a, m in re.findall(r"%([xh])(\d+)\b", body)}
+        else:
+            gprs = list(range(16))
+            vecs = {(a, i) for a in "xh" for i in range(16)}
+        out = []
+        for line in lines:
+            if not line.startswith(";@"):
+                out.append(line)
+                continue
+            kind, where = line[2:].split()
+            saved, self.out = self.out, []
+            (self._spill_code if kind == "spill" else self._reload_code)(where, gprs, vecs)
+            out.extend(self.out)
+            self.out = saved
+        return out
 
     def push(self, v):
         sp = self.get64(RSP)
@@ -723,6 +761,7 @@ class FunctionLifter:
             if kind == "tail":
                 self.exit_to(value)
         self.out.append("}")
+        self.out = self.expand_markers(self.out)
         return "\n".join(self.out)
 
     def target_label(self, addr):
@@ -1758,6 +1797,9 @@ class ModuleLifter:
         # flag another thread sets kept reading a stale register: the game hung).
         self.volatile = volatile
         self.abi = abi
+        # Registers a function's own instructions never touch stay in the state across its calls
+        # and exits (FunctionLifter.expand_markers). BB_RECOMP_PRUNE=0: all of them cross, as before.
+        self.prune_registers = os.environ.get("BB_RECOMP_PRUNE", "1") != "0"
         self.local_frames = local_frames
         self.rcpc = rcpc
         self.unsupported = {}
