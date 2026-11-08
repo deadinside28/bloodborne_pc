@@ -17,7 +17,7 @@ table, use, execution model, deviations, ordered to-do list).
   - The system's libz: identical output to the original on x86-64 and AArch64 (1,581 checks).
   - **The game** (`eboot.bin` only): 162,961 functions, 9.98M instructions lift in under a
     minute; 3 unsupported sites (junk decodes), 24 decode failures (upstream's analysis: 22),
-    every direct call resolved; compiled for AArch64: 243 MiB of code (6.1x the original).
+    every direct call resolved; compiled for AArch64: 243 MiB of code (6.1x the original; ~3.6x with register pruning, 2026-11-07).
   - x86 memory ordering on the phone: 1.08x with `ldapr`/`stlr` + inline alignment check
     (default `--tso`), against 3.5x with barriers.
   - **Nothing recompiled from the game has run yet.**
@@ -375,7 +375,9 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    with the registers the body uses; the others' state slots already hold their values. Measured
    on a 2,260-function AArch64 shard: 4.64 -> 2.70 MB (-42%), host stack spills 109k -> 11k
    (the i128 vector registers lived in GPR pairs). Whole game, x86-64 (`sites11`): 582 -> 220 MiB;
-   title 3 min strict, no native call. Corpus: 144 configurations pass. Next candidates: the ABI's
+   title 3 min strict, no native call; gameplay (drive.sh: the first house, four walks) strict
+   and portable, renders right, same FPS as sites10 within noise (median 46.7 vs 45.9). AArch64
+   (`sites11-aarch64`): 352 -> 210 MiB (-40%). Corpus: 144 configurations pass. Next candidates: the ABI's
    callee-saved registers across direct calls (not rbp: frame chains; setjmp needs them all),
    and the state stores before calls of scratch registers no callee reads.
 5. Report the LLVM 23.1.4 AArch64 crash (`recompiler/harness/llvm-bug-store-merge-bswap16.ll`);
