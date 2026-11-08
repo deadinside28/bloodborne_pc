@@ -197,7 +197,11 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         const auto props = instance.GetPhysicalDevice()
                                .getProperties2<vk::PhysicalDeviceProperties2,
                                                vk::PhysicalDeviceVulkan13Properties>();
-        const u64 max_buffer = props.get<vk::PhysicalDeviceVulkan13Properties>().maxBufferSize;
+        u64 max_buffer = props.get<vk::PhysicalDeviceVulkan13Properties>().maxBufferSize;
+        // BB_ARENA_PAGE_MB=N (tests): pages as on a device whose buffers reach 4*N MiB
+        if (const char* forced = bb_env("BB_ARENA_PAGE_MB"); forced && *forced) {
+            max_buffer = std::strtoull(forced, nullptr, 10) << 22;
+        }
         if (max_buffer && max_buffer < (u64{1} << 32)) {
             u64 bits = MIN_ARENA_PAGE_BITS;
             while (bits < 32 && (u64{4} << (bits + 1)) <= max_buffer) {

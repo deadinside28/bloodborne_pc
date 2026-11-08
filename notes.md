@@ -412,7 +412,14 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    validation (debug.vulkan.khronos_validation.validate_gpu_based) both ended in a lost device
    (now within 5-25 s in about every second run) before reporting. Ideas: --vulkan-only on the
    phone (does the presenter show anything), the draws one by one (BB_SKIP_PS), Adreno-specific
-   shader translation differences.
+   shader translation differences. More ruled out on the PC: 512 MiB arena pages
+   (BB_ARENA_PAGE_MB=512), the phone's missing extensions (BB_IMITATE_ADRENO=1: dynamic state 3,
+   maintenance8, atomic float 2, barycentrics, compute derivatives, feedback loop, budget...), BC
+   textures (Adreno has them all). All three together with BB_GUEST_MEMORY=copy: a full frame. On
+   the phone the live host display buffer (BB_PRESENT_DUMP_TRIGGER) is opaque black (alpha set,
+   colour 0). Left: Adreno's limits and features inside its extensions (storage images without
+   format, alignments, push descriptor limits) and its shader compiler; a frame capture
+   (RenderDoc for Android) would show which pass goes black.
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,

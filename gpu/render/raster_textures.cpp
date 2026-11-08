@@ -349,7 +349,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             // BB_UI_TEXTURE_LOG=<file>: when the file appears, every texture the UI draws of the
             // next 2 s bind (once each), for finding what a HUD element samples.
             if (static const char* ui_log = bb_env("BB_UI_TEXTURE_LOG");
-                ui_log && upscaler->Enabled() && upscaler->InUiPhase()) {
+                ui_log && upscaler->InUiPhase()) {
                 static std::atomic<u64> until_ms{0};
                 static std::mutex ui_mutex;
                 static std::unordered_set<VAddr> ui_seen;
@@ -374,13 +374,23 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                                                 "uiatlas", "bc7");
                             });
                         }
-                        std::printf("UI texture: %#llx %ux%u levels %u %s tile %u -> image %#llx %ux%u\n",
+                        // How much of its first 64 KiB in the game's memory is not zero (a
+                        // texture that never got its data reads as zeros).
+                        u64 nonzero = 0;
+                        const u64 probe_bytes = std::min<u64>(desc.info.guest_size, 64_KB);
+                        const auto* bytes = reinterpret_cast<const u8*>(desc.info.guest_address);
+                        for (u64 i = 0; i < probe_bytes; ++i) {
+                            nonzero += bytes[i] != 0;
+                        }
+                        std::printf("UI texture: %#llx %ux%u levels %u %s tile %u -> image %#llx %ux%u; "
+                                    "%llu of its first %llu bytes not zero\n",
                                     (unsigned long long)desc.info.guest_address, desc.info.size.width,
                                     desc.info.size.height, desc.info.resources.levels,
                                     vk::to_string(desc.info.pixel_format).c_str(),
                                     u32(desc.info.tile_mode),
                                     (unsigned long long)image.info.guest_address,
-                                    image.info.size.width, image.info.size.height);
+                                    image.info.size.width, image.info.size.height,
+                                    (unsigned long long)nonzero, (unsigned long long)probe_bytes);
                     }
                 }
             }

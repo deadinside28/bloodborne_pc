@@ -274,7 +274,21 @@ void Instance::CreateDevice() {
     vk13_features = query.get<vk::PhysicalDeviceVulkan13Features>();
 
     std::vector<const char*> enabled;
+    // BB_IMITATE_ADRENO=1 (tests): the extensions an Adreno 830 (Vulkan 1.3.284, driver
+    // 512.800) lacks are taken as missing, to reproduce its paths on a PC.
+    static const bool imitate_adreno = bb_env_on("BB_IMITATE_ADRENO");
+    static constexpr std::array<std::string_view, 10> AdrenoLacks = {
+        VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME, VK_KHR_MAINTENANCE_8_EXTENSION_NAME,
+        VK_EXT_SHADER_ATOMIC_FLOAT_2_EXTENSION_NAME, VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
+        VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
+        VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME,
+        VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME,
+        VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, VK_NV_LOW_LATENCY_2_EXTENSION_NAME};
+    // (its memory sharing is another matter: BB_GUEST_MEMORY=copy imitates that)
     const auto has = [&](std::string_view name) {
+        if (imitate_adreno && std::ranges::contains(AdrenoLacks, name)) {
+            return false;
+        }
         return std::ranges::contains(available_extensions, name);
     };
     const auto enable = [&](const char* name) {
@@ -308,7 +322,8 @@ void Instance::CreateDevice() {
     }
     ext.depth_range_unrestricted = enable(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
     ext.dynamic_state_3 = enable(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
-    dynamic_color_write_mask = query.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>()
+    dynamic_color_write_mask = ext.dynamic_state_3 &&
+                               query.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>()
                                    .extendedDynamicState3ColorWriteMask;
     ext.custom_border_color = enable(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
     ext.depth_clip_control = enable(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
