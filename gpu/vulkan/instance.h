@@ -343,6 +343,10 @@ public:
     bool IsGuestMemoryExportSupported() const {
         return ext.memory_fd && ext.dma_buf;
     }
+    /// Android hardware buffers can be imported (BbGuestMemory's chunks on Android).
+    bool IsAndroidHardwareBufferSupported() const {
+        return ext.android_hardware_buffer;
+    }
     /// Host memory can be imported (VK_EXT_external_memory_host; BbGuestMemory).
     bool IsHostMemoryImportSupported() const {
         return ext.memory_host;
@@ -420,7 +424,7 @@ private:
             workgroup_layout, view_2d_of_3d, image_view_min_lod, memory_budget, memory_fd,
             dma_buf, memory_host, compute_derivatives, mixed_float_dot, cooperative_matrix,
             float8, shader_clock, guest_uncached, present_id, low_latency2, anti_lag,
-            device_fault;
+            device_fault, android_hardware_buffer;
     };
 
     vk::UniqueInstance instance;

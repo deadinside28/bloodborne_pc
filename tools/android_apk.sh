@@ -34,6 +34,11 @@ wait
     -o "$work/lib/arm64-v8a/libmain.so"
 cp "$out/gpu/libbbgpu.so" "$deps/lib/libSDL3.so" "$work/lib/arm64-v8a/"
 cp "$lib" "$work/lib/arm64-v8a/libbbaot.so"
+# The game library resolves the runtime's entry points (__recomp_dispatch...) in libmain.so: in an
+# app's namespace only libraries it needs are searched, so it names libmain.so (patchelf, from its
+# PyPI wheel: BB_PATCHELF, default out/android/tools/patchelf).
+patchelf=${BB_PATCHELF:-out/android/tools/patchelf}
+"$patchelf" --add-needed libmain.so "$work/lib/arm64-v8a/libbbaot.so"
 
 # Java: SDL's activity and ours
 "$JAVA_HOME/bin/javac" -nowarn -source 17 -target 17 -cp "$jar" -d "$work/classes" \

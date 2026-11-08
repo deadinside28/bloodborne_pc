@@ -738,15 +738,6 @@ int runtime_aot_install(unsigned char *image, uint64_t size) {
     }
     const char *path = bb_env("BB_AOT");
     if (!path || !*path) return 0;
-#if defined(__ANDROID__)
-    /* The library resolves the runtime's entry points (__recomp_dispatch...) against the code that
-     * loads it: on Android that is libmain.so, loaded locally by the app; made global first. */
-    {
-        Dl_info self;
-        if (dladdr((void *)runtime_aot_install, &self) && self.dli_fname)
-            dlopen(self.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
-    }
-#endif
     void *lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!lib) { printf("AOT: %s\n", dlerror()); return -1; }
     table = dlsym(lib, "__recomp_table");

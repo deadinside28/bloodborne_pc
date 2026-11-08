@@ -184,6 +184,20 @@ bool Usable(const Vulkan::Instance& instance) {
                         "VK_AMD_device_coherent_memory): a diagnostic, as on NVIDIA's imported "
                         "host memory\n");
         }
+#if defined(__ANDROID__)
+        // Android: hardware buffers, the one way its drivers share memory with the GPU in place.
+        {
+            const char* why = "";
+            if (AhbWorks(instance, why)) {
+                mode = Mode::AndroidHardwareBuffer;
+                std::printf("Guest memory: direct memory in hardware buffers the GPU imports "
+                            "(256 MiB chunks)\n");
+                return true;
+            }
+            std::printf("Guest memory: hardware buffers do not work here: %s\n", why);
+            return false;
+        }
+#endif
         // BB_GUEST_MEMORY=dmabuf|host chooses; else AMD uses dma-buf chunks (tested the most) and
         // other GPUs host memory import first (NVIDIA: its dma-buf maps at offset 0 only, and
         // CPU access through it may be slow).
@@ -289,6 +303,11 @@ bool Usable(const Vulkan::Instance& instance) {
 }
 
 vk::ExternalMemoryHandleTypeFlagBits HandleType() {
+#if defined(__ANDROID__)
+    if (mode == Mode::AndroidHardwareBuffer) {
+        return vk::ExternalMemoryHandleTypeFlagBits::eAndroidHardwareBufferANDROID;
+    }
+#endif
     return mode == Mode::HostImport ? vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT
                                     : vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT;
 }
@@ -318,6 +337,14 @@ void Install(const Vulkan::Instance& instance) {
     const bool host = mode == Mode::HostImport;
     // A heap's pieces given back (BB_HEAP_GROW): their chunk freed, whichever way it was made.
     runtime_memory_set_guest_chunk_free(&FreeChunk);
+    if (mode == Mode::AndroidHardwareBuffer) {
+        // The runtime's 256 MiB grid (a hardware buffer holds no more): a direct allocation over
+        // several chunks; bindings across two take a copy.
+        runtime_memory_set_guest_chunk_whole(0);
+        runtime_memory_set_guest_chunk_allocator(&AllocAhbChunk);
+        std::printf("Guest memory: direct memory chunks are hardware buffers\n");
+        return;
+    }
     if (private_regions) {
         runtime_memory_set_guest_chunk_private(&ImportPrivate);
         std::printf("Guest memory: direct memory as private regions imported by the GPU\n");

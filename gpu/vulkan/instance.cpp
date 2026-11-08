@@ -350,6 +350,12 @@ void Instance::CreateDevice() {
     ext.memory_fd = enable(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
     ext.dma_buf = ext.memory_fd && enable(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
     ext.memory_host = enable(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+#if defined(__ANDROID__)
+    // Android: the game's direct memory in hardware buffers the GPU imports (BbGuestMemory).
+    ext.android_hardware_buffer =
+        enable(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME) &&
+        enable(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
+#endif
     if (bb_env_on("BB_GUEST_UNCACHED")) {
         ext.guest_uncached = enable(VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
     }

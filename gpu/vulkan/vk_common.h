@@ -14,6 +14,9 @@
 // Results are checked by the callers.
 #define VULKAN_HPP_ASSERT_ON_RESULT
 
+#if defined(__ANDROID__) && !defined(VK_USE_PLATFORM_ANDROID_KHR)
+#define VK_USE_PLATFORM_ANDROID_KHR // hardware buffer import (BbGuestMemory), the window surface
+#endif
 #include <vulkan/vulkan.hpp>
 
 #define VMA_STATIC_VULKAN_FUNCTIONS 0

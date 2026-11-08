@@ -323,7 +323,19 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    `memprobe opaque 512 1024 2048` (Vulkan memory exported as an opaque fd: mappable at the
    game's address and at offsets? then the PC model works unchanged). CAUTION: an uncapped
    allocation loop restarted the phone once; every mode is capped now (memory checked before
-   each step, 2 GiB margin). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   each step, 2 GiB margin). Opaque fds: vkGetMemoryFdKHR fails (-1) for exportable memory.
+   **The hardware-buffer memory model (2026-11-07):** gpu/shim/bbport_guest_memory_android.cpp:
+   Mode::AndroidHardwareBuffer (AhbWorks at start: a 2 MiB buffer imported, its dma-buf mapped
+   whole and at an offset), AllocAhbChunk for the runtime's 256 MiB grid (whole_chunks 0; a
+   binding across chunks takes a copy), never while less than size + 2 GiB (BB_AHB_RESERVE_MB)
+   would stay available (those chunks stay in the memfd). The APK's libbbaot.so names libmain.so
+   (patchelf --add-needed: an app's namespace searches only needed libraries; RTLD_NOLOAD |
+   RTLD_GLOBAL did not help). **On the phone the whole game runs**: 181,843 functions, 2.8 GB of
+   direct memory in hardware buffers (the rest kept by the reserve), ~2G calls into bbport, 138k
+   guest site calls, 18 command buffers submitted and decoded, then the guest submitted nothing
+   for 5 s (GPU stall report with a thread dump: next to read). Runs on the phone: watch
+   MemAvailable from the PC every 2 s and force-stop the app below 1.5 GB (it fell to 0.7 GB once
+   near the end of a 2-minute run). All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

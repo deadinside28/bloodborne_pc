@@ -65,7 +65,7 @@ inline std::size_t chunk_count = 0;
 /// buffers by it: two chunks with one index bound one through the other).
 inline std::uint32_t next_index = 0;
 inline bool whole_only = false; // the driver's dma-buf maps at offset 0 only: a chunk per allocation
-enum class Mode { DmaBuf, HostImport };
+enum class Mode { DmaBuf, HostImport, AndroidHardwareBuffer };
 inline Mode mode = Mode::DmaBuf;
 /// Host import of private memory, one view per direct allocation (runtime private regions): for
 /// drivers that import VirtualAlloc'd memory but not views of sections (Windows).
@@ -159,6 +159,9 @@ bool ImportOnce(u64 start, u64 end, bool overlapping = false);
 u64 HoleEnd(u64 phys);
 bool CrossesImports(std::uint64_t va, std::uint64_t size);
 bool Populate(u64 phys, u64 want);
+// bbport_guest_memory_android.cpp
+int AllocAhbChunk(u64 phys, u64 size);
+bool AhbWorks(const Vulkan::Instance& instance, const char*& why);
 // bbport_guest_memory_probes.cpp
 bool UdmabufWorks(const Vulkan::Instance& instance, const char*& why);
 bool HostImportWorks(const Vulkan::Instance& instance, const char*& why);
