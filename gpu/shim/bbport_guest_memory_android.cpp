@@ -139,6 +139,9 @@ bool ImportAhb(AHardwareBuffer* ahb, u64 size, vk::Buffer& buffer, vk::DeviceMem
         .pNext = LayerMemory() ? &address_flags : nullptr,
         .buffer = ahb,
     };
+    // Dedicated to the chunk's buffer (Adreno requires it for buffers over hardware buffers,
+    // VUID-vkBindBufferMemory-buffer-01444); that buffer is then the only one over the memory: the
+    // cache uses it (ShareChunkBuffers) instead of binding its own (VUID-...-memory-01508).
     const vk::MemoryDedicatedAllocateInfo dedicated{
         .pNext = &import,
         .buffer = created,

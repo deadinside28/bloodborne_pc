@@ -39,6 +39,19 @@ cp "$lib" "$work/lib/arm64-v8a/libbbaot.so"
 # PyPI wheel: BB_PATCHELF, default out/android/tools/patchelf).
 patchelf=${BB_PATCHELF:-out/android/tools/patchelf}
 "$patchelf" --add-needed libmain.so "$work/lib/arm64-v8a/libbbaot.so"
+# BB_APK_VALIDATION=<libVkLayer_khronos_validation.so> (Khronos' android-binaries, arm64-v8a): the
+# layer packed and the app debuggable, so Android loads it from the app's library folder:
+#   adb shell settings put global enable_gpu_debug_layers 1
+#   adb shell settings put global gpu_debug_app org.bbport
+#   adb shell settings put global gpu_debug_layers VK_LAYER_KHRONOS_validation
+# (and `settings delete global ...` for the three afterwards). Messages go to logcat (VALIDATION).
+manifest=android/AndroidManifest.xml
+if [[ -n ${BB_APK_VALIDATION:-} ]]; then
+    cp "$BB_APK_VALIDATION" "$work/lib/arm64-v8a/libVkLayer_khronos_validation.so"
+    manifest=$work/AndroidManifest.xml
+    sed 's|android:allowBackup="false">|android:allowBackup="false"\n        android:debuggable="true">|' \
+        android/AndroidManifest.xml > "$manifest"
+fi
 
 # Java: SDL's activity and ours
 "$JAVA_HOME/bin/javac" -nowarn -source 17 -target 17 -cp "$jar" -d "$work/classes" \
@@ -46,7 +59,7 @@ patchelf=${BB_PATCHELF:-out/android/tools/patchelf}
 "$tools/d8" --release --min-api 33 --lib "$jar" --output "$work" $(find "$work/classes" -name '*.class')
 
 # the package: manifest, dex, native libraries; aligned and signed
-"$tools/aapt2" link --manifest android/AndroidManifest.xml -I "$jar" -o "$work/base.apk"
+"$tools/aapt2" link --manifest "$manifest" -I "$jar" -o "$work/base.apk"
 (cd "$work" && cp base.apk unsigned.apk && zip -q unsigned.apk classes.dex && zip -q -r unsigned.apk lib)
 "$tools/zipalign" -P 16 -f 4 "$work/unsigned.apk" "$work/aligned.apk"
 keystore=$out/debug.keystore

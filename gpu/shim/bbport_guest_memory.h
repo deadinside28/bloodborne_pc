@@ -43,6 +43,9 @@ bool HostImported();
 /// per direct memory allocation (a mapping lies whole in one chunk), their buffers take every use
 /// (vertex, index, indirect, texel, device address) and are registered with the module.
 bool LayerMemory();
+/// A chunk's memory backs its own buffer only (Android's hardware buffers on Adreno: buffers for
+/// them need a dedicated allocation): the cache uses that buffer instead of one of its own.
+bool ShareChunkBuffers();
 /// The external memory handle type of the chunks (dma-buf or imported host memory): buffers bound
 /// to them (the arena, chunk buffers) are created with it. Valid after Usable().
 vk::ExternalMemoryHandleTypeFlagBits HandleType();

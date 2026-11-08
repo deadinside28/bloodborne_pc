@@ -63,6 +63,7 @@ struct BufferAllocation {
     vk::DeviceAddress bda_addr{};
     VmaAllocator allocator;
     VmaAllocation allocation{};
+    bool adopted = false; ///< a buffer owned elsewhere (a guest memory chunk's own): not destroyed
 };
 
 /// While it lives, DeviceLocal buffers made on this thread are device-local memory or none: a failed
@@ -82,8 +83,10 @@ struct Buffer {
     /// Over memory owned elsewhere (a guest memory chunk, exported): transfers and texel and
     /// storage reads; with the layer's memory module vertex, index, indirect data and device
     /// addresses too.
+    /// `existing`: the chunk's own buffer, used instead of a new one over its memory (where the
+    /// memory may back one buffer only: BbGuestMemory::ShareChunkBuffers).
     Buffer(const Vulkan::Instance& instance, u64 size_bytes, vk::DeviceMemory memory,
-           std::string_view debug_name);
+           std::string_view debug_name, vk::Buffer existing = {});
     Buffer(const Buffer&) = delete;
     Buffer& operator=(const Buffer&) = delete;
     Buffer(Buffer&&) = default;

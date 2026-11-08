@@ -129,7 +129,8 @@ BufferAllocation::BufferAllocation(BufferAllocation&& other) noexcept
     : device{other.device}, buffer{std::exchange(other.buffer, VK_NULL_HANDLE)},
       bda_addr{std::exchange(other.bda_addr, 0)},
       allocator{std::exchange(other.allocator, VK_NULL_HANDLE)},
-      allocation{std::exchange(other.allocation, VK_NULL_HANDLE)} {}
+      allocation{std::exchange(other.allocation, VK_NULL_HANDLE)},
+      adopted{std::exchange(other.adopted, false)} {}
 
 BufferAllocation& BufferAllocation::operator=(BufferAllocation&& other) noexcept {
     if (this != &other) {
@@ -139,11 +140,18 @@ BufferAllocation& BufferAllocation::operator=(BufferAllocation&& other) noexcept
         bda_addr = std::exchange(other.bda_addr, 0);
         allocator = std::exchange(other.allocator, VK_NULL_HANDLE);
         allocation = std::exchange(other.allocation, VK_NULL_HANDLE);
+        adopted = std::exchange(other.adopted, false);
     }
     return *this;
 }
 
 void BufferAllocation::Destroy() {
+    if (adopted) {
+        buffer = VK_NULL_HANDLE;
+        bda_addr = 0;
+        adopted = false;
+        return;
+    }
     if (allocation) {
         BbStats::VkMemTimer timer{BbStats::t_vk_free, BbStats::n_vk_free};
         vmaDestroyBuffer(allocator, buffer, allocation);
@@ -228,7 +236,7 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
 }
 
 Buffer::Buffer(const Vulkan::Instance& instance, u64 size_bytes_, vk::DeviceMemory memory,
-               std::string_view debug_name)
+               std::string_view debug_name, vk::Buffer existing)
     : size_bytes{size_bytes_}, mem_type{MemoryType::HostCached},
       buffer{instance.GetDevice(), instance.GetAllocator()} {
     const vk::ExternalMemoryBufferCreateInfo external{
@@ -245,15 +253,20 @@ Buffer::Buffer(const Vulkan::Instance& instance, u64 size_bytes_, vk::DeviceMemo
                  vk::BufferUsageFlagBits::eShaderDeviceAddress;
     }
     const auto device = instance.GetDevice();
-    buffer.buffer = Vulkan::Check(device.createBuffer({
-        .pNext = &external,
-        .size = size_bytes,
-        .usage = usage,
-        .sharingMode = vk::SharingMode::eExclusive,
-    }));
-    const auto result = device.bindBufferMemory(buffer.buffer, memory, 0);
-    ASSERT_MSG(result == vk::Result::eSuccess, "binding a guest memory chunk: {}",
-               vk::to_string(result));
+    if (existing) {
+        buffer.buffer = existing; // bound already, with the chunk usage (ChunkBufferUsage)
+        buffer.adopted = true;
+    } else {
+        buffer.buffer = Vulkan::Check(device.createBuffer({
+            .pNext = &external,
+            .size = size_bytes,
+            .usage = usage,
+            .sharingMode = vk::SharingMode::eExclusive,
+        }));
+        const auto result = device.bindBufferMemory(buffer.buffer, memory, 0);
+        ASSERT_MSG(result == vk::Result::eSuccess, "binding a guest memory chunk: {}",
+                   vk::to_string(result));
+    }
     if (layer) {
         buffer.bda_addr = device.getBufferAddress({.buffer = buffer.buffer});
     }

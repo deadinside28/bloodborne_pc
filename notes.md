@@ -377,6 +377,18 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    game runs on the phone, 60 frames a second for 3 minutes** (vblank 60 Hz; the title stage as
    on the PC), no stall, 2.3 GB of direct memory in hardware buffers and the rest copied (300-500
    bindings per 2 s across chunks through the 512 MiB arenas), MemAvailable steady at 2.0-2.7 GB.
+   **Black screen (music plays):** the frame bbport presents was all black
+   (BB_FINAL_DUMP_TRIGGER dump, read back with `adb exec-out run-as org.bbport cat`). Vulkan
+   validation on the phone (`BB_APK_VALIDATION=<Khronos android-binaries
+   libVkLayer_khronos_validation.so> tools/android_apk.sh`: layer packed, app debuggable; then the
+   gpu_debug settings, see the script) found the chunk memory bound twice: Adreno requires a
+   dedicated allocation for buffers over hardware buffers (01444) and the cache bound a second
+   buffer over it (01508). Now the cache uses the chunk's own buffer (ShareChunkBuffers,
+   Buffer(existing), adopted: not destroyed): no validation errors. Still black: the game renders
+   (shader setup, job-system semaphores, 60 frames a second; no movie calls yet, ~6x fewer calls
+   than the PC) but its frames are not the PC's UI-only title frames and come out black. Next:
+   Adreno rendering: dump render targets, check the depth format fallback (no D16S8 attachment),
+   the window orientation (a 1440x810 frame once: the window flips to portrait at start).
    (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
    build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,

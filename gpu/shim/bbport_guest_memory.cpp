@@ -160,6 +160,10 @@ bool HostImported() {
     return mode == Mode::HostImport;
 }
 
+bool ShareChunkBuffers() {
+    return mode == Mode::AndroidHardwareBuffer;
+}
+
 bool LayerMemory() {
     // BB_LAYER_MEMORY=1/0 chooses; else MemoryModuleFits (which asks first) sets the module for every GPU
     // (BB_LAYER_MEMORY=0: the sparse arena; NVIDIA's sparse binding stalls for seconds).

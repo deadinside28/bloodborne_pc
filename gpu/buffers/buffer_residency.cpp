@@ -827,7 +827,8 @@ std::optional<std::pair<const Buffer*, u64>> BufferCache::GuestChunkSource(VAddr
     auto& buffer = chunk_buffers[chunk->index % chunk_buffers.size()];
     if (!buffer) {
         buffer = std::make_unique<Buffer>(instance, chunk->size, chunk->memory,
-                                          fmt::format("bbport guest memory {:#x}", chunk->phys));
+                                          fmt::format("bbport guest memory {:#x}", chunk->phys),
+            BbGuestMemory::ShareChunkBuffers() ? chunk->buffer : vk::Buffer{});
     }
     return std::pair<const Buffer*, u64>{buffer.get(), phys - chunk->phys};
 }
@@ -892,7 +893,8 @@ std::optional<std::pair<const Buffer*, u64>> BufferCache::LayerInPlaceUncached(V
     auto& buffer = chunk_buffers[chunk->index % chunk_buffers.size()];
     if (!buffer) {
         buffer = std::make_unique<Buffer>(instance, chunk->size, chunk->memory,
-                                          fmt::format("bbport guest memory {:#x}", chunk->phys));
+                                          fmt::format("bbport guest memory {:#x}", chunk->phys),
+            BbGuestMemory::ShareChunkBuffers() ? chunk->buffer : vk::Buffer{});
     }
     return std::pair<const Buffer*, u64>{buffer.get(), span->offset};
 }
@@ -920,7 +922,8 @@ std::optional<std::pair<const Buffer*, u64>> BufferCache::LayerStitch(VAddr addr
         auto& buffer = chunk_buffers[chunk->index % chunk_buffers.size()];
         if (!buffer) {
             buffer = std::make_unique<Buffer>(instance, chunk->size, chunk->memory,
-                                              fmt::format("bbport guest memory {:#x}", chunk->phys));
+                                              fmt::format("bbport guest memory {:#x}", chunk->phys),
+            BbGuestMemory::ShareChunkBuffers() ? chunk->buffer : vk::Buffer{});
         }
         pieces.push_back({buffer.get(), span->offset, span->size});
         at += span->size;
