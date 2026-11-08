@@ -126,6 +126,7 @@ private:
     Scheduler draw_scheduler;
     Scheduler present_scheduler;
     Swapchain swapchain;
+    u32 surface_generation = 0; ///< the window's surface the swapchain was made for (Android)
     Runtime runtime;
     std::unique_ptr<Rasterizer> rasterizer;
     VideoCore::TextureCache& texture_cache;

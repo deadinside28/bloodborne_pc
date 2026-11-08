@@ -347,7 +347,20 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    refuses). But its Vulkan (gfxstream, 1.3.0, 44 device extensions) lacks VK_KHR_push_descriptor
    and VK_EXT_robustness2 (required: instance.cpp), dynamic state 3, maintenance5: the renderer
    does not start there (and the emulator crashed in the device creation that followed). Use it
-   for CPU-side checks only; the GPU path needs the phone. All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
+   for CPU-side checks only; the GPU path needs the phone.
+   **The phone's configuration on the PC (2026-11-07):** sites10 strict with BB_AOT_HOST_CALLS=
+   portable, BB_AOT_ENTRY=portable, BB_SRT_INTERP=1: 7 minutes, no stall; with
+   BB_GUEST_MEMORY=copy (new: no chunk at all, every binding copied) and 60 Hz vblank too: 5
+   minutes at 60 FPS, no stall. So the phone's 18-buffer stall is not in the portable paths or the
+   copy path. Found instead: the presenter waited for a swapchain image forever, and an Android
+   app in the background has no surface (SDL nulls ANDROID_WINDOW_POINTER) and gets a new one on
+   return, which the swapchain never took: both stop the game's flips, all threads in futex
+   waits (the phone's dump). Now: acquire times out after 1 s and skips the frame; a lost surface
+   skips frames; the window thread (SDL_ANDROID_BLOCK_ON_PAUSE=0) tracks the surface, the
+   presenter skips frames while there is none and makes the swapchain's surface again for a new
+   one (Swapchain::RecreateSurface). Untested on the phone yet: run it in the foreground, then
+   background and back. (PC builds outside nix-shell: CPLUS_INCLUDE_PATH=~/.local/include, as the
+   build folder was configured with it.) All compile for aarch64-linux-gnu (zig c++ -c; zig 0.13 fails with
    -fsyntax-only: "FileNotFound"). Diagnostics: BB_AOT_SKIP=addr,...,
    BB_AOT_TARGETS=all. The approach: on x86-64 the original and the recompiled code can run in one process. Patch
    function entries (the way bbport's guest-code hooks do) to jump into recompiled functions for a

@@ -747,6 +747,18 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
     if (width == 0 || height == 0) {
         return false;
     }
+    // Android: no surface while the app is in the background, a new one when it is back.
+    if (window.IsSuspended()) {
+        return false;
+    }
+    if (const u32 generation = window.SurfaceGeneration(); generation != surface_generation) {
+        std::scoped_lock lock{Scheduler::submit_mutex};
+        surface_generation = generation;
+        swapchain.RecreateSurface(window);
+        if (!swapchain.IsPresentable()) {
+            return false;
+        }
+    }
     // Recreate waits for the device. Recording threads must not submit to its queues meanwhile
     // (#211); the recreation after a failed present below already uses this same mutex.
     const auto recreate = [&] {
@@ -764,6 +776,14 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
     BbTimeline::Note(BbTimeline::AcquireBegin);
     const bool acquired = swapchain.AcquireNextImage();
     BbTimeline::Note(BbTimeline::AcquireEnd);
+    if (!acquired && swapchain.Unavailable()) {
+        // No image within the timeout or the surface is gone: this frame is skipped.
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1, std::memory_order_relaxed) < 4) {
+            std::printf("Presenter: no swapchain image (the surface takes no frames): frame skipped\n");
+        }
+        return false;
+    }
     if (!acquired) {
         recreate();
         if (!swapchain.AcquireNextImage()) {
@@ -848,7 +868,9 @@ bool Presenter::PresentImage(Frame* frame, vk::Image source, bool last,
         std::scoped_lock lock{Scheduler::submit_mutex};
         BbStats::WaitTimer timer{BbStats::present_call_ns};
         if (!swapchain.Present(present_id)) {
-            swapchain.Recreate(width, height);
+            if (!swapchain.Unavailable()) {
+                swapchain.Recreate(width, height);
+            }
             return false;
         }
     }

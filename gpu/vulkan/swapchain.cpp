@@ -235,6 +235,18 @@ void Swapchain::DestroyResources() {
     present_ready.clear();
 }
 
+void Swapchain::RecreateSurface(const Frontend::WindowSDL& window) {
+    DestroyResources();
+    if (swapchain) {
+        LowLatency::Get().SwapchainDestroying(swapchain);
+        instance.GetDevice().destroySwapchainKHR(swapchain);
+        swapchain = VK_NULL_HANDLE;
+    }
+    instance.GetInstance().destroySurfaceKHR(surface);
+    surface = CreateSurface(instance.GetInstance(), window);
+    Create(u32(window.GetWidth()), u32(window.GetHeight()));
+}
+
 void Swapchain::Recreate(u32 width_, u32 height_) {
     LOG_DEBUG(Render_Vulkan, "Recreating the swapchain: {}x{}, HDR {}", width_, height_, use_hdr);
     Create(width_, height_);
@@ -249,14 +261,21 @@ void Swapchain::SetHDR(bool hdr) {
 }
 
 bool Swapchain::AcquireNextImage() {
+    // At most a second: a compositor that takes no frames (an Android app in the background)
+    // must not hold the presenter, and the game's flips with it.
+    constexpr u64 Timeout = 1'000'000'000;
+    unavailable = false;
     const vk::Result result = instance.GetDevice().acquireNextImageKHR(
-        swapchain, std::numeric_limits<u64>::max(), acquired[frame_index], VK_NULL_HANDLE,
-        &image_index);
+        swapchain, Timeout, acquired[frame_index], VK_NULL_HANDLE, &image_index);
     switch (result) {
     case vk::Result::eSuccess:
         break;
-    case vk::Result::eSuboptimalKHR:
+    case vk::Result::eTimeout:
+    case vk::Result::eNotReady:
     case vk::Result::eErrorSurfaceLostKHR:
+        unavailable = true;
+        return false;
+    case vk::Result::eSuboptimalKHR:
     case vk::Result::eErrorOutOfDateKHR:
     case vk::Result::eErrorUnknown:
         needs_recreation = true;
@@ -283,8 +302,11 @@ bool Swapchain::Present(u64 present_id) {
     const auto present_start = BbTimeline::Now();
     const vk::Result result = instance.GetPresentQueue().presentKHR(info);
     BbTimeline::Note(BbTimeline::Presented, 0, u64(BbTimeline::Now() - present_start));
+    unavailable = false;
     if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
         needs_recreation = true;
+    } else if (result == vk::Result::eErrorSurfaceLostKHR) {
+        unavailable = true; // the window's next surface brings a new swapchain
     } else {
         Check<"present">(result);
     }

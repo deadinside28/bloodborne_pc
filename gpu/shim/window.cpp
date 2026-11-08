@@ -168,6 +168,11 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     // From the SrShadowy fork; the variables, when set, win.
     SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_ENHANCED_REPORTS, "1", SDL_HINT_DEFAULT);
     SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1", SDL_HINT_DEFAULT);
+#ifdef __ANDROID__
+    // The window thread keeps polling while the app is in the background (SDL would block it in
+    // its event pump): it sees the surface go and come back (TrackAndroidSurface).
+    SDL_SetHintWithPriority(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0", SDL_HINT_DEFAULT);
+#endif
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
@@ -298,7 +303,44 @@ void WindowSDL::UpdateTextTitle() {
 static bool mouse_user_released = false;
 static bool mouse_grabbed = false;
 
+/// Android takes the app's surface away in the background (SDL sets the window's native window
+/// property to null, from Android's UI thread) and gives a new one on return: presents stop
+/// while there is none, and the swapchain gets a new surface for each new one.
+void WindowSDL::TrackAndroidSurface() {
+    void* now = SDL_GetPointerProperty(SDL_GetWindowProperties(window),
+                                       SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
+    void* before;
+    {
+        std::scoped_lock lock{info_mutex};
+        before = window_info.render_surface;
+    }
+    if (!now) {
+        if (!suspended.exchange(true, std::memory_order_acq_rel)) {
+            std::printf("Window: the app is in the background: no surface, frames are skipped\n");
+        }
+        return;
+    }
+    const bool was_suspended = suspended.load(std::memory_order_acquire);
+    if (now == before && !was_suspended) {
+        return;
+    }
+    {
+        std::scoped_lock lock{info_mutex};
+        window_info.render_surface = now;
+    }
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(window, &w, &h);
+    width = w;
+    height = h;
+    surface_generation.fetch_add(1, std::memory_order_acq_rel);
+    suspended.store(false, std::memory_order_release);
+    std::printf("Window: a new surface (%dx%d): the swapchain is made again\n", w, h);
+}
+
 bool WindowSDL::PollEvents() {
+    if (window_info.type == WindowSystemType::Android) {
+        TrackAndroidSurface();
+    }
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread

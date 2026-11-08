@@ -344,6 +344,15 @@ void Install(const Vulkan::Instance& instance) {
                     Shader::paged_range_hook ? " (shader buffers across imports: page table)" : "");
         return;
     }
+    if (const char* forced = bb_env("BB_GUEST_MEMORY"); forced && std::string_view{forced} == "copy") {
+        // BB_GUEST_MEMORY=copy (tests; the Android fallback on a PC): no chunk at all, the game's
+        // direct memory stays in the runtime's memfd and the GPU copies what it uses.
+        runtime_memory_set_guest_chunk_whole(0);
+        runtime_memory_set_guest_chunk_allocator([](u64, u64) { return -1; });
+        std::printf("Guest memory: BB_GUEST_MEMORY=copy: direct memory stays in ordinary memory; "
+                    "the GPU copies what it uses\n");
+        return;
+    }
     const bool host = mode == Mode::HostImport;
     // A heap's pieces given back (BB_HEAP_GROW): their chunk freed, whichever way it was made.
     runtime_memory_set_guest_chunk_free(&FreeChunk);

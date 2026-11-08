@@ -28,7 +28,15 @@ public:
     s32 GetWidth() const { return width.load(std::memory_order_relaxed); }
     s32 GetHeight() const { return height.load(std::memory_order_relaxed); }
     SDL_Window* GetSDLWindow() const { return window; }
-    WindowSystemInfo GetWindowInfo() const { return window_info; }
+    WindowSystemInfo GetWindowInfo() const {
+        std::scoped_lock lock{info_mutex};
+        return window_info;
+    }
+    /// Android: the app is in the background and has no surface; nothing can be presented.
+    bool IsSuspended() const { return suspended.load(std::memory_order_acquire); }
+    /// Android: counts the surfaces the app was given (a new one after each return from the
+    /// background); the swapchain's surface is made again when this changes.
+    u32 SurfaceGeneration() const { return surface_generation.load(std::memory_order_acquire); }
     bool IsOpen() const { return is_open.load(std::memory_order_relaxed); }
     /// Processes pending window events. Returns false once the user closed the window.
     bool PollEvents();
@@ -68,7 +76,11 @@ private:
     std::atomic<bool> capture_requested{false};
     static inline std::atomic<bool> mouse_look{true};
     SDL_Window* window{};
+    mutable std::mutex info_mutex;
     WindowSystemInfo window_info{};
+    std::atomic<bool> suspended{false};
+    std::atomic<u32> surface_generation{0};
+    void TrackAndroidSurface();
 };
 
 } // namespace Frontend

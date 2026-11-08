@@ -27,6 +27,13 @@ public:
 
     /// A swapchain for the window's size (`width` x `height` when the surface leaves it open).
     void Recreate(u32 width, u32 height);
+    /// A new surface for the window (Android: a new one after each return from the background).
+    void RecreateSurface(const Frontend::WindowSDL& window);
+    /// The last acquire or present could not use the surface (gone, or no image within the
+    /// timeout): the frame is skipped, the swapchain is not made again for it.
+    bool Unavailable() const {
+        return unavailable;
+    }
     /// Acquires the next image; false when the swapchain has to be recreated first.
     bool AcquireNextImage();
     /// Presents the acquired image; false when the swapchain has to be recreated. `present_id`:
@@ -101,6 +108,7 @@ private:
     u32 image_index = 0;
     u32 frame_index = 0;
     bool needs_recreation = true;
+    bool unavailable = false;
     bool zero_extent = false; ///< the surface was 0x0 (minimised) at the last Create
     bool use_hdr = false;
     bool supports_hdr = false;
