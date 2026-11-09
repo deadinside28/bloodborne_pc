@@ -66,10 +66,10 @@ static void defaults(const char *data) {
      * display (3120x1440 on the S25 Ultra) and the game's camera and HUD its aspect ratio;
      * without it the output stayed 1920x1080 and the picture 16:9 between black bars. */
     setenv("BB_LIVE_HYBRID", "1", 0);
-    /* Adreno: with object motion vectors on, or render passes kept whole, the GPU is lost at the
-     * second 3D frame (the character creator). Both needed; why is not known yet. */
+    /* Adreno: with object motion vectors on, the GPU is lost at the second 3D frame (the character
+     * creator); why is not known yet. Render passes must stay whole here (BB_BREADCRUMB_SPLIT off):
+     * a pass resumed after a draw loses that draw's depth writes. */
     setenv("BB_OBJECT_MOTION", "0", 0);
-    setenv("BB_BREADCRUMB_SPLIT", "1", 0);
     /* Adreno: depth writes were lost unless the dynamic state is set again at every draw (the
      * state tracker skips values it thinks are set): no depth, so the lit character never reached
      * the screen. Which state and why is not known yet. */
