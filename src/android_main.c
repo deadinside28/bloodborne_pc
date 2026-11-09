@@ -70,6 +70,10 @@ static void defaults(const char *data) {
      * second 3D frame (the character creator). Both needed; why is not known yet. */
     setenv("BB_OBJECT_MOTION", "0", 0);
     setenv("BB_BREADCRUMB_SPLIT", "1", 0);
+    /* Adreno: depth writes were lost unless the dynamic state is set again at every draw (the
+     * state tracker skips values it thinks are set): no depth, so the lit character never reached
+     * the screen. Which state and why is not known yet. */
+    setenv("BB_DYNAMIC_STATE_ALWAYS", "1", 0);
     /* The whole screen: SDL hides the status and navigation bars (immersive). */
     setenv("BB_FULLSCREEN", "1", 0);
     snprintf(path, sizeof(path), "%s/bbport.ini", data);
