@@ -519,6 +519,11 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    63 in the same file: the guest map is per function; the next lift checks all of its
    accesses). `sites12-aarch64`: 210 -> 156 MiB. Next on the phone: the "AOT cross" lines show
    how often the fault path runs; then tools/android_apk.sh with sites12.
+   **Where sites12-aarch64 goes (2026-11-08):** .text 129 MB, 32.2M instructions for 10.7M guest
+   ones (3.0x). Loads and stores through x19 (the guest state) are 9.8M, 30%: about 15 per call
+   site over 640k calls, so the guest registers' sync at calls is still the main cost. LLVM's
+   outliner does not reach it: -moutline on libz is -0.6% (-Os no better). The next step has to
+   be in the lifter (fewer registers synced per call), not compiler flags.
 5. Report the LLVM 23.1.4 AArch64 crash (`recompiler/harness/llvm-bug-store-merge-bswap16.ll`);
    `build_game.sh` works around it with `-mstrict-align` for the one affected shard.
 
