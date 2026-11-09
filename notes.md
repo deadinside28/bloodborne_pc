@@ -542,6 +542,12 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    the phone (2304 bytes, the same values as the PC within animation); its vertex stream has
    stride 44 at 0x10810b6f40 (a 1 MiB interleaved buffer). Next: the phone's output of that one
    draw (does it reach the G-buffer; vertex stream formats at stride 44).
+   Cape, 2026-11-09: with only its draw enabled the phone draws it, as a flat slab across the
+   shoulders (5,639 sampled pixels of colour and of depth): wrong geometry, not a lost draw. Its 48
+   bones match the PC (0 differ by more than 0.08) and its 1 MiB vertex stream's vertices are
+   byte-identical (the tail that differs is compressed texture data past the mesh). So the
+   inputs agree and the output does not: next, what the vertex shader computes on Adreno
+   (adf9e624 against the shaders that draw correctly).
    tools: scripted runs (New Game to the creator): out/android/drive.sh, a pad file.
    PC crash skipping the second cinematic: garbage vtable pointer in GXRenderThread at
    +0x1f591b0 (`call *0x18(%rax)`, object at rbx+0x38); intermittent: 1 hit in 18 scripted runs.
