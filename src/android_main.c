@@ -58,10 +58,11 @@ static void defaults(const char *data) {
     /* The scene size must be the one patches.bin was made for (run.sh on the PC: scene and UI
      * sizes are patches) and the recompiled library lifted with: a mismatch leaves the UI
      * unrecognised and the frame black. */
-    setenv("BB_RENDER_RES", "2560x1440", 0);
-    /* The scene is drawn at 960x540 through the live preset path (Performance: the 1920x1080
-     * frame / 2) and FSR brings it back up. The patch above is the native preset's. */
-    setenv("BB_UPSCALE_PRESET", "3", 0);
+    setenv("BB_RENDER_RES", "1280x720", 0);
+    /* The patch above makes the game's own targets 1280x720 (memory: a quarter of 2560x1440's,
+     * with the library built for it): the scene is drawn at that size and FSR brings it up to
+     * the 1920x1080 frame. A lower preset would go through proxies below it. */
+    setenv("BB_UPSCALE_PRESET", "0", 0);
     /* FSR 1 (spatial): FSR 3's context took over 5 s and enough memory to have the game killed
      * by the low-memory killer when the first scene was upscaled. */
     setenv("BB_UPSCALER", "fsr1", 0);
