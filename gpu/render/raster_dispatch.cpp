@@ -416,6 +416,34 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
             filter.Release();
         }
     }
+    // Game memory the GPU cannot write (not all of it shared: Android's hardware buffers, the
+    // copy mode): a page without a chunk is the paged binding's scratch buffer, so the copy shader's
+    // results (bone matrices, constants) would be lost. Its copies run here, in the game's memory;
+    // what reads them finds them there. BB_COPY_ON_CPU=0/1 overrides.
+    static const bool copy_on_cpu = [] {
+        if (const char* env = bb_env("BB_COPY_ON_CPU"); env && *env) {
+            return env[0] == '1';
+        }
+#ifdef __ANDROID__
+        return true;
+#else
+        const char* memory = bb_env("BB_GUEST_MEMORY");
+        return memory && std::string_view{memory} == "copy";
+#endif
+    }();
+    if (copy_on_cpu && Game::BufferCopyShader() != 0 && cs.pgm_hash == Game::BufferCopyShader()) {
+        thread_local std::vector<CopyEntry> cpu_copies;
+        cpu_copies.clear();
+        if (CopyShaderEntries(cs, cs_program.dim_x, cpu_copies)) {
+            for (const auto& copy : cpu_copies) {
+                std::memmove(reinterpret_cast<void*>(copy.dst),
+                             reinterpret_cast<const void*>(copy.src), copy.size);
+                InvalidateMemory(copy.dst, copy.size);
+            }
+            copy_control = {};
+            return;
+        }
+    }
     bool hle;
     {
         BB_SECTION(ShaderHle);

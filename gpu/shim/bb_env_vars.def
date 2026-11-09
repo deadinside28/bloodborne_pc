@@ -122,6 +122,7 @@ BB_ENV(BB_CONSTANTS_IN_PLACE, TUNING, "=1: shader constants bound in place from 
 BB_ENV(BB_CONSTANT_RING_MB, TUNING, "=N: size of the constant ring in MiB")
 BB_ENV(BB_CONSTRAM_GPU_WAIT, TUNING, "=0: a constant RAM dump does not wait for queued draws reading it (DoF artifacts #44)")
 BB_ENV(BB_CONSTRAM_PIPE, TUNING, "=0: a constant RAM dump waits for all queued draws")
+BB_ENV(BB_COPY_ON_CPU, TUNING, "=1 / 0: the copy shader's copies on the CPU, in the game's memory (default: where game memory is not all shared)")
 BB_ENV(BB_COPY_DEST_GAP, TUNING, "=bytes: merge gap of copy shader destinations (default 256)")
 BB_ENV(BB_COPY_DEST_PRECISE, TUNING, "=0: the whole bound destination of a copy shader counts as written")
 BB_ENV(BB_COPY_GPU_BUFFERS, TUNING, "=0: command buffers decoded from guest memory instead of a copy per submission")

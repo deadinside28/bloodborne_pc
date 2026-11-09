@@ -377,6 +377,18 @@ std::pair<const Buffer*, u64> BufferCache::LayerPagedRecord(VAddr address, u64 s
         for (u64 block = a; block <= b; ++block) {
             const bool mapped = block < b && Layer().ResolvePrefix(block << block_shift, 1);
             if (!mapped) {
+                // A write here lands in the scratch buffer: lost. (The copy shader's copies run on
+                // the CPU where game memory is not all shared; anything else shows here.)
+                if (is_written && block < b) {
+                    static std::atomic<u64> lost{0};
+                    const u64 n = lost.fetch_add(1);
+                    if (n < 16 || n % 4096 == 0) {
+                        std::printf("Layer memory: GPU write to unshared memory at %#llx lost "
+                                    "(paged binding, %llu blocks so far)\n",
+                                    (unsigned long long)(block << block_shift),
+                                    (unsigned long long)(n + 1));
+                    }
+                }
                 if (run < block) {
                     LayerWriteEntries(run, block);
                     layer_published.Add({run, block});
