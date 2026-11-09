@@ -99,7 +99,10 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     native_height = render_height;
     if (const char* env = bb_env("BB_LIVE_HYBRID"); scaled_session && env && env[0] == '1') {
         hybrid = true;
-        startup_preset = BbSettings::Get().preset.load();
+        // BB_PATCH_PRESET=N: the preset the startup patch's size stands for (Android: one fixed
+        // patch for every preset); else the launch preset.
+        const char* patch_preset = bb_env("BB_PATCH_PRESET");
+        startup_preset = patch_preset ? std::atoi(patch_preset) : BbSettings::Get().preset.load();
         scene_targets.SetNative({native_width, native_height});
         std::printf("Upscaler: the game's scene targets are %ux%u (startup patch); another preset "
                     "chosen in the game is drawn at its size until the next start\n",
