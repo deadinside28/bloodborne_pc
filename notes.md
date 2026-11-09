@@ -524,6 +524,18 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    site over 640k calls, so the guest registers' sync at calls is still the main cost. LLVM's
    outliner does not reach it: -moutline on libz is -0.6% (-Os no better). The next step has to
    be in the lifter (fewer registers synced per call), not compiler flags.
+   **Character creator on the phone (2026-11-08):** the model shows. Three causes found: (1) only
+   some 256 MiB chunks are hardware buffers; a paged binding sends writes to pages without one to
+   a scratch buffer, so the copy shader's results (bone matrices) were lost: BB_COPY_ON_CPU, on
+   by default on Android and with BB_GUEST_MEMORY=copy (which reproduces this on a PC). (2) Depth
+   writes were lost until dynamic state is set again at every draw: BB_DYNAMIC_STATE_ALWAYS=1,
+   Android's default for now; which state goes stale is not known. (3) Object motion off and
+   BB_BREADCRUMB_SPLIT=1 are still needed: the GPU is lost at the second 3D frame otherwise.
+   Open: the cape is missing in every frame (only its collar shows; the G-buffer is steady over
+   90 samples, background pipelines not involved); the load after creating a character.
+   tools: scripted runs (New Game to the creator): out/android/drive.sh, a pad file.
+   PC crash skipping the second cinematic: garbage vtable pointer in GXRenderThread at
+   +0x1f591b0 (`call *0x18(%rax)`, object at rbx+0x38); intermittent: 1 hit in 18 scripted runs.
 5. Report the LLVM 23.1.4 AArch64 crash (`recompiler/harness/llvm-bug-store-merge-bswap16.ll`);
    `build_game.sh` works around it with `-mstrict-align` for the one affected shard.
 
