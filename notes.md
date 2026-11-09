@@ -537,6 +537,11 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    the lifter's logic is not the cause; the phone's AArch64 code or GPU is. The copy filter
    (BB_COPY_SKIP_SAME=0) changes nothing. Sampled vertex streams differ between phone and PC in
    many draws, in both directions: not yet tied to the cape's draw.
+   The cape is the draw with vs adf9e624 / ps aa2a9925 (BB_SKIP_PS=aa2a9925 on the PC removes
+   the cape and nothing else, measured against the window capture). Its bone buffer is right on
+   the phone (2304 bytes, the same values as the PC within animation); its vertex stream has
+   stride 44 at 0x10810b6f40 (a 1 MiB interleaved buffer). Next: the phone's output of that one
+   draw (does it reach the G-buffer; vertex stream formats at stride 44).
    tools: scripted runs (New Game to the creator): out/android/drive.sh, a pad file.
    PC crash skipping the second cinematic: garbage vtable pointer in GXRenderThread at
    +0x1f591b0 (`call *0x18(%rax)`, object at rbx+0x38); intermittent: 1 hit in 18 scripted runs.
