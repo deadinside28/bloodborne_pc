@@ -59,6 +59,9 @@ static void defaults(const char *data) {
      * sizes are patches) and the recompiled library lifted with: a mismatch leaves the UI
      * unrecognised and the frame black. */
     setenv("BB_RENDER_RES", "2560x1440", 0);
+    /* The scene is drawn at half the output through the live preset path (Performance: 720 lines
+     * on a 1440-line display) and FSR brings it back up. The patched targets above stay. */
+    setenv("BB_UPSCALE_PRESET", "3", 0);
     /* Hardware buffers take their 256 MiB at once, ordinary memory as it is touched: keep more of
      * the phone free (with 2 GiB the start dipped under 1.5 GB available). */
     setenv("BB_AHB_RESERVE_MB", "4000", 0);
