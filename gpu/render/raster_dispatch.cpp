@@ -434,7 +434,27 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (copy_on_cpu && Game::BufferCopyShader() != 0 && cs.pgm_hash == Game::BufferCopyShader()) {
         thread_local std::vector<CopyEntry> cpu_copies;
         cpu_copies.clear();
-        if (CopyShaderEntries(cs, cs_program.dim_x, cpu_copies)) {
+        // A source the GPU wrote, or will write in work recorded before this dispatch: the
+        // CPU would copy what the game's memory held before (a stale exposure value: whole
+        // frames two to three times too bright). Such copies run on the GPU as the game made them.
+        bool gpu_source = false;
+        const bool decoded = CopyShaderEntries(cs, cs_program.dim_x, cpu_copies);
+        if (decoded) {
+            for (const auto& copy : cpu_copies) {
+                if (buffer_cache.IsRegionGpuModified(copy.src, copy.size) ||
+                    PendingWriteOverlaps(copy.src, copy.size)) {
+                    gpu_source = true;
+                    break;
+                }
+            }
+            static std::atomic<u32> on_gpu{0}, on_cpu{0};
+            const u32 n = (gpu_source ? on_gpu : on_cpu).fetch_add(1) + 1;
+            if ((n & (n - 1)) == 0) {
+                std::printf("Copy shader: %u dispatches on the GPU (a GPU-written source), %u on the CPU\n",
+                            on_gpu.load(), on_cpu.load());
+            }
+        }
+        if (decoded && !gpu_source) {
             for (const auto& copy : cpu_copies) {
                 std::memmove(reinterpret_cast<void*>(copy.dst),
                              reinterpret_cast<const void*>(copy.src), copy.size);
