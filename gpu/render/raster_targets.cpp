@@ -510,11 +510,14 @@ void Rasterizer::BindDepthAttachment(RenderState& state, bool reduced, TargetRed
     const auto& view = texture_cache.FindDepthTarget(image_id, desc);
     auto& image = texture_cache.GetImage(image_id);
     const u32 slice = view.info.range.base.layer;
+    const bool meta_cleared = texture_cache.IsMetaCleared(htile_address, slice);
     const bool is_depth_clear =
         (regs.depth_render_control.depth_clear_enable && regs.depth_control.depth_enable &&
          regs.depth_control.depth_write_enable) ||
-        texture_cache.IsMetaCleared(htile_address, slice);
-    const bool is_stencil_clear = regs.depth_render_control.stencil_clear_enable;
+        meta_cleared;
+    // A cleared HTILE stands for the stencil too: it then reads as the clear value. Left to load,
+    // the plane would keep what the memory held before (on Adreno, garbage).
+    const bool is_stencil_clear = regs.depth_render_control.stencil_clear_enable || meta_cleared;
     texture_cache.TouchMeta(htile_address, slice, false);
     ASSERT(desc.view_info.range.extent.levels == 1 && !image.binding.needs_rebind);
 
@@ -522,7 +525,8 @@ void Rasterizer::BindDepthAttachment(RenderState& state, bool reduced, TargetRed
     // while depth writes are off.
     const bool has_stencil = image.info.props.has_stencil;
     const bool storage = desc.view_info.is_storage;
-    const bool stencil_write = has_stencil && regs.depth_control.stencil_enable && !storage;
+    const bool stencil_write =
+        has_stencil && (regs.depth_control.stencil_enable || is_stencil_clear) && !storage;
     const auto layout = storage ? (has_stencil ? vk::ImageLayout::eDepthStencilAttachmentOptimal
                                                : vk::ImageLayout::eDepthAttachmentOptimal)
                         : stencil_write ? vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal

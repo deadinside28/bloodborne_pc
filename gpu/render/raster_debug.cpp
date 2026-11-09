@@ -122,7 +122,11 @@ void Rasterizer::DumpPassImages(char tag) {
             continue;
         }
         const u32 width = found->info.size.width, height = found->info.size.height;
-        const u32 bytes = found->info.num_bits / 8;
+        // BB_PASS_DUMP_STENCIL: a depth-stencil image gives its stencil plane (8 bits a texel).
+        static const bool want_stencil = bb_env("BB_PASS_DUMP_STENCIL") != nullptr;
+        const bool use_stencil =
+            want_stencil && bool(found->aspect_mask & vk::ImageAspectFlagBits::eStencil);
+        const u32 bytes = use_stencil ? 1 : found->info.num_bits / 8;
         static const u32 step = [] {
             const char* env = bb_env("BB_PASS_DUMP_STEP");
             return env ? std::max(1, std::atoi(env)) : 8;
@@ -146,7 +150,9 @@ void Rasterizer::DumpPassImages(char tag) {
                         vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
         runtime.FlushBarriers();
         const vk::Image image = found->GetImage();
-        const vk::ImageAspectFlags aspect = found->aspect_mask & ~vk::ImageAspectFlagBits::eStencil;
+        const vk::ImageAspectFlags aspect = use_stencil
+            ? vk::ImageAspectFlags(vk::ImageAspectFlagBits::eStencil)
+            : found->aspect_mask & ~vk::ImageAspectFlagBits::eStencil;
         scheduler.Record([=](vk::CommandBuffer cmd) {
             std::vector<vk::BufferImageCopy> regions;
             regions.reserve(rows);
@@ -162,7 +168,7 @@ void Rasterizer::DumpPassImages(char tag) {
         });
         char path[512];
         std::snprintf(path, sizeof(path), "%s/%c%05u_%llx_%ux%u_%u.raw", dir.c_str(), tag, n,
-                      (unsigned long long)address, width, rows, found->info.num_bits);
+                      (unsigned long long)address, width, rows, bytes * 8);
         scheduler.DeferPriorityOperation([allocator = instance.GetAllocator(), buffer, allocation,
                                           info, size, file = std::string{path}] {
             vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
