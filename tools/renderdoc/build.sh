@@ -27,9 +27,9 @@ if [[ ! -f $layer ]]; then
 fi
 lib=$out/renderdoc_$version/lib
 # -rdynamic: librenderdoc finds REPLAY_PROGRAM_MARKER in the program
-for tool in rdremote rddebug rdhist rdviews rdpatch; do
+for tool in rdremote rddebug rdhist rdviews rdpatch rdvs; do
     "${CXX:-g++}" -std=c++17 -O1 -rdynamic -DRENDERDOC_PLATFORM_LINUX -DRENDERDOC_WINDOWING_XLIB \
         -I"$out/renderdoc-$version/renderdoc/api/replay" "$here/$tool.cpp" \
         -L"$lib" -lrenderdoc -Wl,-rpath,"$lib" -o "$out/bin/$tool"
 done
-echo "Built $out/bin/{rdremote,rddebug,rdhist,rdviews,rdpatch}; layer: $layer"
+echo "Built $out/bin/{rdremote,rddebug,rdhist,rdviews,rdpatch,rdvs}; layer: $layer"
