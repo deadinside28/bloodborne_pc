@@ -62,6 +62,9 @@ static void defaults(const char *data) {
     /* The scene is drawn at 1280x720 through the live preset path (Quality: the 1920x1080 frame
      * / 1.5) and FSR brings it back up. The patch above is the native preset's. */
     setenv("BB_UPSCALE_PRESET", "1", 0);
+    /* FSR 1 (spatial): FSR 3's context took over 5 s and enough memory to have the game killed
+     * by the low-memory killer when the first scene was upscaled. */
+    setenv("BB_UPSCALER", "fsr1", 0);
     setenv("BB_PATCH_PRESET", "0", 0);
     /* Hardware buffers take their 256 MiB at once, ordinary memory as it is touched: keep more of
      * the phone free (with 2 GiB the start dipped under 1.5 GB available). */
