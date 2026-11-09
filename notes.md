@@ -533,6 +533,10 @@ Fedora 44, RTX 3070, NVIDIA 615.71.09. Game dump at `~/Games/CUSA03173` (`BB_GAM
    BB_BREADCRUMB_SPLIT=1 are still needed: the GPU is lost at the second 3D frame otherwise.
    Open: the cape is missing in every frame (only its collar shows; the G-buffer is steady over
    90 samples, background pipelines not involved); the load after creating a character.
+   The cape: on the PC, recompiled x86-64 code (sites11) with BB_GUEST_MEMORY=copy shows it, so
+   the lifter's logic is not the cause; the phone's AArch64 code or GPU is. The copy filter
+   (BB_COPY_SKIP_SAME=0) changes nothing. Sampled vertex streams differ between phone and PC in
+   many draws, in both directions: not yet tied to the cape's draw.
    tools: scripted runs (New Game to the creator): out/android/drive.sh, a pad file.
    PC crash skipping the second cinematic: garbage vtable pointer in GXRenderThread at
    +0x1f591b0 (`call *0x18(%rax)`, object at rbx+0x38); intermittent: 1 hit in 18 scripted runs.
