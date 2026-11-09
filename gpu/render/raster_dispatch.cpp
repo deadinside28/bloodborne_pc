@@ -438,7 +438,10 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
             for (const auto& copy : cpu_copies) {
                 std::memmove(reinterpret_cast<void*>(copy.dst),
                              reinterpret_cast<const void*>(copy.src), copy.size);
-                InvalidateMemory(copy.dst, copy.size);
+                // On the recording thread: an invalidation here drains the draw pipe and reads
+                // GPU data back, waiting for work only this thread can submit (a hang at load).
+                NoteCommandWrite(copy.dst, reinterpret_cast<const void*>(copy.dst), copy.size,
+                                 true);
             }
             copy_control = {};
             return;
