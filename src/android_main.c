@@ -59,12 +59,15 @@ static void defaults(const char *data) {
      * sizes are patches) and the recompiled library lifted with: a mismatch leaves the UI
      * unrecognised and the frame black. */
     setenv("BB_RENDER_RES", "2560x1440", 0);
-    /* The scene is drawn at 1280x720 through the live preset path (Quality: the 1920x1080 frame
-     * / 1.5) and FSR brings it back up. The patch above is the native preset's. */
-    setenv("BB_UPSCALE_PRESET", "1", 0);
+    /* The scene is drawn at 960x540 through the live preset path (Performance: the 1920x1080
+     * frame / 2) and FSR brings it back up. The patch above is the native preset's. */
+    setenv("BB_UPSCALE_PRESET", "3", 0);
     /* FSR 1 (spatial): FSR 3's context took over 5 s and enough memory to have the game killed
      * by the low-memory killer when the first scene was upscaled. */
     setenv("BB_UPSCALER", "fsr1", 0);
+    /* Large compressed textures without their top level (a quarter of their memory): the game
+     * was killed by the low-memory killer in game. */
+    setenv("BB_TEXTURE_QUALITY", "half", 0);
     setenv("BB_PATCH_PRESET", "0", 0);
     /* Hardware buffers take their 256 MiB at once, ordinary memory as it is touched: keep more of
      * the phone free (with 2 GiB the start dipped under 1.5 GB available). */
@@ -87,6 +90,17 @@ static void defaults(const char *data) {
     setenv("BB_CONFIG", path, 0);
     snprintf(path, sizeof(path), "%s/user", data);
     setenv("BB_GPU_USER_DIR", path, 0);
+    /* Diagnostics armed for the player's own sessions (nothing happens until a trigger file
+     * appears, created over adb): 16 presented frames, and a frame record. */
+    snprintf(path, sizeof(path), "%s/user/pd.trigger", data);
+    setenv("BB_PRESENT_DUMP_TRIGGER", path, 0);
+    setenv("BB_PRESENT_DUMP_COUNT", "16", 0);
+    snprintf(path, sizeof(path), "%s/user/pdump", data);
+    setenv("BB_DUMP_DIR", path, 0);
+    snprintf(path, sizeof(path), "%s/user/cap.trigger", data);
+    setenv("BB_CAPTURE_TRIGGER", path, 0);
+    snprintf(path, sizeof(path), "%s/user/capg", data);
+    setenv("BB_CAPTURE_DIR", path, 0);
 }
 
 __attribute__((visibility("default"))) int SDL_main(int argc, char **argv) {
