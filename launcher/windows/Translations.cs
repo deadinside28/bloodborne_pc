@@ -140,7 +140,7 @@ public partial class MainWindow
             ["none"] = "还没有奖杯",
             ["none_description"] = "游戏授予第一个奖杯后会显示在这里。",
             ["got_of"] = "已获得 {0}/{1}",
-            ["got"] = "获得时间：{0}",
+            ["got"] = "已获得：{0}",
             ["unnamed"] = "名称未知",
             ["unnamed_description"] = "在上方输入奖杯密钥并启动游戏：它会解密名称和图标。",
             ["number"] = "奖杯 #{0}",
