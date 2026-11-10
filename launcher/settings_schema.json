@@ -2068,11 +2068,13 @@
    "icon": "online",
    "title": {
     "ru": "Онлайн",
-    "en": "Online"
+    "en": "Online",
+    "zh_CN": "联机"
    },
    "description": {
     "ru": "Кооператив и онлайн-функции игры (модуль online\\bbnet20.dll).",
-    "en": "Co-op and the game's online features (the module online\\bbnet20.dll)."
+    "en": "Co-op and the game's online features (the module online\\bbnet20.dll).",
+    "zh_CN": "联机合作和游戏的在线功能（模块 online\\bbnet20.dll）。"
    },
    "items": [
     {
@@ -2085,15 +2087,18 @@
      ],
      "group": {
       "ru": "Игра по сети",
-      "en": "Online play"
+      "en": "Online play",
+      "zh_CN": "联机游玩"
      },
      "title": {
       "ru": "Играть онлайн",
-      "en": "Play online"
+      "en": "Play online",
+      "zh_CN": "在线游玩"
      },
      "description": {
       "ru": "Сообщения, пятна крови и призраки приходят с игрового сервера; колокола и призывы идут через сервер кооператива. Выключено: игра остаётся офлайн. Включено: в игре показывается выбор «онлайн/офлайн». Совместимо с версией для Linux: нужны версия игры 1.09 и тот же сервер.",
-      "en": "Messages, bloodstains and ghosts come from the game server; bells and summons go through the co-op server. Off: the game stays offline. On: the game's online / offline choice is shown. Works with the Linux version: game version 1.09 and the same server are needed."
+      "en": "Messages, bloodstains and ghosts come from the game server; bells and summons go through the co-op server. Off: the game stays offline. On: the game's online / offline choice is shown. Works with the Linux version: game version 1.09 and the same server are needed.",
+      "zh_CN": "留言、血迹和幻影来自游戏服务器；铃铛和召唤通过联机合作服务器进行。关闭时，游戏保持离线；开启时，游戏中会显示在线／离线选项。可与 Linux 版联机：需要游戏版本 1.09 和同一台服务器。"
      }
     },
     {
@@ -2106,15 +2111,18 @@
      ],
      "group": {
       "ru": "Игра по сети",
-      "en": "Online play"
+      "en": "Online play",
+      "zh_CN": "联机游玩"
      },
      "title": {
       "ru": "Пул",
-      "en": "Pool"
+      "en": "Pool",
+      "zh_CN": "联机池"
      },
      "description": {
       "ru": "С кем играть: у всех в сессии должен быть один пул.",
-      "en": "Whom to play with: everyone in a session needs the same pool."
+      "en": "Whom to play with: everyone in a session needs the same pool.",
+      "zh_CN": "与谁一起玩：同一会话中的所有玩家必须使用同一个联机池。"
      },
      "enabled_by": "online",
      "choices": [
@@ -2122,18 +2130,22 @@
        "value": "seamless",
        "ru": "Seamless Hunt (seamlesshunt.com)",
        "en": "Seamless Hunt (seamlesshunt.com)",
+       "zh_CN": "Seamless Hunt（seamlesshunt.com）",
        "description": {
         "ru": "Сервер BBSC: бесшовный кооператив, колокола и призывы; аккаунт создаётся на сайте.",
-        "en": "BBSC's server: seamless co-op, bells and summons; the account is made on the website."
+        "en": "BBSC's server: seamless co-op, bells and summons; the account is made on the website.",
+        "zh_CN": "BBSC 服务器：无缝联机合作、铃铛和召唤；账号需在网站上创建。"
        }
       },
       {
        "value": "huntersdream",
        "ru": "The Hunter's Dream (thehuntersdream.com)",
        "en": "The Hunter's Dream (thehuntersdream.com)",
+       "zh_CN": "The Hunter's Dream（thehuntersdream.com）",
        "description": {
         "ru": "Кооператив с игроками bbhost через The Hunter's Dream; вход через Discord.",
-        "en": "Co-op with bbhost players through The Hunter's Dream; sign-in with Discord."
+        "en": "Co-op with bbhost players through The Hunter's Dream; sign-in with Discord.",
+        "zh_CN": "通过 The Hunter's Dream 与 bbhost 玩家联机合作；使用 Discord 登录。"
        }
       }
      ]
@@ -2148,15 +2160,18 @@
      ],
      "group": {
       "ru": "Игровой сервер (сообщения, пятна крови, призраки)",
-      "en": "Game server (messages, bloodstains, ghosts)"
+      "en": "Game server (messages, bloodstains, ghosts)",
+      "zh_CN": "游戏服务器（留言、血迹、幻影）"
      },
      "title": {
       "ru": "Игровой сервер",
-      "en": "Game server"
+      "en": "Game server",
+      "zh_CN": "游戏服务器"
      },
      "description": {
       "ru": "Пусто: сервер Seamless Hunt.",
-      "en": "Empty: Seamless Hunt's server."
+      "en": "Empty: Seamless Hunt's server.",
+      "zh_CN": "留空：使用 Seamless Hunt 的服务器。"
      },
      "enabled_by": "online",
      "visible_when": {
@@ -2174,15 +2189,18 @@
      ],
      "group": {
       "ru": "Сервер кооператива (колокола и призывы)",
-      "en": "Co-op server (bells and summons)"
+      "en": "Co-op server (bells and summons)",
+      "zh_CN": "联机合作服务器（铃铛和召唤）"
      },
      "title": {
       "ru": "Адрес сервера",
-      "en": "Server address"
+      "en": "Server address",
+      "zh_CN": "服务器地址"
      },
      "description": {
       "ru": "play.seamlesshunt.com:31313 — сервер Seamless Hunt (BBSC). Публичный сервер shadPS4 принимает только сборки shadPS4. Для частного сервера укажите host:port от его владельца.",
-      "en": "play.seamlesshunt.com:31313 is Seamless Hunt's server (BBSC). shadPS4's public server accepts only shadPS4's builds. For a private server enter the host:port its owner gives."
+      "en": "play.seamlesshunt.com:31313 is Seamless Hunt's server (BBSC). shadPS4's public server accepts only shadPS4's builds. For a private server enter the host:port its owner gives.",
+      "zh_CN": "play.seamlesshunt.com:31313 是 Seamless Hunt（BBSC）的服务器。shadPS4 的公共服务器只接受 shadPS4 的构建版本。使用私人服务器时，请填写其所有者提供的 host:port。"
      },
      "enabled_by": "online",
      "visible_when": {
@@ -2200,15 +2218,18 @@
      ],
      "group": {
       "ru": "Сервер кооператива (колокола и призывы)",
-      "en": "Co-op server (bells and summons)"
+      "en": "Co-op server (bells and summons)",
+      "zh_CN": "联机合作服务器（铃铛和召唤）"
      },
      "title": {
       "ru": "Адрес WebAPI",
-      "en": "WebAPI address"
+      "en": "WebAPI address",
+      "zh_CN": "WebAPI 地址"
      },
      "description": {
       "ru": "Пусто: адрес сервера с портом 31315.",
-      "en": "Empty: the server's address with port 31315."
+      "en": "Empty: the server's address with port 31315.",
+      "zh_CN": "留空：使用服务器地址和端口 31315。"
      },
      "enabled_by": "online",
      "visible_when": {
@@ -2226,15 +2247,18 @@
      ],
      "group": {
       "ru": "Сервер кооператива (колокола и призывы)",
-      "en": "Co-op server (bells and summons)"
+      "en": "Co-op server (bells and summons)",
+      "zh_CN": "联机合作服务器（铃铛和召唤）"
      },
      "title": {
       "ru": "Бесшовный кооператив (BBSC)",
-      "en": "Seamless co-op (BBSC)"
+      "en": "Seamless co-op (BBSC)",
+      "zh_CN": "无缝联机合作（BBSC）"
      },
      "description": {
       "ru": "Сессия переживает смерти, лампы, смену локаций и боссов; до 5 охотников. Нужен сервер с игровым сервером BBSC, у всех игроков включено. Пока включено, колокола игры заменены колоколами BBSC; после выключения прежние вернутся при следующей загрузке персонажа (сохранение копируется в save-backups).",
-      "en": "The session survives deaths, lamps, area changes and bosses; up to 5 hunters. Needs a server with BBSC's game server, on for every player. While on, the game's bells are replaced by BBSC's; after turning it off the old ones come back at the next character load (the save is copied to save-backups)."
+      "en": "The session survives deaths, lamps, area changes and bosses; up to 5 hunters. Needs a server with BBSC's game server, on for every player. While on, the game's bells are replaced by BBSC's; after turning it off the old ones come back at the next character load (the save is copied to save-backups).",
+      "zh_CN": "会话在死亡、提灯、切换区域和首领战之后仍会保留；最多 5 名猎人。需要运行 BBSC 游戏服务器的服务器，且所有玩家都要开启此选项。开启期间，游戏原有的铃铛会被 BBSC 的铃铛替换；关闭后，下次载入角色时会恢复原有铃铛（存档会备份到 save-backups）。"
      },
      "enabled_by": "online",
      "visible_when": {
@@ -2252,15 +2276,18 @@
      ],
      "group": {
       "ru": "Учётная запись",
-      "en": "Account"
+      "en": "Account",
+      "zh_CN": "账号"
      },
      "title": {
       "ru": "Online ID (NPID)",
-      "en": "Online ID (NPID)"
+      "en": "Online ID (NPID)",
+      "zh_CN": "在线 ID（NPID）"
      },
      "description": {
       "ru": "Имя учётной записи shadNet, не email. Зарегистрируйтесь на seamlesshunt.com или спросите владельца частного сервера.",
-      "en": "The shadNet account name, not an email. Register on seamlesshunt.com or ask the private server's owner."
+      "en": "The shadNet account name, not an email. Register on seamlesshunt.com or ask the private server's owner.",
+      "zh_CN": "shadNet 账号名，不是邮箱。请在 seamlesshunt.com 注册，或向私人服务器的所有者询问。"
      },
      "enabled_by": "online",
      "visible_when": {
@@ -2278,15 +2305,18 @@
      ],
      "group": {
       "ru": "Учётная запись",
-      "en": "Account"
+      "en": "Account",
+      "zh_CN": "账号"
      },
      "title": {
       "ru": "Пароль",
-      "en": "Password"
+      "en": "Password",
+      "zh_CN": "密码"
      },
      "description": {
       "ru": "Хранится на этом компьютере вместе с настройками лаунчера.",
-      "en": "Kept on this computer with the launcher's settings."
+      "en": "Kept on this computer with the launcher's settings.",
+      "zh_CN": "与启动器设置一起保存在这台电脑上。"
      },
      "enabled_by": "online",
      "visible_when": {
@@ -2304,15 +2334,18 @@
      ],
      "group": {
       "ru": "The Hunter's Dream",
-      "en": "The Hunter's Dream"
+      "en": "The Hunter's Dream",
+      "zh_CN": "The Hunter's Dream"
      },
      "title": {
       "ru": "Адрес сервера",
-      "en": "Server address"
+      "en": "Server address",
+      "zh_CN": "服务器地址"
      },
      "description": {
       "ru": "Пусто: https://thehuntersdream.com.",
-      "en": "Empty: https://thehuntersdream.com."
+      "en": "Empty: https://thehuntersdream.com.",
+      "zh_CN": "留空：使用 https://thehuntersdream.com。"
      },
      "enabled_by": "online",
      "visible_when": {
@@ -2330,15 +2363,18 @@
      ],
      "group": {
       "ru": "The Hunter's Dream",
-      "en": "The Hunter's Dream"
+      "en": "The Hunter's Dream",
+      "zh_CN": "The Hunter's Dream"
      },
      "title": {
       "ru": "Учётная запись",
-      "en": "Account"
+      "en": "Account",
+      "zh_CN": "账号"
      },
      "description": {
       "ru": "Вход через Discord, как в bbhost: на сайте нужно подтвердить код. Пароль не нужен, токен хранится на этом компьютере вместе с настройками лаунчера. BBSC в этом пуле нет.",
-      "en": "Sign-in with Discord as in bbhost: a code is approved on the website. No password; the token is kept on this computer with the launcher's settings. No BBSC in this pool."
+      "en": "Sign-in with Discord as in bbhost: a code is approved on the website. No password; the token is kept on this computer with the launcher's settings. No BBSC in this pool.",
+      "zh_CN": "与 bbhost 一样使用 Discord 登录：需要在网站上确认验证码。无需密码，令牌与启动器设置一起保存在这台电脑上。此联机池不支持 BBSC。"
      },
      "enabled_by": "online",
      "visible_when": {
@@ -2356,15 +2392,18 @@
      ],
      "group": {
       "ru": "Соединение",
-      "en": "Connection"
+      "en": "Connection",
+      "zh_CN": "连接"
      },
      "title": {
       "ru": "UPnP (открыть порт на роутере автоматически)",
-      "en": "UPnP (open the port on the router automatically)"
+      "en": "UPnP (open the port on the router automatically)",
+      "zh_CN": "UPnP（自动在路由器上开放端口）"
      },
      "description": {
       "ru": "Выключите при Tailscale или другом VPN.",
-      "en": "Turn off with Tailscale or another VPN."
+      "en": "Turn off with Tailscale or another VPN.",
+      "zh_CN": "使用 Tailscale 或其他 VPN 时请关闭。"
      },
      "enabled_by": "online"
     },
@@ -2378,15 +2417,18 @@
      ],
      "group": {
       "ru": "Соединение",
-      "en": "Connection"
+      "en": "Connection",
+      "zh_CN": "连接"
      },
      "title": {
       "ru": "Проверить соединение",
-      "en": "Check the connection"
+      "en": "Check the connection",
+      "zh_CN": "检测连接"
      },
      "description": {
       "ru": "У всех в сессии должны быть одна версия игры (1.09) и один сервер. Читы меняют игру и для других игроков: выключайте их при совместной игре.",
-      "en": "Everyone in a session needs the same game version (1.09) and the same server. Cheats change the game for the other players too: turn them off in co-op."
+      "en": "Everyone in a session needs the same game version (1.09) and the same server. Cheats change the game for the other players too: turn them off in co-op.",
+      "zh_CN": "同一会话中的所有玩家都需要相同的游戏版本（1.09）和同一台服务器。作弊也会影响其他玩家的游戏：联机合作时请关闭。"
      }
     }
    ]
