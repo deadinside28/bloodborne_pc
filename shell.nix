@@ -26,4 +26,10 @@ pkgs.mkShell {
     # Online module (gpu/bbnet): shadNet client, HTTPS, UPnP
     protobuf nlohmann_json openssl zlib miniupnpc
   ];
+  # NixOS keeps the driver's libraries in /run/opengl-driver/lib, where the DLSS bridge's dlopen of
+  # libnvidia-ngx.so.1 does not look (the AppImage links them in: launcher/bbport_vulkan.py).
+  # Only driver libraries live there, so nothing the shell provides is replaced.
+  shellHook = ''
+    export LD_LIBRARY_PATH=''${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}${pkgs.addDriverRunpath.driverLink}/lib
+  '';
 }
