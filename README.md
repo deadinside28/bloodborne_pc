@@ -107,7 +107,7 @@ GeForce 930MX; other NVIDIA and Intel GPUs by players.
   and draws are bound and recorded on another (two-stage pipeline), with a Vulkan recording
   thread and helper threads for memory copies. Early on the single GPU thread capped the game
   at ~26 FPS; now it runs at 90–150 FPS depending on resolution and scene.
-- **Settings inside the game's own menu:** *System → Display / Effects* (after *Screen/Sound*),
+- **Settings inside the game's own menu:** *System → Display / Detail / Effects* (after *Screen/Sound*),
   built and drawn by the game itself — output resolution, upscaler, preset, sharpness, FPS
   counter, model detail and the game's effects, in the game's language. Chromatic aberration,
   depth of field, motion blur, SSAO, the game's AA and dynamic-light shadows switch at once;
