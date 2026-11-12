@@ -22,7 +22,7 @@
 #include "bbgpu/shaders/ffx_of_v5_hdr_fast.h"
 
 extern "C" bool (*ffxVkShaderOverride)(uint32_t effect, uint32_t pass, uint32_t permutationOptions,
-                                       const uint32_t** words, size_t* size);
+                                       const uint32_t** words, size_t* size) = nullptr;
 
 namespace FfxShaders {
 

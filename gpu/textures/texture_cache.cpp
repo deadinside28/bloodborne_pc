@@ -16,6 +16,7 @@
 #include "vulkan/instance.h"
 #include "render/runtime.h"
 #include "render/scheduler.h"
+#include "bbport_settings.h"
 
 namespace VideoCore {
 
@@ -634,8 +635,12 @@ vk::Sampler TextureCache::GetSampler(const Gcn::Sampler& sampler,
                                      Gcn::BorderColorBuffer border_color_base, bool is_depth,
                                      float extra_lod_bias) {
     // Compare and plain uses of one S# need samplers of their own, so do other LOD biases.
-    const u64 key = HashCombine(HashCombine(XXH3_64bits(&sampler, sizeof(sampler)), is_depth),
-                                u64(std::bit_cast<u32>(extra_lod_bias)));
+    const bool retro_point = BbSettings::Get().retro_mode.load(std::memory_order_relaxed) &&
+                             BbSettings::Get().retro_point_filter.load(std::memory_order_relaxed);
+    const u64 key = HashCombine(
+        HashCombine(HashCombine(XXH3_64bits(&sampler, sizeof(sampler)), is_depth),
+                    u64(std::bit_cast<u32>(extra_lod_bias))),
+        u64(retro_point));
     std::scoped_lock lock{samplers_mutex};
     const auto [it, created] =
         samplers.try_emplace(key, instance, sampler, border_color_base, is_depth, extra_lod_bias);

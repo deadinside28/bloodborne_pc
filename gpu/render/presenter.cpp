@@ -14,6 +14,7 @@
 
 #include "bbport_game_menu.h"
 #include "bbport_overlay.h"
+#include "bbport_settings.h"
 #include "bbport_timeline.h"
 #include "bbport_toggles.h"
 #include "core/emulator_settings.h"
@@ -307,6 +308,8 @@ Frame* Presenter::PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute
     shown_aspect.store(float(source_size.width) / float(source_size.height),
                        std::memory_order_relaxed);
 
+    const bool is_retro_dither = BbSettings::Get().retro_mode.load(std::memory_order_relaxed) &&
+                                 BbSettings::Get().retro_dither.load(std::memory_order_relaxed);
     const EncodePass::Settings encode{
         .gamma = gamma.load(std::memory_order_relaxed),
         .hdr = hdr.load(std::memory_order_relaxed),
@@ -315,6 +318,7 @@ Frame* Presenter::PrepareFrame(const BbVideoOut::BufferAttributeGroup& attribute
         .sharpen = BbSettings::Get().upscaler == BbSettings::UpscalerOff && BbSettings::Get().sharpen
                        ? std::clamp(BbSettings::Get().sharpness.load(), 0.0f, 2.0f)
                        : 0.0f,
+        .retro_dither = is_retro_dither ? 1u : 0u,
     };
     // Numbered here, in command order; marked where the commands are recorded.
     const u32 stream = draw_scheduler.CrumbStream();
