@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
-// bbport: the port's settings as pages of the game's own System menu ("Display", "Game effects",
-// "Game patches" after "Screen/Sound"), built and drawn by the game's menu code: rows are the
+// bbport: the port's settings as pages of the game's own System menu ("Display", "Detail",
+// "Effects" after "Screen/Sound"), built and drawn by the game's menu code: rows are the
 // game's list, toggle and slider rows, texts come from a hook on its message lookup, the values live
 // in the port and are applied as the player changes them. BB_GAME_MENU=0 leaves the menu as it is.
 #pragma once

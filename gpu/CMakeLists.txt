@@ -328,6 +328,11 @@ add_executable(settings-test EXCLUDE_FROM_ALL ../tests/test_settings.cpp shim/bb
 target_compile_options(settings-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(settings-test PRIVATE .. shim)
 
+add_executable(game-menu-test EXCLUDE_FROM_ALL ../tests/test_game_menu.cpp shim/bbport_settings.cpp)
+target_compile_options(game-menu-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(game-menu-test PRIVATE . shim)
+target_link_libraries(game-menu-test PRIVATE fmt::fmt PkgConfig::SDL3)
+
 # The clip-space matrices DLSS Frame Generation gets (upscale/camera_matrices.h): no GPU.
 add_executable(camera-matrices-test EXCLUDE_FROM_ALL ../tests/test_camera_matrices.cpp)
 target_compile_options(camera-matrices-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
