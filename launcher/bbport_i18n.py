@@ -460,6 +460,11 @@ EN = {
     "Золотой": "Gold",
     "Серебряный": "Silver",
     "Бронзовый": "Bronze",
+    # Texture quality row (texture_quality), as in settings_schema.json.
+    "Качество текстур": "Texture quality",
+    "Полное": "Full",
+    "Половина": "Half",
+    "Четверть": "Quarter",
 }
 
 PT_BR = {
@@ -743,6 +748,11 @@ PT_BR = {
     "Слои валидации Vulkan": "Camadas de validação do Vulkan",
     "Сильно замедляет": "Muito mais lento",
     "Доп. переменные (ИМЯ=значение через пробел)": "Variáveis extras (NOME=valor, separadas por espaço)",
+    # Texture quality row (texture_quality), as in settings_schema.json.
+    "Качество текстур": "Qualidade das texturas",
+    "Полное": "Completa",
+    "Половина": "Metade",
+    "Четверть": "Um quarto",
 }
 
 
@@ -1122,6 +1132,11 @@ ZH_CN = {
     "Слои валидации Vulkan": "Vulkan 验证层",
     "Сильно замедляет": "会大幅降低速度",
     "Доп. переменные (ИМЯ=значение через пробел)": "附加环境变量（用空格分隔的 名称=值）",
+    # Texture quality row (texture_quality), as in settings_schema.json.
+    "Качество текстур": "纹理质量",
+    "Полное": "完整",
+    "Половина": "一半",
+    "Четверть": "四分之一",
 }
 
 # New French Translation by @Sarxzer
@@ -1486,6 +1501,11 @@ FR_FR = {
     "Слои валидации Vulkan": "Couches de validation Vulkan",
     "Сильно замедляет": "Ralentit beaucoup",
     "Доп. переменные (ИМЯ=значение через пробел)": "Variables supplémentaires (NOM=valeur, séparées par des espaces)",
+    # Texture quality row (texture_quality), as in settings_schema.json.
+    "Качество текстур": "Qualité des textures",
+    "Полное": "Pleine",
+    "Половина": "Moitié",
+    "Четверть": "Quart",
 }
 
 
