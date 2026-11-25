@@ -26,7 +26,8 @@ std::array<std::atomic<BbGpuEventFilter>, 4> event_filters{};
 extern "C" int runtime_pad_steam_only(void) __attribute__((weak));
 
 /// A keyboard or mouse event the game must not take (runtime_pad_steam_only): the gamepad's own
-/// presses again. The port's menu (the overlay) keeps them, the trackpad as its pointer.
+/// presses again. The port's menu and the text dialog (the overlay) keep them, the trackpad as
+/// its pointer.
 bool SteamPadEcho(const SDL_Event& event) {
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
@@ -36,7 +37,7 @@ bool SteamPadEcho(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
     case SDL_EVENT_MOUSE_WHEEL:
-        return runtime_pad_steam_only && runtime_pad_steam_only() && !BbOverlay::MenuOpen();
+        return runtime_pad_steam_only && runtime_pad_steam_only() && !BbOverlay::CapturesInput();
     default:
         return false;
     }
