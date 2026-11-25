@@ -62,9 +62,11 @@ def dcx_broken(path):
 
 
 def broken_files(game, folder=CHECKED_FOLDER):
-    """The .dcx files under the game's folder that do not unpack (paths relative to the game)."""
+    """The .dcx files under the game's folder that do not unpack (paths relative to the game,
+    with the game's own '/' separators, on Windows too)."""
     root = Path(game)
-    return [str(f.relative_to(root)) for f in sorted((root / folder).rglob('*.dcx')) if dcx_broken(f)]
+    return [f.relative_to(root).as_posix() for f in sorted((root / folder).rglob('*.dcx'))
+            if dcx_broken(f)]
 
 
 # Texture packs (#240): upscaled map textures, baked into the game folder or merged from the mods
@@ -142,7 +144,7 @@ def find_texture_pack(game, files):
         except (OSError, struct.error, IndexError):
             continue
         if side > RETAIL_TEXTURE_SIDE:
-            return str(path.relative_to(game)), side
+            return path.relative_to(game).as_posix(), side
     return None
 
 
@@ -158,7 +160,7 @@ def texture_pack(game, cache=None):
             st = path.stat()
         except OSError:
             continue
-        stats.append((str(path.relative_to(game)), st.st_size, st.st_mtime_ns))
+        stats.append((path.relative_to(game).as_posix(), st.st_size, st.st_mtime_ns))
     key = hashlib.sha256(repr(stats).encode()).hexdigest()
     if cache:
         try:
@@ -249,7 +251,7 @@ def main(argv):
     for number, path in enumerate(files, 1):
         if dcx_broken(path):
             broken.append(path)
-            print(f'damaged: {path.relative_to(game)}')
+            print(f'damaged: {path.relative_to(game).as_posix()}')
         if number % 1000 == 0:
             print(f'{number} of {len(files)} checked', file=sys.stderr)
     print(f'{len(broken)} of {len(files)} .dcx files do not unpack')

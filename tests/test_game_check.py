@@ -98,6 +98,18 @@ class GameCheckTests(unittest.TestCase):
         self.assertEqual(game_check.broken_files(game),
                          [f'{game_check.CHECKED_FOLDER}/gxshader.shaderbnd.dcx'])
 
+    def test_command_line_reports_game_paths_with_slashes(self):
+        # The game's own paths (and run.py's logs) use '/', on Windows as well.
+        game = self.game('CUSA03173', '01.09')
+        packed = bytearray(zlib.compress(os.urandom(4096)))
+        packed[len(packed) // 2:] = packed[:len(packed) - len(packed) // 2]
+        self.shaders(game, dcx(os.urandom(4096), bytes(packed)))
+        out, told = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(told):
+            self.assertEqual(game_check.main(['game_check.py', str(game)]), 1)
+        self.assertIn(f'damaged: {game_check.CHECKED_FOLDER}/gxshader.shaderbnd.dcx\n',
+                      out.getvalue())
+
     def test_other_compressions_are_not_checked(self):
         game = self.game('CUSA03173', '01.09')
         data = bytearray(dcx(b'x' * 100))
